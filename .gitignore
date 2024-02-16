@@ -1,0 +1,5 @@
+# Ignore all log files
+*.log
+
+# Ignore specific directories
+/1D_thermal_model_from_J_Penn
