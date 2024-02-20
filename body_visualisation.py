@@ -27,10 +27,23 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
     # Fix the view
     ax.view_init(elev=30, azim=30)
 
-    # Get the current view limits after scaling
+    # Get the current limits after autoscaling
     xlim = ax.get_xlim()
     ylim = ax.get_ylim()
     zlim = ax.get_zlim()
+
+    # Find the maximum range
+    max_range = max(xlim[1]-xlim[0], ylim[1]-ylim[0], zlim[1]-zlim[0])
+
+    # Calculate the middle points of each axis
+    mid_x = np.mean(xlim)
+    mid_y = np.mean(ylim)
+    mid_z = np.mean(zlim)
+
+    # Set new limits based on the maximum range to ensure equal scaling
+    ax.set_xlim(mid_x - max_range / 2, mid_x + max_range / 2)
+    ax.set_ylim(mid_y - max_range / 2, mid_y + max_range / 2)
+    ax.set_zlim(mid_z - max_range / 2, mid_z + max_range / 2)
 
     # Use these limits to determine the length of the axis line
     # Here we choose the maximum range among x, y, z dimensions to define the line length
@@ -73,7 +86,13 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
         
         # Re-plot the rotated mesh, sunlight arrow, and rotation axis
         ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors='grey', linewidths=1, edgecolors='black', alpha=.9))
-        ax.auto_scale_xyz(scale, scale, scale)
+        
+        # Set new limits based on the maximum range to ensure equal scaling
+        ax.set_xlim(mid_x - max_range / 2, mid_x + max_range / 2)
+        ax.set_ylim(mid_y - max_range / 2, mid_y + max_range / 2)
+        ax.set_zlim(mid_z - max_range / 2, mid_z + max_range / 2)
+
+        # Plot the rotation axis
         ax.plot([axis_start[0], axis_end[0]], [axis_start[1], axis_end[1]], [axis_start[2], axis_end[2]], 'r-', linewidth=2)
 
         # Calculate the arrow's starting position to point towards the center of the comet
