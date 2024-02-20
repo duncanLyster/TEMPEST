@@ -39,23 +39,24 @@ print(sys.path)
 
 # Define global variables
 # Comet-wide material properties (currently placeholders)
-emmisivity = 0.5                            # Dimensionless
-albedo = 0.5                                # Dimensionless
-thermal_conductivity = 1.0                  # W/mK 
-density = 1.0                               # kg/m^3
-specific_heat_capacity = 1.0                # J/kgK
-beaming_factor = 0.5                        # Dimensionless
+emmisivity = 0.5                                    # Dimensionless
+albedo = 0.5                                        # Dimensionless
+thermal_conductivity = 1.0                          # W/mK 
+density = 1.0                                       # kg/m^3
+specific_heat_capacity = 1.0                        # J/kgK
+beaming_factor = 0.5                                # Dimensionless
 
 # Model setup parameters
-layer_thickness = 0.1                       # m (this may be calculated properly from insolation curve later, but just a value for now)
-n_layers = 10                               # Number of layers in the conduction model
-solar_distance = 1.0                        # AU
-solar_constant = 1361                       # W/m^2 Solar constant is the solar radiation received per unit area at 1 AU (could use luminosity of the sun and distance to the sun to calculate this)
-time_step = 1000                            # s
-rotation_period = 100000                    # s (1 day on the comet)
-max_days = 5                                # Maximum number of days to run the model for
-rotation_axis = np.array([0.3, -0.5, 1])         # Unit vector pointing along the rotation axis
-body_orientation = np.array([0, 0, 1])      # Unit vector pointing along the body's orientation
+layer_thickness = 0.1                               # m (this may be calculated properly from insolation curve later, but just a value for now)
+n_layers = 10                                       # Number of layers in the conduction model
+solar_distance = 1.0                                # AU
+solar_constant = 1361                               # W/m^2 Solar constant is the solar radiation received per unit area at 1 AU (could use luminosity of the sun and distance to the sun to calculate this)
+max_days = 5                                        # Maximum number of days to run the model for
+time_step = 10000                                   # s
+n_timesteps = int(max_days * 24 * 3600 / time_step) # Number of time steps in a day
+rotation_period = 100000                            # s (1 day on the comet)
+rotation_axis = np.array([0.3, -0.5, 1])            # Unit vector pointing along the rotation axis
+body_orientation = np.array([0, 0, 1])              # Unit vector pointing along the body's orientation
 
 
 # Define any necessary functions
@@ -99,11 +100,17 @@ def read_shape_model(filename):
         v1, v2, v3 = facet['vertices']
         area = calculate_area(v1, v2, v3)
         centroid = (v1 + v2 + v3) / 3
+        facet['normal'] = normal
         facet['area'] = area
         facet['position'] = centroid
+        #initialise insolation and secondary radiation arrays
+        facet['insolation'] = np.zeros(24) #placeholder
+        facet['secondary_radiation'] = np.zeros(24) #placeholder
+        #initialise temperature arrays
+        facet['temperature'] = np.zeros((n_timesteps, n_layers)) #placeholder
 
-    print(f"Read {len(facets)} facets from the shape model.")
-    print(f"Facet 1: {facets[0]}")
+    print(f"Read {len(facets)} facets from the shape model.\n")
+    print(f"Facet 1: {facets[0]}\n")
     
     return facets
 
@@ -112,23 +119,6 @@ def calculate_area(v1, v2, v3):
     u = v2 - v1
     v = v3 - v1
     return np.linalg.norm(np.cross(u, v)) / 2
-
-def initialise_data_cube():
-    ''' 
-    This function sets up the data cube, which will store the geometry, temperatures, insolation arrays (not sure if 1D or 2D) and secondary radiation arrays for each layer of the model. It is currently a placeholder, and will be replaced with a proper data cube initialiser.
-
-
-    Facet#	Area	Position	Normal vector 	T0_t0	T0_t1	T1_t0 	T1_t1 etc	Insolation curve	Secondary radiation 
-    1	    Float	Coordinates	Vector (3D)	    Float	Float	Float	Float 	    1D array (or 2D?) 	2D array [index, geometric coefficient]
-
-    QUESTIONS:
-    1) Should the insolation curve be a 1D array or a 2D array?
-    2) Do we save every temperature for every time step, or just one per day plus the most recent?
-
-    '''
-    data_cube = "placeholder"
-    							
-    return data_cube
 
 def calculate_insolation():
     ''' 
@@ -141,15 +131,12 @@ def main():
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
     '''
 
-    # Get the shape model
+    # Get the shape model and setup data storage arrays
     filename = "67P_low_res.stl"
     shape_model = read_shape_model(filename)
 
     # Visualise the shape model
     visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance)
-
-    # Setup the data cube
-    data_cube = initialise_data_cube()
 
     # Calculate insolation array for each facet
         # Calculate the position of the sun relative to the comet
