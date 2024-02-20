@@ -226,10 +226,13 @@ def main():
         # Ray tracing to work out which facets are visible from each facet
         # Calculate the geometric coefficient of secondary radiation from each facet
         # Write the index and coefficient to the data cube
+    
+    convergence_factor = 10 # Set to a value greater than 1 to start the iteration
+    day = 0 
 
     # Proceed to iterate the model until it converges
-    while (convergence_factor > 1) and (days < max_days):
-        for time in range(0, rotation_period, time_step):
+    while day < max_days and convergence_factor > 1:
+        for time in np.arange(0, rotation_period, time_step):
             for facet in shape_model:
                 # Calculate insolation term
 
@@ -250,8 +253,15 @@ def main():
                 temperature_error += abs(facet['temperature'][0][0] - facet['temperature'][n_timesteps][0])
 
         convergence_factor = (temperature_error / (len(shape_model))) / convergence_target
+        day += 1
 
-        days += 1
+        print(f"Day {day} temperature error: {temperature_error / (len(shape_model))} K\n")
+        
+    # Post-loop check to display appropriate message
+    if convergence_factor <= 1:
+        print(f"Convergence target achieved after {day} days.")
+    else:
+        print(f"Maximum days reached without achieving convergence. Final temperature error: {temperature_error / (len(shape_model))} K\n")
 
     # Visualise the results - animation of final day's temperature distribution
 
