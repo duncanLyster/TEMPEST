@@ -34,6 +34,11 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from body_visualisation import visualise_shape_model
+from mpl_toolkits import mplot3d
+import matplotlib.animation as animation
+from mpl_toolkits.mplot3d import art3d
+from matplotlib import colormaps
+from stl import mesh
 
 # Define global variables
 # Comet-wide material properties (currently placeholders)
@@ -163,7 +168,6 @@ def calculate_insolation(shape_model):
             facet['insolation'][t] = insolation
 
     print(f"Calculated insolation for each facet.\n")
-    print(f"Facet 1: {shape_model[0]}\n")
 
     # Plot the insolation curve for a single facet with number of days on the x-axis
     plt.plot(shape_model[0]['insolation'])
@@ -191,8 +195,6 @@ def calculate_initial_temperatures(shape_model):
             facet['temperature'][0][layer] = (total_energy / (emmisivity * facet['area'] * 5.67e-8))**(1/4)
 
     print(f"Calculated initial temperatures for each facet.\n")
-    print(f"Facet 1 temperatures at t=0: {shape_model[0]['temperature'][0]}\n")
-    print(f"Facet 2 temperatures at t=0: {shape_model[1]['temperature'][0]}\n")
 
     # Plot a histogram of the initial temperatures for all facets
     initial_temperatures = [facet['temperature'][0][0] for facet in shape_model]
@@ -203,6 +205,126 @@ def calculate_initial_temperatures(shape_model):
     plt.show()
 
     return shape_model
+
+def animate_temperature_distribution(filename, temperature_array):
+    ''' 
+    This function animates the temperature evolution of the comet for the final day of the model run. It rotates the comet and updates the temperature of each facet. 
+
+    It uses the same rotation_matrix function as the visualise_shape_model function, and the same update function as the visualise_shape_model function but it updates the temperature of each facet at each frame using the temperature array from the data cube.
+    '''
+
+    # Load the comet shape from the STL file
+    comet_mesh = mesh.Mesh.from_file(filename)
+    
+    # Create a figure and a 3D subplot
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    # Plot the model mesh 
+    ax.add_collection3d(mplot3d.art3d.Poly3DCollection(comet_mesh.vectors, facecolors='grey', linewidths=1, edgecolors='black', alpha=.25))
+    
+    # Auto scale to the mesh size
+    scale = comet_mesh.points.flatten()
+    ax.auto_scale_xyz(scale, scale, scale)
+    ax.set_aspect('equal')
+    
+    # Fix the view
+    ax.view_init(elev=30, azim=30)
+
+    # Get the current limits after autoscaling
+    xlim = ax.get_xlim()
+    ylim = ax.get_ylim()
+    zlim = ax.get_zlim()
+
+    # Find the maximum range
+    max_range = max(xlim[1]-xlim[0], ylim[1]-ylim[0], zlim[1]-zlim[0])
+
+    # Calculate the middle points of each axis
+    mid_x = np.mean(xlim)
+    mid_y = np.mean(ylim)
+    mid_z = np.mean(zlim)
+
+    # Set new limits based on the maximum range to ensure equal scaling
+    ax.set_xlim(mid_x - max_range / 2, mid_x + max_range / 2)
+    ax.set_ylim(mid_y - max_range / 2, mid_y + max_range / 2)
+    ax.set_zlim(mid_z - max_range / 2, mid_z + max_range / 2)
+
+    # Use these limits to determine the length of the axis line
+    # Here we choose the maximum range among x, y, z dimensions to define the line length
+    line_length = max(xlim[1]-xlim[0], ylim[1]-ylim[0], zlim[1]-zlim[0]) * 0.5
+    
+    # Calculate start and end points for the axis line based on the rotation axis and line length
+    axis_start = rotation_axis * -line_length*1.5
+    axis_end = rotation_axis * line_length*1.5
+    
+    def rotation_matrix(axis, theta):
+        """
+        Return the rotation matrix associated with counterclockwise rotation about
+        the given axis by theta radians.
+        """
+        axis = np.asarray(axis)
+        axis = axis / np.sqrt(np.dot(axis, axis))
+        a = np.cos(theta / 2.0)
+        b, c, d = -axis * np.sin(theta / 2.0)
+        aa, bb, cc, dd = a * a, b * b, c * c, d * d
+        bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
+        return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
+                        [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
+                        [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
+    
+    # Initialize colour map
+    norm = plt.Normalize(temperature_array.min(), temperature_array.max())
+    colormap = colormaps['coolwarm']
+
+    # Animation function with sunlight arrow updated at each frame
+    def update(num, comet_mesh, ax):
+        ax.clear()
+
+        # Rotate the mesh
+        theta = (2 * np.pi / rotation_period) * num  # Convert frame number to radians
+        rot_mat = rotation_matrix(rotation_axis, theta)
+        
+        # Apply rotation to mesh vertices
+        rotated_vertices = np.dot(comet_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
+        
+        # Get temperatures for the current frame and apply colour map
+        temp_for_frame = temperature_array[:, int(num)]
+        face_colours = colormap(norm(temp_for_frame))
+        
+        # Re-plot the rotated mesh with updated face colours
+        mesh_collection = art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0.5, edgecolors='k', alpha=0.9)
+        ax.add_collection3d(mesh_collection)
+
+        # Set new limits based on the maximum range to ensure equal scaling
+        ax.set_xlim(mid_x - max_range / 2, mid_x + max_range / 2)
+        ax.set_ylim(mid_y - max_range / 2, mid_y + max_range / 2)
+        ax.set_zlim(mid_z - max_range / 2, mid_z + max_range / 2)
+
+        # Plot the rotation axis
+        ax.plot([axis_start[0], axis_end[0]], [axis_start[1], axis_end[1]], [axis_start[2], axis_end[2]], 'r-', linewidth=2)
+
+        # Calculate the arrow's starting position to point towards the center of the comet
+        # Adjust the 'shift_factor' as necessary to position the arrow outside the comet model
+        shift_factor = line_length * 2
+        arrow_start = shift_factor * sunlight_direction
+        
+        # Plot the reversed sunlight direction arrow pointing towards the center
+        ax.quiver(arrow_start[0], arrow_start[1], arrow_start[2], -sunlight_direction[0], -sunlight_direction[1], -sunlight_direction[2], length=line_length, color='orange', linewidth=2)
+
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+
+        return
+    
+    # Animate
+    ani = animation.FuncAnimation(fig, update, frames=timesteps_per_day, fargs=(comet_mesh, ax), blit=False)
+
+    # Display rotation period and solar distance as text
+    plt.figtext(0.05, 0.95, f'Rotation Period: {rotation_period}s, ({rotation_period/3600:.3g} hours)', fontsize=12)
+    plt.figtext(0.05, 0.90, f'Solar Distance: {solar_distance} AU', fontsize=12)
+
+    plt.show()
 
 def main():
     ''' 
@@ -246,10 +368,7 @@ def main():
                 # Calculate new temperatures for all sub-surface layers
                 # Save the new temperatures to the data cube
 
-                facet['temperature'][current_step + 1][0] = facet['temperature'][current_step][0] + 0.1 # Placeholder for the above calculations
-
-                test = 1 # Placeholder for the above calculations
-            test = 1    # Placeholder for the above calculations
+                facet['temperature'][current_step + 1][0] = facet['temperature'][current_step][0] + insolation_term/50000000 # Placeholder for the above calculations
 
         # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
         day += 1
@@ -259,18 +378,31 @@ def main():
                 temperature_error += abs(facet['temperature'][day * timesteps_per_day][0] - facet['temperature'][(day - 1) * timesteps_per_day][0])
 
         convergence_factor = (temperature_error / (len(shape_model))) / convergence_target
-   
+
         print(f"Day {day} temperature error: {temperature_error / (len(shape_model))} K\n")
-        # Print an  example temperature distribution for a single facet
-        print(f"Facet 1 temperatures at t={day}: {shape_model[0]['temperature'][day * timesteps_per_day]}\n")
-        
+
+    day -= 1    
+    
     # Post-loop check to display appropriate message
     if convergence_factor <= 1:
         print(f"Convergence target achieved after {day} days.\n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
+
+        # Create an array of temperatures at each timestep in final day for each facet
+        # Initialise the array
+        final_day_temperatures = np.zeros((len(shape_model), timesteps_per_day))
+
+        # Fill the array
+        for i, facet in enumerate(shape_model):
+            for t in range(timesteps_per_day):
+                final_day_temperatures[i][t] = facet['temperature'][day * timesteps_per_day + t][0]
+
+        print(f"Final day temperatures array: {final_day_temperatures}\n")
+        
+        # Visualise the results - animation of final day's temperature distribution
+        animate_temperature_distribution(filename, final_day_temperatures)
+    
     else:
         print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
-
-    # Visualise the results - animation of final day's temperature distribution
 
     # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulations
 

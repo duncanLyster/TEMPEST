@@ -52,9 +52,6 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
     # Calculate start and end points for the axis line based on the rotation axis and line length
     axis_start = rotation_axis * -line_length*1.5
     axis_end = rotation_axis * line_length*1.5
-
-    # Sunlight direction vector (example: from the left along the x-axis)
-    ax.quiver(0, 0, 0, sunlight_direction[0], sunlight_direction[1], sunlight_direction[2], length=line_length*1.5, color='yellow')
     
     def rotation_matrix(axis, theta):
         """
