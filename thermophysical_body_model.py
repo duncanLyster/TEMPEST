@@ -177,6 +177,34 @@ def calculate_insolation(shape_model):
 
     return shape_model
 
+def calculate_initial_temperatures(shape_model):
+    ''' 
+    This function calculates the initial temperature of each facet and sub-surface layer of the comet. It writes the initial temperatures to the data cube.
+    '''
+
+    # Calculate initial temperature for each facet
+    for facet in shape_model:
+        # Calculate the initial temperature based on the integrated insolation curve
+        # Integrate the insolation curve to get the total energy received by the facet over one full rotation
+        total_energy = np.trapz(facet['insolation'], dx=time_step)
+        # Calculate the temperature of the facet using the Stefan-Boltzmann law and set the initial temperature of all layers to the same value
+        for layer in range(n_layers):
+            facet['temperature'][0][layer] = (total_energy / (emmisivity * facet['area'] * 5.67e-8))**(1/4)
+
+    print(f"Calculated initial temperatures for each facet.\n")
+    print(f"Facet 1 temperatures at t=0: {shape_model[0]['temperature'][0]}\n")
+    print(f"Facet 2 temperatures at t=0: {shape_model[1]['temperature'][0]}\n")
+
+    # Plot a histogram of the initial temperatures for all facets
+    initial_temperatures = [facet['temperature'][0][0] for facet in shape_model]
+    plt.hist(initial_temperatures, bins=20)
+    plt.xlabel('Initial temperature (K)')
+    plt.ylabel('Number of facets')
+    plt.title('Initial temperature distribution of all facets')
+    plt.show()
+
+    return shape_model
+
 def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
@@ -193,6 +221,7 @@ def main():
     shape_model = calculate_insolation(shape_model)
 
     # Calulate initial temperature array
+    shape_model = calculate_initial_temperatures(shape_model)
 
     # Calculate secondary radiation array
         # Ray tracing to work out which facets are visible from each facet
