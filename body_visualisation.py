@@ -5,7 +5,7 @@ import matplotlib.animation as animation
 from stl import mesh
 
 
-def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance):
+def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance, sunlight_direction):
     ''' 
     This function visualises the shape model of the comet/planetary body to allow the user to intuiutively check the setup is as intended. It shows an animation of the body rotating with a vector arrow that indicated incident sunlight from an external observers position. The rotation axis is shown as a line through the body and period is shown in the viewing window as text. 
     '''
@@ -54,7 +54,6 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
     axis_end = rotation_axis * line_length*1.5
 
     # Sunlight direction vector (example: from the left along the x-axis)
-    sunlight_direction = np.array([0, -1, 0])
     ax.quiver(0, 0, 0, sunlight_direction[0], sunlight_direction[1], sunlight_direction[2], length=line_length*1.5, color='yellow')
     
     def rotation_matrix(axis, theta):
@@ -122,4 +121,4 @@ if __name__ == "__main__":
     filename = "67P_low_res.stl"
     
     # Call your visualization function here
-    visualise_shape_model(filename, rotation_axis=np.array([0, 0, 1]), rotation_period=12*3600, solar_distance="TEST_SOLAR_DISTANCE")
+    visualise_shape_model(filename, rotation_axis=np.array([0, 0, 1]), rotation_period=12*3600, solar_distance="TEST_SOLAR_DISTANCE", sunlight_direction = np.array([0, -1, 0]))
