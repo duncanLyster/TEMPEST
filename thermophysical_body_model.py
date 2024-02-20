@@ -179,7 +179,9 @@ def calculate_insolation(shape_model):
 
 def calculate_initial_temperatures(shape_model):
     ''' 
-    This function calculates the initial temperature of each facet and sub-surface layer of the comet. It writes the initial temperatures to the data cube.
+    This function calculates the initial temperature of each facet and sub-surface layer of the comet based on the insolation curve for that facet. It writes the initial temperatures to the data cube.
+
+    Additionally, it plots a histogram of the initial temperatures for all facets.
     '''
 
     # Calculate initial temperature for each facet
