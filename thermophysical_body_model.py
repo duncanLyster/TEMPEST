@@ -50,8 +50,8 @@ n_layers = 10                                       # Number of layers in the co
 solar_distance = 1.0                                # AU
 solar_luminosity = 3.828e26                         # W
 sunlight_direction = np.array([0, -1, 0])           # Unit vector pointing from the sun to the comet
-n_timesteps = 40                                    # Number of time steps per day
-time_step = 86400 / n_timesteps                     # s (1 day in seconds)
+timesteps_per_day = 40                              # Number of time steps per day
+delta_t = 86400 / timesteps_per_day                 # s (1 day in seconds)
 rotation_period = 100000                            # s (1 day on the comet)
 max_days = 5                                        # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time as this will be determined by convergence. Just a safety limit.
 rotation_axis = np.array([0.3, -0.5, 1])            # Unit vector pointing along the rotation axis
@@ -103,10 +103,10 @@ def read_shape_model(filename):
         facet['area'] = area
         facet['position'] = centroid
         #initialise insolation and secondary radiation arrays
-        facet['insolation'] = np.zeros(n_timesteps) # Insolation curve doesn't change day to day
+        facet['insolation'] = np.zeros(timesteps_per_day) # Insolation curve doesn't change day to day
         facet['secondary_radiation'] = np.zeros(len(facets))
         #initialise temperature arrays
-        facet['temperature'] = np.zeros((n_timesteps * max_days, n_layers))
+        facet['temperature'] = np.zeros((timesteps_per_day * (max_days + 1), n_layers))
 
     print(f"Read {len(facets)} facets from the shape model.\n")
     
@@ -138,11 +138,11 @@ def calculate_insolation(shape_model):
 
     # Calculate the zenith angle (angle between the sun and the normal vector of the facet) for each facet at every timestep for one full rotation of the body 
     for facet in shape_model:
-        for t in range(n_timesteps):
+        for t in range(timesteps_per_day):
             # Normal vector of the facet at time t=0
             normal = facet['normal']
 
-            new_normal = np.dot(rotation_matrix(rotation_axis, (2 * np.pi * time_step / rotation_period) * t), normal)
+            new_normal = np.dot(rotation_matrix(rotation_axis, (2 * np.pi * delta_t / rotation_period) * t), normal)
 
             # Calculate zenith angle
             zenith_angle = np.arccos(np.dot(sunlight_direction, new_normal) / (np.linalg.norm(sunlight_direction) * np.linalg.norm(new_normal)))
@@ -185,7 +185,7 @@ def calculate_initial_temperatures(shape_model):
     for facet in shape_model:
         # Calculate the initial temperature based on the integrated insolation curve
         # Integrate the insolation curve to get the total energy received by the facet over one full rotation
-        total_energy = np.trapz(facet['insolation'], dx=time_step)
+        total_energy = np.trapz(facet['insolation'], dx=delta_t)
         # Calculate the temperature of the facet using the Stefan-Boltzmann law and set the initial temperature of all layers to the same value
         for layer in range(n_layers):
             facet['temperature'][0][layer] = (total_energy / (emmisivity * facet['area'] * 5.67e-8))**(1/4)
@@ -232,9 +232,11 @@ def main():
 
     # Proceed to iterate the model until it converges
     while day < max_days and convergence_factor > 1:
-        for time in np.arange(0, rotation_period, time_step):
+        for time_step in range(timesteps_per_day):
             for facet in shape_model:
-                # Calculate insolation term
+                current_step = int(time_step + (day * timesteps_per_day))
+                # Calculate insolation term, bearing in mind that the insolation curve is constant for each facet and repeats every rotation period
+                insolation_term = facet['insolation'][time_step] * delta_t / (layer_thickness * density * specific_heat_capacity)
 
                 # Calculate secondary radiation term
                 # Calculate conducted heat term
@@ -244,24 +246,29 @@ def main():
                 # Calculate new temperatures for all sub-surface layers
                 # Save the new temperatures to the data cube
 
+                facet['temperature'][current_step + 1][0] = facet['temperature'][current_step][0] + 0.1 # Placeholder for the above calculations
+
                 test = 1 # Placeholder for the above calculations
             test = 1    # Placeholder for the above calculations
 
         # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
-        temperature_error = 0
-        for facet in shape_model:
-                temperature_error += abs(facet['temperature'][0][0] - facet['temperature'][n_timesteps][0])
-
-        convergence_factor = (temperature_error / (len(shape_model))) / convergence_target
         day += 1
 
+        temperature_error = 0
+        for facet in shape_model:
+                temperature_error += abs(facet['temperature'][day * timesteps_per_day][0] - facet['temperature'][(day - 1) * timesteps_per_day][0])
+
+        convergence_factor = (temperature_error / (len(shape_model))) / convergence_target
+   
         print(f"Day {day} temperature error: {temperature_error / (len(shape_model))} K\n")
+        # Print an  example temperature distribution for a single facet
+        print(f"Facet 1 temperatures at t={day}: {shape_model[0]['temperature'][day * timesteps_per_day]}\n")
         
     # Post-loop check to display appropriate message
     if convergence_factor <= 1:
-        print(f"Convergence target achieved after {day} days.")
+        print(f"Convergence target achieved after {day} days.\n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
     else:
-        print(f"Maximum days reached without achieving convergence. Final temperature error: {temperature_error / (len(shape_model))} K\n")
+        print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
 
     # Visualise the results - animation of final day's temperature distribution
 
