@@ -35,9 +35,6 @@ import os
 import matplotlib.pyplot as plt
 from body_visualisation import visualise_shape_model
 
-import sys 
-print(sys.path)
-
 # Define global variables
 # Comet-wide material properties (currently placeholders)
 emmisivity = 0.5                                    # Dimensionless
@@ -59,7 +56,7 @@ rotation_period = 100000                            # s (1 day on the comet)
 max_days = 5                                        # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time as this will be determined by convergence. Just a safety limit.
 rotation_axis = np.array([0.3, -0.5, 1])            # Unit vector pointing along the rotation axis
 body_orientation = np.array([0, 0, 1])              # Unit vector pointing along the body's orientation
-
+convergence_target = 5                              # K
 
 # Define any necessary functions
 def read_shape_model(filename):
@@ -229,28 +226,36 @@ def main():
         # Ray tracing to work out which facets are visible from each facet
         # Calculate the geometric coefficient of secondary radiation from each facet
         # Write the index and coefficient to the data cube
-    
-    # while (not converged) and (days < max_days):
-        #for time in range(0, rotation_period, time_step):
-            # Calculate new temperatures everywhere in the model
-            #for facet in shape_model:
-                # Calculate insolation
-                # Calculate secondary radiation
-                # Calculate conducted heat
-                # Calculate re-emitted radiation
-                # Calculate sublimation energy loss
-                # Put the above into equation for new surface temperature
+
+    # Proceed to iterate the model until it converges
+    while (convergence_factor > 1) and (days < max_days):
+        for time in range(0, rotation_period, time_step):
+            for facet in shape_model:
+                # Calculate insolation term
+
+                # Calculate secondary radiation term
+                # Calculate conducted heat term
+                # Calculate re-emitted radiation term
+                # Calculate sublimation energy loss term
+                # Calculate new surface temperature
                 # Calculate new temperatures for all sub-surface layers
                 # Save the new temperatures to the data cube
-                # Set T = T_new
-            
-            # Calculate convergence factor
 
-    # Save the data cube
+                test = 1 # Placeholder for the above calculations
+            test = 1    # Placeholder for the above calculations
 
-    # Visualise the results - animation of 1 day 
+        # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
+        temperature_error = 0
+        for facet in shape_model:
+                temperature_error += abs(facet['temperature'][0][0] - facet['temperature'][n_timesteps][0])
 
-    # Output the results to a file that can be used with ephemeris to produce instrument simulations
+        convergence_factor = (temperature_error / (len(shape_model))) / convergence_target
+
+        days += 1
+
+    # Visualise the results - animation of final day's temperature distribution
+
+    # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulations
 
 # Call the main program to start execution
 if __name__ == "__main__":
