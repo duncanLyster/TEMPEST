@@ -30,29 +30,32 @@ Last updated: 15 Feb 2024
 Author: Duncan Lyster
 '''
 
-# Import any necessary libraries
 import numpy as np
 import os
+from body_visualisation import visualise_shape_model
+
+import sys 
+print(sys.path)
 
 # Define global variables
 # Comet-wide material properties (currently placeholders)
-emmisivity = 0.5                    # Dimensionless
-albedo = 0.5                        # Dimensionless
-thermal_conductivity = 1.0          # W/mK 
-density = 1.0                       # kg/m^3
-specific_heat_capacity = 1.0        # J/kgK
-beaming_factor = 0.5                # Dimensionless
+emmisivity = 0.5                            # Dimensionless
+albedo = 0.5                                # Dimensionless
+thermal_conductivity = 1.0                  # W/mK 
+density = 1.0                               # kg/m^3
+specific_heat_capacity = 1.0                # J/kgK
+beaming_factor = 0.5                        # Dimensionless
 
 # Model setup parameters
-layer_thickness = 0.1               # m (this may be calculated properly from insolation curve later, but just a value for now)
-n_layers = 10                       # Number of layers in the conduction model
-solar_distance = 1.0                # AU
-solar_constant = 1361               # W/m^2 Solar constant is the solar radiation received per unit area at 1 AU (could use luminosity of the sun and distance to the sun to calculate this)
-time_step = 1000                    # s
-rotation_period = 100,000           # s (1 day on the comet)
-max_days = 5                        # Maximum number of days to run the model for
-rotation_axis = [0, 0, 1]           # Unit vector pointing along the rotation axis
-body_orientation = [0, 0, 1]        # Unit vector pointing along the body's orientation
+layer_thickness = 0.1                       # m (this may be calculated properly from insolation curve later, but just a value for now)
+n_layers = 10                               # Number of layers in the conduction model
+solar_distance = 1.0                        # AU
+solar_constant = 1361                       # W/m^2 Solar constant is the solar radiation received per unit area at 1 AU (could use luminosity of the sun and distance to the sun to calculate this)
+time_step = 1000                            # s
+rotation_period = 100000                    # s (1 day on the comet)
+max_days = 5                                # Maximum number of days to run the model for
+rotation_axis = np.array([0.3, -0.5, 1])         # Unit vector pointing along the rotation axis
+body_orientation = np.array([0, 0, 1])      # Unit vector pointing along the body's orientation
 
 
 # Define any necessary functions
@@ -95,11 +98,9 @@ def read_shape_model(filename):
     for facet in facets:
         v1, v2, v3 = facet['vertices']
         area = calculate_area(v1, v2, v3)
-        centroid = calculate_centroid(v1, v2, v3)
+        centroid = (v1 + v2 + v3) / 3
         facet['area'] = area
         facet['position'] = centroid
-        # Remove vertices from the final output to match requested return format
-        del facet['vertices']
 
     print(f"Read {len(facets)} facets from the shape model.")
     print(f"Facet 1: {facets[0]}")
@@ -111,16 +112,6 @@ def calculate_area(v1, v2, v3):
     u = v2 - v1
     v = v3 - v1
     return np.linalg.norm(np.cross(u, v)) / 2
-
-def calculate_centroid(v1, v2, v3):
-    '''Calculate the centroid of the triangle formed by vertices v1, v2, and v3.'''
-    return (v1 + v2 + v3) / 3
-
-def visualise_shape_model():
-    ''' 
-    This function visualises the shape model of the comet to allow the user to intuiutively check the setup is as intended. It shows an animation of the comet rotating with a vector arrow that indicated incident sunlight from an external observers position. The rotation axis is shown as a line throught the comet and period is shown in the viewing window as text.
-    '''
-    pass
 
 def initialise_data_cube():
     ''' 
@@ -151,10 +142,11 @@ def main():
     '''
 
     # Get the shape model
-    shape_model = read_shape_model(filename = "67P_low_res.stl")
+    filename = "67P_low_res.stl"
+    shape_model = read_shape_model(filename)
 
     # Visualise the shape model
-    visualise_shape_model()
+    visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance)
 
     # Setup the data cube
     data_cube = initialise_data_cube()
