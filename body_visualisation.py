@@ -4,6 +4,7 @@ from mpl_toolkits import mplot3d
 import matplotlib.animation as animation
 from stl import mesh
 
+
 def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance):
     ''' 
     This function visualises the shape model of the comet/planetary body to allow the user to intuiutively check the setup is as intended. It shows an animation of the body rotating with a vector arrow that indicated incident sunlight from an external observers position. The rotation axis is shown as a line through the body and period is shown in the viewing window as text. 
@@ -21,6 +22,7 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
     # Auto scale to the mesh size
     scale = comet_mesh.points.flatten()
     ax.auto_scale_xyz(scale, scale, scale)
+    ax.set_aspect('equal')
     
     # Fix the view
     ax.view_init(elev=30, azim=30)
