@@ -10,16 +10,15 @@ Enceladus' surface.
 
 All calculation figures are in SI units, except where clearly stated otherwise.
 
-Full documentation to be found (one day) at: **INSERT LINK TO GITHUB REPOSITORY**.
+Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
 OPEN QUESTIONS: 
 Do we consider partial shadow? 
 Do we treat facets as points or full 2D polygons?
-Should insolation be calculated once for each facet as a 2D map where the sun later passes over? Or just as a curve each time the model runs? 
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
-Add temporary heat sources. 
+Add temporary local heat sources e.g. jets
 
 IMPORTANT CONSIDERATIONS: 
 Generalising the model so it can be used e.g for asteroids, Enceladus fractures, adjacent emitting bodies (e.g. binaries, Saturn) 
@@ -52,7 +51,8 @@ beaming_factor = 0.5                                # Dimensionless
 # Model setup parameters
 layer_thickness = 0.1                               # m (this may be calculated properly from insolation curve later, but just a value for now)
 n_layers = 10                                       # Number of layers in the conduction model
-solar_distance = 1.0                                # AU
+solar_distance_au = 1.0                             # AU
+solar_distance = solar_distance_au * 1.496e11       # m
 solar_luminosity = 3.828e26                         # W
 sunlight_direction = np.array([0, -1, 0])           # Unit vector pointing from the sun to the comet
 timesteps_per_day = 40                              # Number of time steps per day
@@ -162,7 +162,7 @@ def calculate_insolation(shape_model):
                 illumination_factor = 1
 
                 # Calculate insolation converting AU to m
-                insolation = solar_luminosity * (1 - albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * (solar_distance * 1.496e+11)**2) 
+                insolation = solar_luminosity * (1 - albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * solar_distance**2) 
                 
             # Write the insolation value to the insolation array for this facet at time t
             facet['insolation'][t] = insolation
@@ -322,7 +322,7 @@ def animate_temperature_distribution(filename, temperature_array):
 
     # Display rotation period and solar distance as text
     plt.figtext(0.05, 0.95, f'Rotation Period: {rotation_period}s, ({rotation_period/3600:.3g} hours)', fontsize=12)
-    plt.figtext(0.05, 0.90, f'Solar Distance: {solar_distance} AU', fontsize=12)
+    plt.figtext(0.05, 0.90, f'Solar Distance: {solar_distance_au} AU', fontsize=12)
 
     plt.show()
 
@@ -336,7 +336,7 @@ def main():
     shape_model = read_shape_model(filename)
 
     # Visualise the shape model
-    visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance, sunlight_direction)
+    visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance_au, sunlight_direction)
 
     # Calculate insolation array for each facet
     shape_model = calculate_insolation(shape_model)
