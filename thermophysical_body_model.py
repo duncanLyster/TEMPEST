@@ -5,7 +5,7 @@ insolation and temperature arrays, and iterates until the model converges. The r
 visualized.
 
 It was built as a tool for planning the comet interceptor mission, but is intended to be 
-general enough to be used for asteroids, and other planetary bodies e.g. fractures on 
+generalised for use with asteroids, and other planetary bodies e.g. fractures on 
 Enceladus' surface.
 
 All calculation figures are in SI units, except where clearly stated otherwise.
@@ -40,7 +40,7 @@ from matplotlib import colormaps
 from stl import mesh
 
 # Define global variables
-# Comet-wide material properties (currently placeholders)
+# Material properties (currently placeholders)
 emmisivity = 0.5                                    # Dimensionless
 albedo = 0.5                                        # Dimensionless
 thermal_conductivity = 1.0                          # W/mK 
@@ -54,10 +54,10 @@ n_layers = 10                                       # Number of layers in the co
 solar_distance_au = 1.0                             # AU
 solar_distance = solar_distance_au * 1.496e11       # m
 solar_luminosity = 3.828e26                         # W
-sunlight_direction = np.array([0, -1, 0])           # Unit vector pointing from the sun to the comet
+sunlight_direction = np.array([0, -1, 0])           # Unit vector pointing from the sun to the 
 timesteps_per_day = 40                              # Number of time steps per day
 delta_t = 86400 / timesteps_per_day                 # s (1 day in seconds)
-rotation_period = 100000                            # s (1 day on the comet)
+rotation_period = 100000                            # s
 max_days = 5                                        # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time as this will be determined by convergence. Just a safety limit.
 rotation_axis = np.array([0.3, -0.5, 1])            # Unit vector pointing along the rotation axis
 body_orientation = np.array([0, 0, 1])              # Unit vector pointing along the body's orientation
@@ -66,9 +66,9 @@ convergence_target = 5                              # K
 # Define any necessary functions
 def read_shape_model(filename):
     ''' 
-    This function reads in the shape model of the comet from a .stl file and return an array of facets, each with its own area, position, and normal vector.
+    This function reads in the shape model of the body from a .stl file and return an array of facets, each with its own area, position, and normal vector.
 
-    Ensure that the .stl file is saved in ASCII format, and that the file is in the same directory as this script. Additionally, ensure that the model dimensions are in meters and that the normal vectors are pointing outwards from the comet. An easy way to convert the file is to open it in Blender and export it as an ASCII .stl file.
+    Ensure that the .stl file is saved in ASCII format, and that the file is in the same directory as this script. Additionally, ensure that the model dimensions are in meters and that the normal vectors are pointing outwards from the body. An easy way to convert the file is to open it in Blender and export it as an ASCII .stl file.
 
     This function will give an error if the file is not in the correct format, or if the file is not found.
     '''
@@ -125,10 +125,10 @@ def calculate_area(v1, v2, v3):
 
 def calculate_insolation(shape_model):
     ''' 
-    This function calculates the insolation for each facet of the comet. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
+    This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
     '''
 
-    # Calculate rotation matrix for the comet's rotation
+    # Calculate rotation matrix for the body's rotation
     def rotation_matrix(axis, theta):
         '''Return the rotation matrix associated with counterclockwise rotation about the given axis by theta radians.'''
         axis = np.asarray(axis)
@@ -173,14 +173,14 @@ def calculate_insolation(shape_model):
     plt.plot(shape_model[0]['insolation'])
     plt.xlabel('Number of timesteps')
     plt.ylabel('Insolation (W/m^2)')
-    plt.title('Insolation curve for a single facet for one full rotation of the comet')
+    plt.title('Insolation curve for a single facet for one full rotation of the body')
     plt.show()
 
     return shape_model
 
 def calculate_initial_temperatures(shape_model):
     ''' 
-    This function calculates the initial temperature of each facet and sub-surface layer of the comet based on the insolation curve for that facet. It writes the initial temperatures to the data cube.
+    This function calculates the initial temperature of each facet and sub-surface layer of the body based on the insolation curve for that facet. It writes the initial temperatures to the data cube.
 
     Additionally, it plots a histogram of the initial temperatures for all facets.
     '''
@@ -208,23 +208,23 @@ def calculate_initial_temperatures(shape_model):
 
 def animate_temperature_distribution(filename, temperature_array):
     ''' 
-    This function animates the temperature evolution of the comet for the final day of the model run. It rotates the comet and updates the temperature of each facet. 
+    This function animates the temperature evolution of the body for the final day of the model run. It rotates the body and updates the temperature of each facet. 
 
     It uses the same rotation_matrix function as the visualise_shape_model function, and the same update function as the visualise_shape_model function but it updates the temperature of each facet at each frame using the temperature array from the data cube.
     '''
 
-    # Load the comet shape from the STL file
-    comet_mesh = mesh.Mesh.from_file(filename)
+    # Load the shape model from the STL file
+    shape_mesh = mesh.Mesh.from_file(filename)
     
     # Create a figure and a 3D subplot
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
 
     # Plot the model mesh 
-    ax.add_collection3d(mplot3d.art3d.Poly3DCollection(comet_mesh.vectors, facecolors='grey', linewidths=1, edgecolors='black', alpha=.25))
+    ax.add_collection3d(mplot3d.art3d.Poly3DCollection(shape_mesh.vectors, facecolors='grey', linewidths=1, edgecolors='black', alpha=.25))
     
     # Auto scale to the mesh size
-    scale = comet_mesh.points.flatten()
+    scale = shape_mesh.points.flatten()
     ax.auto_scale_xyz(scale, scale, scale)
     ax.set_aspect('equal')
     
@@ -277,7 +277,7 @@ def animate_temperature_distribution(filename, temperature_array):
     colormap = colormaps['coolwarm']
 
     # Animation function with sunlight arrow updated at each frame
-    def update(num, comet_mesh, ax):
+    def update(num, shape_mesh, ax):
         ax.clear()
 
         # Rotate the mesh
@@ -285,7 +285,7 @@ def animate_temperature_distribution(filename, temperature_array):
         rot_mat = rotation_matrix(rotation_axis, theta)
         
         # Apply rotation to mesh vertices
-        rotated_vertices = np.dot(comet_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
+        rotated_vertices = np.dot(shape_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
         
         # Get temperatures for the current frame and apply colour map
         temp_for_frame = temperature_array[:, int(num)]
@@ -303,8 +303,8 @@ def animate_temperature_distribution(filename, temperature_array):
         # Plot the rotation axis
         ax.plot([axis_start[0], axis_end[0]], [axis_start[1], axis_end[1]], [axis_start[2], axis_end[2]], 'r-', linewidth=2)
 
-        # Calculate the arrow's starting position to point towards the center of the comet
-        # Adjust the 'shift_factor' as necessary to position the arrow outside the comet model
+        # Calculate the arrow's starting position to point towards the center of the body
+        # Adjust the 'shift_factor' as necessary to position the arrow outside the body model
         shift_factor = line_length * 2
         arrow_start = shift_factor * sunlight_direction
         
@@ -318,7 +318,7 @@ def animate_temperature_distribution(filename, temperature_array):
         return
     
     # Animate
-    ani = animation.FuncAnimation(fig, update, frames=timesteps_per_day, fargs=(comet_mesh, ax), blit=False)
+    ani = animation.FuncAnimation(fig, update, frames=timesteps_per_day, fargs=(shape_mesh, ax), blit=False)
 
     # Display rotation period and solar distance as text
     plt.figtext(0.05, 0.95, f'Rotation Period: {rotation_period}s, ({rotation_period/3600:.3g} hours)', fontsize=12)
