@@ -43,9 +43,9 @@ from stl import mesh
 emmisivity = 0.5                                    # Dimensionless
 albedo = 0.5                                        # Dimensionless
 thermal_conductivity = 1.0                          # W/mK 
-density = 1.0                                       # kg/m^3
-specific_heat_capacity = 1.0                        # J/kgK
-beaming_factor = 0.5                                # Dimensionless
+density = 500.0                                     # kg/m^3
+specific_heat_capacity = 1000.0                     # J/kgK
+beaming_factor = 1.0                                # Dimensionless
 
 # Model setup parameters
 layer_thickness = 0.1                               # m (this may be calculated properly from insolation curve later, but just a value for now)
@@ -359,15 +359,17 @@ def main():
                 # Calculate insolation term, bearing in mind that the insolation curve is constant for each facet and repeats every rotation period
                 insolation_term = facet['insolation'][time_step] * delta_t / (layer_thickness * density * specific_heat_capacity)
 
+                # Calculate re-emitted radiation term
+                re_emitted_radiation_term = emmisivity * beaming_factor * 5.67e-8 * (facet['temperature'][current_step][0]**4) * delta_t / (layer_thickness * density * specific_heat_capacity)
+
                 # Calculate secondary radiation term
                 # Calculate conducted heat term
-                # Calculate re-emitted radiation term
                 # Calculate sublimation energy loss term
                 # Calculate new surface temperature
                 # Calculate new temperatures for all sub-surface layers
                 # Save the new temperatures to the data cube
 
-                facet['temperature'][current_step + 1][0] = facet['temperature'][current_step][0] + insolation_term/50000000 # Placeholder for the above calculations
+                facet['temperature'][current_step + 1][0] = facet['temperature'][current_step][0] + insolation_term + re_emitted_radiation_term # Placeholder for the above calculations
 
         # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
         day += 1
