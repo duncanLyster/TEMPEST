@@ -24,7 +24,6 @@ IMPORTANT CONSIDERATIONS:
 Generalising the model so it can be used e.g for asteroids, Enceladus fractures, adjacent emitting bodies (e.g. binaries, Saturn) 
 
 Started: 15 Feb 2024
-Last updated: 15 Feb 2024
 
 Author: Duncan Lyster
 '''
