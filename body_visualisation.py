@@ -7,20 +7,20 @@ from stl import mesh
 
 def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance, sunlight_direction):
     ''' 
-    This function visualises the shape model of the comet/planetary body to allow the user to intuiutively check the setup is as intended. It shows an animation of the body rotating with a vector arrow that indicated incident sunlight from an external observers position. The rotation axis is shown as a line through the body and period is shown in the viewing window as text. 
+    This function visualises the shape model of the planetary body to allow the user to intuiutively check the setup is as intended. It shows an animation of the body rotating with a vector arrow that indicated incident sunlight from an external observers position. The rotation axis is shown as a line through the body and period is shown in the viewing window as text. 
     '''
-    # Load the comet shape from the STL file
-    comet_mesh = mesh.Mesh.from_file(filename)
+    # Load the shape mesh from the STL file
+    shape_mesh = mesh.Mesh.from_file(filename)
     
     # Create a figure and a 3D subplot
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     
     # Plot the model mesh 
-    ax.add_collection3d(mplot3d.art3d.Poly3DCollection(comet_mesh.vectors, facecolors='grey', linewidths=1, edgecolors='black', alpha=.25))
+    ax.add_collection3d(mplot3d.art3d.Poly3DCollection(shape_mesh.vectors, facecolors='grey', linewidths=1, edgecolors='black', alpha=.25))
     
     # Auto scale to the mesh size
-    scale = comet_mesh.points.flatten()
+    scale = shape_mesh.points.flatten()
     ax.auto_scale_xyz(scale, scale, scale)
     ax.set_aspect('equal')
     
@@ -69,7 +69,7 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
 
     # Animation function with sunlight arrow updated at each frame
-    def update(num, comet_mesh, ax):
+    def update(num, shape_mesh, ax):
         # Clear the plot
         ax.clear()
 
@@ -78,7 +78,7 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
         rot_mat = rotation_matrix(rotation_axis, theta)
         
         # Apply rotation to mesh vertices
-        rotated_vertices = np.dot(comet_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
+        rotated_vertices = np.dot(shape_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
         
         # Re-plot the rotated mesh, sunlight arrow, and rotation axis
         ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors='grey', linewidths=1, edgecolors='black', alpha=.9))
@@ -91,8 +91,8 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
         # Plot the rotation axis
         ax.plot([axis_start[0], axis_end[0]], [axis_start[1], axis_end[1]], [axis_start[2], axis_end[2]], 'r-', linewidth=2)
 
-        # Calculate the arrow's starting position to point towards the center of the comet
-        # Adjust the 'shift_factor' as necessary to position the arrow outside the comet model
+        # Calculate the arrow's starting position to point towards the center of the mesh
+        # Adjust the 'shift_factor' as necessary to position the arrow outside the shape model
         shift_factor = line_length * 2
         arrow_start = shift_factor * sunlight_direction
         
@@ -106,7 +106,7 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
         return
     
     # Animate
-    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, rotation_period, rotation_period/100), fargs=(comet_mesh, ax), blit=False)
+    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, rotation_period, rotation_period/100), fargs=(shape_mesh, ax), blit=False)
 
     # Display rotation period and solar distance as text
     plt.figtext(0.05, 0.95, f'Rotation Period: {rotation_period}s, ({rotation_period/3600:.3g} hours)', fontsize=12)
