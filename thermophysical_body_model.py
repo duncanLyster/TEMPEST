@@ -354,7 +354,6 @@ def main():
     # Proceed to iterate the model until it converges
     while day < max_days and convergence_factor > 1:
         for time_step in range(timesteps_per_day):
-            print(f"Current time step: {time_step}\n")
             for facet in shape_model:
                 current_step = int(time_step + (day * timesteps_per_day))
                 # Calculate insolation term, bearing in mind that the insolation curve is constant for each facet and repeats every rotation period
@@ -370,7 +369,8 @@ def main():
                 # Calculate new temperatures for all sub-surface layers
                 # Save the new temperatures to the data cube
 
-                facet['temperature'][current_step + 1][0] = facet['temperature'][current_step][0] + insolation_term + re_emitted_radiation_term # Placeholder for the above calculations
+                # Calculate the new temperature of the surface layer (currently very simplified)
+                facet['temperature'][current_step + 1][0] = facet['temperature'][current_step][0] + insolation_term - re_emitted_radiation_term 
 
         # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
         day += 1
