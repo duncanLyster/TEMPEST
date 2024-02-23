@@ -277,6 +277,7 @@ def animate_temperature_distribution(filename, temperature_array):
 
     # Animation function with sunlight arrow updated at each frame
     def update(num, shape_mesh, ax):
+        # Clear the plot
         ax.clear()
 
         # Rotate the mesh
@@ -285,14 +286,15 @@ def animate_temperature_distribution(filename, temperature_array):
         
         # Apply rotation to mesh vertices
         rotated_vertices = np.dot(shape_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
-        
+
         # Get temperatures for the current frame and apply colour map
         temp_for_frame = temperature_array[:, int(num)]
         face_colours = colormap(norm(temp_for_frame))
         
         # Re-plot the rotated mesh with updated face colours
-        mesh_collection = art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0.5, edgecolors='k', alpha=0.9)
-        ax.add_collection3d(mesh_collection)
+        ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0.5, edgecolors='k', alpha=0.9))
+
+        #ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors='grey', linewidths=1, edgecolors='black', alpha=.9))
 
         # Set new limits based on the maximum range to ensure equal scaling
         ax.set_xlim(mid_x - max_range / 2, mid_x + max_range / 2)
@@ -317,7 +319,7 @@ def animate_temperature_distribution(filename, temperature_array):
         return
     
     # Animate
-    ani = animation.FuncAnimation(fig, update, frames=timesteps_per_day, fargs=(shape_mesh, ax), blit=False)
+    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, rotation_period, rotation_period/100), fargs=(shape_mesh, ax), blit=False)
 
     # Display rotation period and solar distance as text
     plt.figtext(0.05, 0.95, f'Rotation Period: {rotation_period}s, ({rotation_period/3600:.3g} hours)', fontsize=12)
@@ -362,7 +364,7 @@ def main():
                 # Calculate re-emitted radiation term
                 re_emitted_radiation_term = emmisivity * beaming_factor * 5.67e-8 * (facet['temperature'][current_step][0]**4) * delta_t / (layer_thickness * density * specific_heat_capacity)
 
-                # Calculate secondary radiation term
+                # Calculate secondary radiation term (identify facets above horizon first, then check if they face, same process for shadows but maybe segment facet into shadow/light with a calculated line?)
                 # Calculate conducted heat term
                 # Calculate sublimation energy loss term
                 # Calculate new surface temperature
