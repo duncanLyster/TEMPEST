@@ -32,9 +32,9 @@ import numpy as np
 import os
 import matplotlib.pyplot as plt
 from body_visualisation import visualise_shape_model
+from animate_temperature_distribution import animate_temperature_distribution
 from mpl_toolkits import mplot3d
 import matplotlib.animation as animation
-from mpl_toolkits.mplot3d import art3d
 from matplotlib import colormaps
 from stl import mesh
 
@@ -399,6 +399,9 @@ def main():
         # Initialise the array
         final_day_temperatures = np.zeros((len(shape_model), timesteps_per_day))
 
+        # Print length of shape model
+        print(f"Length of shape model: {len(shape_model)}\n")
+
         # Fill the array
         for i, facet in enumerate(shape_model):
             for t in range(timesteps_per_day):
@@ -408,6 +411,9 @@ def main():
         
         # Visualise the results - animation of final day's temperature distribution
         animate_temperature_distribution(filename, final_day_temperatures)
+
+        # Save a sample of the final day's temperature distribution to a file
+        np.savetxt('test_data/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
     
     else:
         print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
