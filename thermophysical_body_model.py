@@ -49,7 +49,7 @@ beaming_factor = 1.0                                # Dimensionless
 
 # Model setup parameters
 layer_thickness = 0.1                               # m (this may be calculated properly from insolation curve later, but just a value for now)
-n_layers = 10                                       # Number of layers in the conduction model
+n_layers = 1                                        # Number of layers in the conduction model
 solar_distance_au = 1.0                             # AU
 solar_distance = solar_distance_au * 1.496e11       # m
 solar_luminosity = 3.828e26                         # W
@@ -99,11 +99,11 @@ def read_shape_model(filename):
             facets.append({'normal': normal, 'vertices': [vertex1, vertex2, vertex3]})
     
     # Process facets to calculate area and centroid
-    for facet in facets:
+    for i,  facet in enumerate(facets):
         v1, v2, v3 = facet['vertices']
         area = calculate_area(v1, v2, v3)
         centroid = (v1 + v2 + v3) / 3
-        facet['normal'] = normal
+        # facet['normal'] = normal[i]
         facet['area'] = area
         facet['position'] = centroid
         #initialise insolation and secondary radiation arrays
