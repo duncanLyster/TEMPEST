@@ -16,9 +16,6 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     
-    # Plot the model mesh 
-    ax.add_collection3d(mplot3d.art3d.Poly3DCollection(shape_mesh.vectors, facecolors='grey', linewidths=1, edgecolors='black', alpha=.25))
-    
     # Auto scale to the mesh size
     scale = shape_mesh.points.flatten()
     ax.auto_scale_xyz(scale, scale, scale)
