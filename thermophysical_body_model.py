@@ -12,6 +12,12 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
+NEXT STEPS:
+- Implement vector intersection calculation for secondary radiation and shadowing
+- Implement secondary radiation
+- Implement sublimation energy loss
+- Implement shadowing
+
 OPEN QUESTIONS: 
 Do we consider partial shadow? 
 Do we treat facets as points or full 2D polygons?
@@ -19,6 +25,7 @@ Do we treat facets as points or full 2D polygons?
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
 Add temporary local heat sources e.g. jets
+Horizontal conduction at high resolution
 
 IMPORTANT CONSIDERATIONS: 
 Generalising the model so it can be used e.g for asteroids, Enceladus fractures, adjacent emitting bodies (e.g. binaries, Saturn) 
@@ -46,18 +53,18 @@ beaming_factor = 1.0                                # Dimensionless
 
 # Model setup parameters
 layer_thickness = 0.1                               # m (this may be calculated properly from insolation curve later, but just a value for now)
-n_layers = 1                                        # Number of layers in the conduction model
+n_layers = 10                                       # Number of layers in the conduction model
 solar_distance_au = 1.0                             # AU
 solar_distance = solar_distance_au * 1.496e11       # m
 solar_luminosity = 3.828e26                         # W
-sunlight_direction = np.array([0, -1, 0])           # Unit vector pointing from the sun to the 
-timesteps_per_day = 40                              # Number of time steps per day
+sunlight_direction = np.array([1, 0, 0])            # Unit vector pointing from the sun to the 
+timesteps_per_day = 100                             # Number of time steps per day
 delta_t = 86400 / timesteps_per_day                 # s (1 day in seconds)
 rotation_period = 100000                            # s
-max_days = 5                                        # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time as this will be determined by convergence. Just a safety limit.
-rotation_axis = np.array([0.3, -0.5, 1])            # Unit vector pointing along the rotation axis
-body_orientation = np.array([0, 0, 1])              # Unit vector pointing along the body's orientation
-convergence_target = 5                              # K
+max_days = 20                                       # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time as this will be determined by convergence. Just a safety limit.
+rotation_axis = np.array([0, 0.1, 0.9])             # Unit vector pointing along the rotation axis
+body_orientation = np.array([1, 0, 1])              # Unit vector pointing along the body's orientation
+convergence_target = 0.01                              # K
 
 # Define any necessary functions
 def read_shape_model(filename):
@@ -241,13 +248,16 @@ def main():
 
                 # Calculate secondary radiation term (identify facets above horizon first, then check if they face, same process for shadows but maybe segment facet into shadow/light with a calculated line?)
                 # Calculate conducted heat term
+                conducted_heat_term = thermal_conductivity * (facet['temperature'][current_step][1] - facet['temperature'][current_step][0]) * delta_t / (layer_thickness * density * specific_heat_capacity)
+
                 # Calculate sublimation energy loss term
-                # Calculate new surface temperature
-                # Calculate new temperatures for all sub-surface layers
-                # Save the new temperatures to the data cube
 
                 # Calculate the new temperature of the surface layer (currently very simplified)
-                facet['temperature'][current_step + 1][0] = facet['temperature'][current_step][0] + insolation_term - re_emitted_radiation_term 
+                facet['temperature'][current_step + 1][0] = facet['temperature'][current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
+
+                # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value
+                for layer in range(1, n_layers - 1):
+                    facet['temperature'][current_step + 1][layer] = facet['temperature'][current_step][layer] + thermal_conductivity * (facet['temperature'][current_step][layer + 1] - 2 * facet['temperature'][current_step][layer] + facet['temperature'][current_step][layer - 1]) * delta_t / (layer_thickness**2 * density * specific_heat_capacity)
 
         # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
         day += 1
@@ -260,6 +270,7 @@ def main():
 
         print(f"Day {day} temperature error: {temperature_error / (len(shape_model))} K\n")
 
+    # Decrement the day counter
     day -= 1    
     
     # Post-loop check to display appropriate message
@@ -270,15 +281,17 @@ def main():
         # Initialise the array
         final_day_temperatures = np.zeros((len(shape_model), timesteps_per_day))
 
-        # Print length of shape model
-        print(f"Length of shape model: {len(shape_model)}\n")
-
         # Fill the array
         for i, facet in enumerate(shape_model):
             for t in range(timesteps_per_day):
                 final_day_temperatures[i][t] = facet['temperature'][day * timesteps_per_day + t][0]
 
-        print(f"Final day temperatures array: {final_day_temperatures}\n")
+        # Plot the final day's temperature distribution for all facets
+        plt.plot(final_day_temperatures.T)
+        plt.xlabel('Timestep')
+        plt.ylabel('Temperature (K)')
+        plt.title('Final day temperature distribution for all facets')
+        plt.show()
         
         # Visualise the results - animation of final day's temperature distribution
         animate_temperature_distribution(filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
@@ -290,6 +303,7 @@ def main():
         print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
 
     # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulations
+    np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
 
 # Call the main program to start execution
 if __name__ == "__main__":

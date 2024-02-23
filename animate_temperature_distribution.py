@@ -19,9 +19,6 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
     # Create a figure and a 3D subplot
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-
-    # Plot the model mesh 
-    ax.add_collection3d(mplot3d.art3d.Poly3DCollection(shape_mesh.vectors, facecolors='grey', linewidths=1, edgecolors='black', alpha=.25))
     
     # Auto scale to the mesh size
     scale = shape_mesh.points.flatten()
@@ -29,7 +26,7 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
     ax.set_aspect('equal')
     
     # Fix the view
-    ax.view_init(elev=30, azim=30)
+    ax.view_init(elev=0, azim=0)
 
     # Get the current limits after autoscaling
     xlim = ax.get_xlim()
@@ -74,7 +71,15 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
     
     # Initialize colour map
     norm = plt.Normalize(temperature_array.min(), temperature_array.max())
-    colormap = colormaps['coolwarm']
+    colormap = plt.cm.coolwarm  # Use plt.cm.coolwarm to ensure compatibility
+
+    # Create a ScalarMappable object with the normalization and colormap
+    mappable = plt.cm.ScalarMappable(norm=norm, cmap=colormap)
+    mappable.set_array([])  # This line is necessary for ScalarMappable
+
+    # Add the colour scale bar to the figure
+    cbar = fig.colorbar(mappable, ax=ax, shrink=0.5, aspect=5)
+    cbar.set_label('Temperature (K)', rotation=270, labelpad=15)
 
     # Animation function with sunlight arrow updated at each frame
     def update(num, shape_mesh, ax):
@@ -93,9 +98,7 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
         face_colours = colormap(norm(temp_for_frame))
         
         # Re-plot the rotated mesh with updated face colours
-        ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0.5, edgecolors='k', alpha=0.9))
-
-        #ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors='grey', linewidths=1, edgecolors='black', alpha=.9))
+        ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0.5, edgecolors='k', alpha=1.0))
 
         # Set new limits based on the maximum range to ensure equal scaling
         ax.set_xlim(mid_x - max_range / 2, mid_x + max_range / 2)
@@ -124,8 +127,9 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
     print(f"Timesteps per day: {timesteps_per_day}\n")
 
     # Display rotation period and solar distance as text
-    plt.figtext(0.05, 0.95, f'Rotation Period: {rotation_period}s, ({rotation_period/3600:.3g} hours)', fontsize=12)
-    plt.figtext(0.05, 0.90, f'Solar Distance: {solar_distance_au} AU', fontsize=12)
+    plt.figtext(0.05, 0.95, f'Diurnal temperature evolution of body for one rotation', fontsize=14, ha='left')
+    plt.figtext(0.05, 0.90, f'Period: {rotation_period}s, ({rotation_period/3600:.3g} hours)', fontsize=12)
+    plt.figtext(0.05, 0.85, f'Solar Distance: {solar_distance_au} AU', fontsize=12)
 
     plt.show()
 
