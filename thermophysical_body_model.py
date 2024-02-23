@@ -288,7 +288,7 @@ def animate_temperature_distribution(filename, temperature_array):
         rotated_vertices = np.dot(shape_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
 
         # Get temperatures for the current frame and apply colour map
-        temp_for_frame = temperature_array[:, int(num)]
+        temp_for_frame = temperature_array[:, int(num/delta_t)%timesteps_per_day]
         face_colours = colormap(norm(temp_for_frame))
         
         # Re-plot the rotated mesh with updated face colours
@@ -319,7 +319,8 @@ def animate_temperature_distribution(filename, temperature_array):
         return
     
     # Animate
-    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, rotation_period, rotation_period/100), fargs=(shape_mesh, ax), blit=False)
+    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, rotation_period, rotation_period/timesteps_per_day), fargs=(shape_mesh, ax), blit=False)
+    print(f"Timesteps per day: {timesteps_per_day}\n")
 
     # Display rotation period and solar distance as text
     plt.figtext(0.05, 0.95, f'Rotation Period: {rotation_period}s, ({rotation_period/3600:.3g} hours)', fontsize=12)
