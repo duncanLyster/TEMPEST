@@ -328,6 +328,9 @@ def animate_temperature_distribution(filename, temperature_array):
 
     plt.show()
 
+    # Save the animation as a .gif file in an outputs folder
+    ani.save('outputs/temperature_distribution.gif', writer='pillow', fps=10)
+
 def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
