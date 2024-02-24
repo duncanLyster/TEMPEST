@@ -78,7 +78,7 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
         rotated_vertices = np.dot(shape_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
         
         # Re-plot the rotated mesh, sunlight arrow, and rotation axis
-        ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors='grey', linewidths=1, edgecolors='black', alpha=.9))
+        ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors='grey', linewidths=0, edgecolors='black', alpha=.9))
         
         # Set new limits based on the maximum range to ensure equal scaling
         ax.set_xlim(mid_x - max_range / 2, mid_x + max_range / 2)

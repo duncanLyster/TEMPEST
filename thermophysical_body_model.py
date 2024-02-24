@@ -13,6 +13,7 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
 NEXT STEPS:
+- Fix bug causing jump in output animation at the end of the day
 - Implement vector intersection calculation for secondary radiation and shadowing
 - Implement secondary radiation
 - Implement sublimation energy loss
@@ -215,7 +216,7 @@ def main():
     '''
 
     # Get the shape model and setup data storage arrays
-    filename = "67P_low_res.stl"
+    filename = "67P_16670_facets.stl"
     shape_model = read_shape_model(filename)
 
     # Visualise the shape model
