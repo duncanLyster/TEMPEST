@@ -98,7 +98,7 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
         face_colours = colormap(norm(temp_for_frame))
         
         # Re-plot the rotated mesh with updated face colours
-        ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0.5, edgecolors='k', alpha=1.0))
+        ax.add_collection3d(mplot3d.art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0, edgecolors='k', alpha=1.0))
 
         # Set new limits based on the maximum range to ensure equal scaling
         ax.set_xlim(mid_x - max_range / 2, mid_x + max_range / 2)
