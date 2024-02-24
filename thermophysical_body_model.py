@@ -13,11 +13,15 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
 NEXT STEPS:
-- Fix bug causing jump in output animation at the end of the day
 - Implement vector intersection calculation for secondary radiation and shadowing
 - Implement secondary radiation
 - Implement sublimation energy loss
 - Implement shadowing
+- Come up with a way of representing output data for many rotation axes and periods for mission planning
+
+BUGS:
+- The animation of the temperature distribution jumps at the end of the day
+- Initial temperatures are higher for smaller facets/higher resolution shape models. 
 
 OPEN QUESTIONS: 
 Do we consider partial shadow? 
@@ -216,11 +220,11 @@ def main():
     '''
 
     # Get the shape model and setup data storage arrays
-    filename = "67P_16670_facets.stl"
-    shape_model = read_shape_model(filename)
+    path_to_filename = "shape_models/Bennu_not_to_scale_98_facets.stl"
+    shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
-    visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance_au, sunlight_direction)
+    visualise_shape_model(path_to_filename, rotation_axis, rotation_period, solar_distance_au, sunlight_direction)
 
     # Calculate insolation array for each facet
     shape_model = calculate_insolation(shape_model)
@@ -295,7 +299,7 @@ def main():
         plt.show()
         
         # Visualise the results - animation of final day's temperature distribution
-        animate_temperature_distribution(filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
+        animate_temperature_distribution(path_to_filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
 
         # Save a sample of the final day's temperature distribution to a file
         np.savetxt('test_data/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
@@ -303,8 +307,8 @@ def main():
     else:
         print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
 
-    # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulations
-    np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
+    # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulations NOTE: This may be a large file that takes a long time to run for large shape models
+    #np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
 
 # Call the main program to start execution
 if __name__ == "__main__":
