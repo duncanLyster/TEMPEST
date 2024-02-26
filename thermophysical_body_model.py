@@ -116,8 +116,9 @@ def read_shape_model(filename):
         # facet['normal'] = normal[i]
         facet['area'] = area
         facet['position'] = centroid
-        #initialise insolation and secondary radiation arrays
+        #initialise insolation
         facet['insolation'] = np.zeros(timesteps_per_day) # Insolation curve doesn't change day to day
+        # initialise visible facets array NOTE: Need to add secondary radiation coefficients
         facet['visible_facets'] = np.zeros(len(facets))
         #initialise temperature arrays
         facet['temperature'] = np.zeros((timesteps_per_day * (max_days + 1), n_layers))
@@ -134,22 +135,25 @@ def calculate_area(v1, v2, v3):
 
 def calculate_visible_facets(facets):
     ''' 
-    PLACEHOLDER WITH ONE POSSIBLE METHOD. This function calculates the visible facets from each facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
+    PLACEHOLDER WITH ONE POSSIBLE METHOD. This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
     
     Issues:
         1) Doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for high facet count models. 
         2) Shadowing is not calculated for secondary radiation ie if three or more facets are in a line, the third facet will not be shadowed by the second from radiation emitted by the first.
     '''
+    # Set up two nested loops that go through each subject facet and tests each other facet
+    for i, subject_facet in enumerate(facets):
+        for j, test_facet in enumerate(facets):
+            if i == j:
+                continue
+            # Calculate whether the center of the test facet is above the plane of the subject facet
+            if np.dot(subject_facet['normal'], test_facet['position'] - subject_facet['position']) > 0:
+                # Calculate whether the test facet faces towards the subject facet, if both tests are passed, the test facet is visible
+                if np.dot(subject_facet['normal'], test_facet['normal']) > 0:
+                    # Write the index of the visible facet to the data cube
+                    subject_facet['visible_facets'][j] = 1
 
-    for i, facet in enumerate(facets):
-        for j, other_facet in enumerate(facets):
-            # Calculate the vector from the position of the current facet to the position of the other facet
-            vector_to_other_facet = other_facet['position'] - facet['position']
-            # Calculate the angle between the normal vector of the current facet and the vector to the other facet
-            angle = np.arccos(np.dot(facet['normal'], vector_to_other_facet) / (np.linalg.norm(facet['normal']) * np.linalg.norm(vector_to_other_facet)))
-            # If the angle is less than 90 degrees, the other facet may be visible
-            if angle < np.pi / 2:
-                facet['visible_facets'][j] = 1
+    
 
     return facets
 
