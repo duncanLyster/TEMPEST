@@ -117,7 +117,7 @@ def read_shape_model(filename):
         facet['position'] = centroid
         #initialise insolation and secondary radiation arrays
         facet['insolation'] = np.zeros(timesteps_per_day) # Insolation curve doesn't change day to day
-        facet['secondary_radiation'] = np.zeros(len(facets))
+        facet['visible_facets'] = np.zeros(len(facets))
         #initialise temperature arrays
         facet['temperature'] = np.zeros((timesteps_per_day * (max_days + 1), n_layers))
 
@@ -130,6 +130,29 @@ def calculate_area(v1, v2, v3):
     u = v2 - v1
     v = v3 - v1
     return np.linalg.norm(np.cross(u, v)) / 2
+
+def calculate_visible_facets(facets):
+    ''' 
+    PLACEHOLDER WITH ONE POSSIBLE METHOD. This function calculates the visible facets from each facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
+    '''
+
+    for i, facet in enumerate(facets):
+        for j, other_facet in enumerate(facets):
+            # Calculate the vector from the position of the current facet to the position of the other facet
+            vector_to_other_facet = other_facet['position'] - facet['position']
+            # Calculate the angle between the normal vector of the current facet and the vector to the other facet
+            angle = np.arccos(np.dot(facet['normal'], vector_to_other_facet) / (np.linalg.norm(facet['normal']) * np.linalg.norm(vector_to_other_facet)))
+            # If the angle is less than 90 degrees, the other facet may be visible
+            if angle < np.pi / 2:
+                facet['visible_facets'][j] = 1
+
+    return facets
+
+def calculate_shadowing(facet_position, sunlight_direction, visible_facets, rotation_axis, rotation_period, timesteps_per_day, delta_t, t):
+    '''
+    PLACEHOLDER: This function calculates the shadowing of a facet at a given time step. It takes the position of the facet, the direction of the sunlight, the shape model, and the rotation information as input. It returns the illumination factor for the facet at that time step.
+    '''
+    return 1
 
 def calculate_insolation(shape_model):
     ''' 
@@ -165,9 +188,8 @@ def calculate_insolation(shape_model):
                 insolation = 0
 
             else:
-                # Calculate illumination factor
-                # NOTE PLACEHOLDER: This will be a bit tricky to calculate - need to consider whether other facets fall on the vector between the sun and the facet
-                illumination_factor = 1
+                # Calculate illumination factor, pass facet position, sunlight direction, shape model and rotation information (rotation axis, rotation period, timesteps per day, delta t, t)
+                illumination_factor = calculate_shadowing(facet['position'], sunlight_direction, facet['visible_facets'], rotation_axis, rotation_period, timesteps_per_day, delta_t, t)
 
                 # Calculate insolation converting AU to m
                 insolation = solar_luminosity * (1 - albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * solar_distance**2) 
