@@ -150,7 +150,7 @@ def calculate_visible_facets(facets):
 
 def calculate_shadowing(facet_position, sunlight_direction, visible_facets, rotation_axis, rotation_period, timesteps_per_day, delta_t, t):
     '''
-    PLACEHOLDER: This function calculates the shadowing of a facet at a given time step. It takes the position of the facet, the direction of the sunlight, the shape model, and the rotation information as input. It returns the illumination factor for the facet at that time step.
+    PLACEHOLDER: This function calculates whether a facet is in shadow at a given time step. It takes the position of the facet, the sunlight direction vector, the shape model, and the rotation information as input. It returns the illumination factor for the facet at that time step.
     '''
     return 1
 
