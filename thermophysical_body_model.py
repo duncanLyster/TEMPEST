@@ -22,6 +22,7 @@ NEXT STEPS:
 BUGS:
 - The animation of the temperature distribution jumps at the end of the day
 - Initial temperatures are higher for smaller facets/higher resolution shape models. 
+- Possibly same as above - initial temperatures are much too high for certain models. 
 
 OPEN QUESTIONS: 
 Do we consider partial shadow? 
@@ -134,6 +135,10 @@ def calculate_area(v1, v2, v3):
 def calculate_visible_facets(facets):
     ''' 
     PLACEHOLDER WITH ONE POSSIBLE METHOD. This function calculates the visible facets from each facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
+    
+    Issues:
+        1) Doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for high facet count models. 
+        2) Shadowing is not calculated for secondary radiation ie if three or more facets are in a line, the third facet will not be shadowed by the second from radiation emitted by the first.
     '''
 
     for i, facet in enumerate(facets):
@@ -150,7 +155,9 @@ def calculate_visible_facets(facets):
 
 def calculate_shadowing(facet_position, sunlight_direction, visible_facets, rotation_axis, rotation_period, timesteps_per_day, delta_t, t):
     '''
-    PLACEHOLDER: This function calculates whether a facet is in shadow at a given time step. It takes the position of the facet, the sunlight direction vector, the shape model, and the rotation information as input. It returns the illumination factor for the facet at that time step.
+    PLACEHOLDER: This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and checks whether they fall on the sunlight direction vector. If they do, the facet is in shadow. 
+    
+    It returns the illumination factor for the facet at that time step.
     '''
     return 1
 
