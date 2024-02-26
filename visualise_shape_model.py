@@ -112,7 +112,7 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
     plt.show()
 
 if __name__ == "__main__":
-    filename = "67P_low_res.stl"
+    filename = "shape_models/67P_not_to_scale_low_res.stl"
     
     # Call your visualization function here
     visualise_shape_model(filename, rotation_axis=np.array([0, 0, 1]), rotation_period=12*3600, solar_distance="TEST_SOLAR_DISTANCE", sunlight_direction = np.array([0, -1, 0]))
