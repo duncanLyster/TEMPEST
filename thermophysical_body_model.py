@@ -19,12 +19,10 @@ NEXT STEPS:
 - Implement shadowing
 - Come up with a way of representing output data for many rotation axes and periods for mission planning
 
-BUGS:
-- The animation of the temperature distribution jumps at the end of the day
-
 FIXED BUGS: (?) More testing required, but I think these are fixed
 - Initial temperatures are higher for smaller facets/higher resolution shape models. 
 - Possibly same as above - initial temperatures are much too high for certain models. 
+- The animation of the temperature distribution jumps at the end of the day NOTE: Fixed on nice_gif, but need to update the other visualisation functions in line with this change. 
 
 OPEN QUESTIONS: 
 Do we consider partial shadow? 

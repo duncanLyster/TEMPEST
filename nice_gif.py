@@ -86,14 +86,15 @@ def nice_gif(filename, temperature_array, rotation_axis, rotation_period, solar_
         ax.clear()
 
         # Rotate the mesh
-        theta = (2 * np.pi / rotation_period) * num  # Convert frame number to radians
+        theta = (2 * np.pi / timesteps_per_day) * num # Convert frame number to radians
         rot_mat = rotation_matrix(rotation_axis, theta)
         
         # Apply rotation to mesh vertices
         rotated_vertices = np.dot(shape_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
 
         # Get temperatures for the current frame and apply colour map
-        temp_for_frame = temperature_array[:, int(num/delta_t)%timesteps_per_day]
+        temp_for_frame = temperature_array[:, int(num)%timesteps_per_day]
+        print(f"Frame {num}: {temp_for_frame}")
         face_colours = colormap(norm(temp_for_frame))
         
         # Re-plot the rotated mesh with updated face colours
@@ -119,7 +120,7 @@ def nice_gif(filename, temperature_array, rotation_axis, rotation_period, solar_
         return
     
     # Animate
-    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, rotation_period, rotation_period/timesteps_per_day), fargs=(shape_mesh, ax), blit=False)
+    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, timesteps_per_day), fargs=(shape_mesh, ax), blit=False)
     print(f"Timesteps per day: {timesteps_per_day}\n")
 
     plt.show()
@@ -133,7 +134,7 @@ if __name__ == "__main__":
     rotation_period = 100000
     solar_distance_au = 1.0
     sunlight_direction = np.array([0, -1, 0])
-    timesteps_per_day = 40
+    timesteps_per_day = 100
     delta_t = 86400/timesteps_per_day
     
     # Initilise the temperature array
