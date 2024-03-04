@@ -24,7 +24,7 @@ def nice_gif(filename, temperature_array, rotation_axis, rotation_period, solar_
     ax.set_aspect('equal')
     
     # Fix the view
-    ax.view_init(elev=25, azim=60)
+    ax.view_init(elev=25, azim=20)
 
     # Get the current limits after autoscaling
     xlim = ax.get_xlim()
@@ -65,7 +65,7 @@ def nice_gif(filename, temperature_array, rotation_axis, rotation_period, solar_
     
     # Initialize colour map
     norm = plt.Normalize(temperature_array.min(), temperature_array.max())
-    colormap = plt.cm.inferno  # Use plt.cm.coolwarm to ensure compatibility
+    colormap = plt.cm.magma
 
     # Create a ScalarMappable object with the normalization and colormap
     mappable = plt.cm.ScalarMappable(norm=norm, cmap=colormap)

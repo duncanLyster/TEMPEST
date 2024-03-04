@@ -21,6 +21,8 @@ NEXT STEPS:
 
 BUGS:
 - The animation of the temperature distribution jumps at the end of the day
+
+FIXED BUGS: (?) More testing required, but I think these are fixed
 - Initial temperatures are higher for smaller facets/higher resolution shape models. 
 - Possibly same as above - initial temperatures are much too high for certain models. 
 
@@ -68,10 +70,10 @@ sunlight_direction = np.array([1, 0, 0])            # Unit vector pointing from 
 timesteps_per_day = 100                             # Number of time steps per day
 delta_t = 86400 / timesteps_per_day                 # s (1 day in seconds)
 rotation_period = 100000                            # s
-max_days = 20                                       # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time as this will be determined by convergence. Just a safety limit.
+max_days = 10                                       # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time as this will be determined by convergence. Just a safety limit.
 rotation_axis = np.array([0, 0.1, 0.9])             # Unit vector pointing along the rotation axis
 body_orientation = np.array([1, 0, 1])              # Unit vector pointing along the body's orientation
-convergence_target = 0.01                              # K
+convergence_target = 1                              # K
 
 # Define any necessary functions
 def read_shape_model(filename):
@@ -231,10 +233,10 @@ def calculate_initial_temperatures(shape_model):
     for facet in shape_model:
         # Calculate the initial temperature based on the integrated insolation curve
         # Integrate the insolation curve to get the total energy received by the facet over one full rotation
-        total_energy = np.trapz(facet['insolation'], dx=delta_t)
+        power_in = np.trapz(facet['insolation'], dx=delta_t)/rotation_period
         # Calculate the temperature of the facet using the Stefan-Boltzmann law and set the initial temperature of all layers to the same value
         for layer in range(n_layers):
-            facet['temperature'][0][layer] = (total_energy / (emmisivity * facet['area'] * 5.67e-8))**(1/4)
+            facet['temperature'][0][layer] = (power_in / (emmisivity * 5.67e-8))**(1/4)
 
     print(f"Calculated initial temperatures for each facet.\n")
 
@@ -254,7 +256,7 @@ def main():
     '''
 
     # Get the shape model and setup data storage arrays
-    path_to_filename = "shape_models/Bennu_not_to_scale_98_facets.stl"
+    path_to_filename = "shape_models/Bennu_not_to_scale_1966_facets.stl"
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
