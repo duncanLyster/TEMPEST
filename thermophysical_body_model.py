@@ -46,6 +46,7 @@ import os
 import matplotlib.pyplot as plt
 from visualise_shape_model import visualise_shape_model
 from animate_temperature_distribution import animate_temperature_distribution
+from nice_gif import nice_gif
 from matplotlib import colormaps
 
 # Define global variables
@@ -332,7 +333,10 @@ def main():
         plt.show()
         
         # Visualise the results - animation of final day's temperature distribution
-        animate_temperature_distribution(path_to_filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
+        #animate_temperature_distribution(path_to_filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
+
+        # Visualise the results - animation of final day's temperature distribution
+        nice_gif(path_to_filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
 
         # Save a sample of the final day's temperature distribution to a file
         np.savetxt('test_data/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
