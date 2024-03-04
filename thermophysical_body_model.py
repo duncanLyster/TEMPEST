@@ -240,6 +240,8 @@ def calculate_initial_temperatures(shape_model):
 
     # Plot a histogram of the initial temperatures for all facets
     initial_temperatures = [facet['temperature'][0][0] for facet in shape_model]
+    #print initial temperatures for debugging
+    print(f"")
     plt.hist(initial_temperatures, bins=20)
     plt.xlabel('Initial temperature (K)')
     plt.ylabel('Number of facets')
@@ -254,7 +256,7 @@ def main():
     '''
 
     # Get the shape model and setup data storage arrays
-    path_to_filename = "shape_models/Bennu_not_to_scale_1966_facets.stl"
+    path_to_filename = "shape_models/Bennu_not_to_scale_98_facets.stl"
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
