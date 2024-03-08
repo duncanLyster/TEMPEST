@@ -5,7 +5,7 @@ import matplotlib.animation as animation
 from stl import mesh
 
 
-def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance, sunlight_direction):
+def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distance, sunlight_direction, timesteps_per_day):
     ''' 
     This function visualises the shape model of the planetary body to allow the user to intuiutively check the setup is as intended. It shows an animation of the body rotating with a vector arrow that indicated incident sunlight from an external observers position. The rotation axis is shown as a line through the body and period is shown in the viewing window as text. 
     '''
@@ -71,7 +71,7 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
         ax.clear()
 
         # Rotate the mesh
-        theta = (2 * np.pi / rotation_period) * num  # Convert frame number to radians
+        theta = (2 * np.pi / timesteps_per_day) * num  # Convert frame number to radians
         rot_mat = rotation_matrix(rotation_axis, theta)
         
         # Apply rotation to mesh vertices
@@ -103,7 +103,7 @@ def visualise_shape_model(filename, rotation_axis, rotation_period, solar_distan
         return
     
     # Animate
-    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, rotation_period, rotation_period/100), fargs=(shape_mesh, ax), blit=False)
+    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, timesteps_per_day), fargs=(shape_mesh, ax), blit=False)
 
     # Display rotation period and solar distance as text
     plt.figtext(0.05, 0.95, f'Rotation Period: {rotation_period}s, ({rotation_period/3600:.3g} hours)', fontsize=12)
@@ -115,4 +115,4 @@ if __name__ == "__main__":
     filename = "shape_models/67P_not_to_scale_low_res.stl"
     
     # Call your visualization function here
-    visualise_shape_model(filename, rotation_axis=np.array([0, 0, 1]), rotation_period=12*3600, solar_distance="TEST_SOLAR_DISTANCE", sunlight_direction = np.array([0, -1, 0]))
+    visualise_shape_model(filename, rotation_axis=np.array([0, 0, 1]), rotation_period=12*3600, solar_distance="TEST_SOLAR_DISTANCE", sunlight_direction = np.array([0, -1, 0]), timesteps_per_day=100)

@@ -17,12 +17,11 @@ NEXT STEPS:
 - Implement secondary radiation
 - Implement sublimation energy loss
 - Implement shadowing
+- Ensure colour scale is consistent across frames
 - Come up with a way of representing output data for many rotation axes and periods for mission planning
 
-FIXED BUGS: (?) More testing required, but I think these are fixed
-- Initial temperatures are higher for smaller facets/higher resolution shape models. 
-- Possibly same as above - initial temperatures are much too high for certain models. 
-- The animation of the temperature distribution jumps at the end of the day NOTE: Fixed on nice_gif, but need to update the other visualisation functions in line with this change. 
+KNOWN BUGS:
+None currently. (8/3/24)
 
 OPEN QUESTIONS: 
 Do we consider partial shadow? 
@@ -260,7 +259,7 @@ def main():
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
-    visualise_shape_model(path_to_filename, rotation_axis, rotation_period, solar_distance_au, sunlight_direction)
+    visualise_shape_model(path_to_filename, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day)
 
     # Calculate insolation array for each facet
     shape_model = calculate_insolation(shape_model)
@@ -335,10 +334,10 @@ def main():
         plt.show()
         
         # Visualise the results - animation of final day's temperature distribution
-        #animate_temperature_distribution(path_to_filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
+        animate_temperature_distribution(path_to_filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
 
         # Visualise the results - animation of final day's temperature distribution
-        nice_gif(path_to_filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
+        nice_gif(path_to_filename, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
 
         # Save a sample of the final day's temperature distribution to a file
         np.savetxt('test_data/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
