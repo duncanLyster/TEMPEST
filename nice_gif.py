@@ -6,7 +6,7 @@ from matplotlib import colormaps
 from stl import mesh
 
 
-def nice_gif(filename, temperature_array, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t):
+def nice_gif(filename, temperature_array, rotation_axis, sunlight_direction, timesteps_per_day):
     ''' 
     Outputs a formatted gif e.g. for use in a presentation
     '''
@@ -94,7 +94,6 @@ def nice_gif(filename, temperature_array, rotation_axis, rotation_period, solar_
 
         # Get temperatures for the current frame and apply colour map
         temp_for_frame = temperature_array[:, int(num)%timesteps_per_day]
-        print(f"Frame {num}: {temp_for_frame}")
         face_colours = colormap(norm(temp_for_frame))
         
         # Re-plot the rotated mesh with updated face colours
@@ -121,8 +120,6 @@ def nice_gif(filename, temperature_array, rotation_axis, rotation_period, solar_
     
     # Animate
     ani = animation.FuncAnimation(fig, update, frames=np.arange(0, timesteps_per_day), fargs=(shape_mesh, ax), blit=False)
-    print(f"Timesteps per day: {timesteps_per_day}\n")
-
     plt.show()
 
     # Save the animation as a .gif file in an outputs folder
@@ -144,4 +141,4 @@ if __name__ == "__main__":
     temperature_array = np.loadtxt('test_data/final_day_temperatures.csv', delimiter=',')
 
     # Call your visualization function here
-    nice_gif(filename, temperature_array, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
+    nice_gif(filename, temperature_array, rotation_axis, sunlight_direction, timesteps_per_day)

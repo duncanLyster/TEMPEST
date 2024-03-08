@@ -87,14 +87,14 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
         ax.clear()
 
         # Rotate the mesh
-        theta = (2 * np.pi / rotation_period) * num  # Convert frame number to radians
+        theta = (2 * np.pi / timesteps_per_day) * num  # Convert frame number to radians
         rot_mat = rotation_matrix(rotation_axis, theta)
         
         # Apply rotation to mesh vertices
         rotated_vertices = np.dot(shape_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
 
         # Get temperatures for the current frame and apply colour map
-        temp_for_frame = temperature_array[:, int(num/delta_t)%timesteps_per_day]
+        temp_for_frame = temperature_array[:, int(num)%timesteps_per_day]
         face_colours = colormap(norm(temp_for_frame))
         
         # Re-plot the rotated mesh with updated face colours
@@ -123,8 +123,7 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
         return
     
     # Animate
-    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, rotation_period, rotation_period/timesteps_per_day), fargs=(shape_mesh, ax), blit=False)
-    print(f"Timesteps per day: {timesteps_per_day}\n")
+    ani = animation.FuncAnimation(fig, update, frames=np.arange(0, timesteps_per_day), fargs=(shape_mesh, ax), blit=False)
 
     # Display rotation period and solar distance as text
     plt.figtext(0.05, 0.95, f'Diurnal temperature evolution of body for one rotation', fontsize=14, ha='left')
@@ -137,7 +136,7 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
     ani.save('outputs/temperature_distribution.gif', writer='pillow', fps=10)
 
 if __name__ == "__main__":
-    filename = "67P_low_res.stl"
+    filename = "shape_models/67P_not_to_scale_low_res.stl"
     rotation_axis = np.array([0.3, -0.5, 1])
     rotation_period = 100000
     solar_distance_au = 1.0
