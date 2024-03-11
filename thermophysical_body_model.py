@@ -13,12 +13,15 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
 NEXT STEPS:
-- Implement vector intersection calculation for secondary radiation and shadowing
+- Implement vector intersection calculation for secondary radiation and shadowing | DONE
+- Implement shadowing | DONE
 - Implement secondary radiation
 - Implement sublimation energy loss
-- Implement shadowing
 - Ensure colour scale is consistent across frames
+- Build in mesh converstion for binary .STL and .OBJ files
 - Come up with a way of representing output data for many rotation axes and periods for mission planning
+- Create web interface for ease of use
+- Speed up shadow calculations - could be parallelised
 
 KNOWN BUGS:
 None currently. (8/3/24)
@@ -26,6 +29,7 @@ None currently. (8/3/24)
 OPEN QUESTIONS: 
 Do we consider partial shadow? 
 Do we treat facets as points or full 2D polygons?
+Why are initial temperatures not normally distributed?
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -47,6 +51,7 @@ from visualise_shape_model import visualise_shape_model
 from animate_temperature_distribution import animate_temperature_distribution
 from nice_gif import nice_gif
 from matplotlib import colormaps
+from tqdm import tqdm
 
 # Define global variables
 # Material properties (currently placeholders)
@@ -99,17 +104,17 @@ def read_shape_model(filename):
     with open(filename, 'r') as file:
         lines = file.readlines()
 
-    facets = []
+    shape_model = []
     for i in range(len(lines)):
         if lines[i].strip().startswith('facet normal'):
             normal = np.array([float(n) for n in lines[i].strip().split()[2:]])
             vertex1 = np.array([float(v) for v in lines[i+2].strip().split()[1:]])
             vertex2 = np.array([float(v) for v in lines[i+3].strip().split()[1:]])
             vertex3 = np.array([float(v) for v in lines[i+4].strip().split()[1:]])
-            facets.append({'normal': normal, 'vertices': [vertex1, vertex2, vertex3]})
+            shape_model.append({'normal': normal, 'vertices': [vertex1, vertex2, vertex3]})
     
     # Process facets to calculate area and centroid
-    for i,  facet in enumerate(facets):
+    for i,  facet in enumerate(shape_model):
         v1, v2, v3 = facet['vertices']
         area = calculate_area(v1, v2, v3)
         centroid = (v1 + v2 + v3) / 3
@@ -119,13 +124,13 @@ def read_shape_model(filename):
         #initialise insolation
         facet['insolation'] = np.zeros(timesteps_per_day) # Insolation curve doesn't change day to day
         # initialise visible facets array NOTE: Need to add secondary radiation coefficients
-        facet['visible_facets'] = np.zeros(len(facets))
+        facet['visible_facets'] = np.zeros(len(shape_model))
         #initialise temperature arrays
         facet['temperature'] = np.zeros((timesteps_per_day * (max_days + 1), n_layers))
 
-    print(f"Read {len(facets)} facets from the shape model.\n")
+    print(f"Read {len(shape_model)} facets from the shape model.\n")
     
-    return facets
+    return shape_model
 
 def calculate_area(v1, v2, v3):
     '''Calculate the area of the triangle formed by vertices v1, v2, and v3.'''
@@ -133,37 +138,81 @@ def calculate_area(v1, v2, v3):
     v = v3 - v1
     return np.linalg.norm(np.cross(u, v)) / 2
 
-def calculate_visible_facets(facets):
+def calculate_visible_facets(shape_model):
     ''' 
-    PLACEHOLDER WITH ONE POSSIBLE METHOD. This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
+    This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
     
     Issues:
-        1) Doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for high facet count models. 
+        1) Doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. 
         2) Shadowing is not calculated for secondary radiation ie if three or more facets are in a line, the third facet will not be shadowed by the second from radiation emitted by the first.
     '''
-    # Set up two nested loops that go through each subject facet and tests each other facet
-    for i, subject_facet in enumerate(facets):
-        for j, test_facet in enumerate(facets):
+    for i, subject_facet in enumerate(shape_model):
+        visible_facets = []  # Initialize an empty list for storing indices of visible facets
+        for j, test_facet in enumerate(shape_model):
             if i == j:
-                continue
+                continue  # Skip the subject facet itself
             # Calculate whether the center of the test facet is above the plane of the subject facet
             if np.dot(subject_facet['normal'], test_facet['position'] - subject_facet['position']) > 0:
-                # Calculate whether the test facet faces towards the subject facet, if both tests are passed, the test facet is visible
+                # Calculate whether the test facet faces towards the subject facet
                 if np.dot(subject_facet['normal'], test_facet['normal']) > 0:
-                    # Write the index of the visible facet to the data cube
-                    subject_facet['visible_facets'][j] = 1
+                    # Add the index of the visible facet to the list
+                    visible_facets.append(j)
+        # Store the list of visible facet indices in the subject facet
+        subject_facet['visible_facets'] = visible_facets
 
-    
+    print("Calculated visible facets for each facet.\n")
 
-    return facets
+    return shape_model
 
-def calculate_shadowing(facet_position, sunlight_direction, visible_facets, rotation_axis, rotation_period, timesteps_per_day, delta_t, t):
+def does_triangle_intersect_line(line_start, line_direction, triangle_vertices):
     '''
-    PLACEHOLDER: This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and checks whether they fall on the sunlight direction vector. If they do, the facet is in shadow. 
-    
-    It returns the illumination factor for the facet at that time step.
+    This function implements the Möller–Trumbore intersection algorithm to determine whether a triangle intersects a line. It returns True if the triangle intersects the line, and False if it does not.'''
+
+    # Check inputs
+    if len(line_start) != 3 or len(line_direction) != 3:
+        raise ValueError("The line start and direction must be 3D vectors.")
+    if len(triangle_vertices) != 3:
+        raise ValueError("The triangle must have three vertices.")
+    # Check if line_direction is a unit vector
+    if not np.isclose(np.linalg.norm(line_direction), 1, atol=1e-8):
+        raise ValueError("The line direction must be a unit vector.")
+
+    epsilon = 1e-6 # A small number to avoid division by zero
+    vertex0, vertex1, vertex2 = triangle_vertices
+    edge1 = vertex1 - vertex0
+    edge2 = vertex2 - vertex0
+    h = np.cross(line_direction, edge2)
+    a = np.dot(edge1, h)
+    if a > -epsilon and a < epsilon:
+        return False # No intersection
+    f = 1 / a
+    s = line_start - vertex0
+    u = f * np.dot(s, h)
+    if u < 0 or u > 1:
+        return False # No intersection
+    q = np.cross(s, edge1)
+    v = f * np.dot(line_direction, q)
+    if v < 0 or u + v > 1:
+        return False # No intersection
+    t = f * np.dot(edge2, q)
+    if t > epsilon:
+        return True # Intersection
+    else:
+        return False # No intersection
+
+def calculate_shadowing(facet_position, sunlight_direction, shape_model, facet_indices):
     '''
-    return 1
+    This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to does_triangle_intersect_line which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
+    
+    It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not. 
+    '''
+
+    for facet_index in facet_indices:
+        facet = shape_model[facet_index] # Get the visible facet
+        if does_triangle_intersect_line(facet_position, sunlight_direction, facet['vertices']):
+            return 0 # The facet is in shadow
+        
+    return 1 # The facet is not in shadow
 
 def calculate_insolation(shape_model):
     ''' 
@@ -171,7 +220,7 @@ def calculate_insolation(shape_model):
     '''
 
     # Calculate rotation matrix for the body's rotation
-    def rotation_matrix(axis, theta):
+    def calculate_rotation_matrix(axis, theta):
         '''Return the rotation matrix associated with counterclockwise rotation about the given axis by theta radians.'''
         axis = np.asarray(axis)
         axis = axis / np.sqrt(np.dot(axis, axis))
@@ -184,12 +233,19 @@ def calculate_insolation(shape_model):
                          [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
 
     # Calculate the zenith angle (angle between the sun and the normal vector of the facet) for each facet at every timestep for one full rotation of the body 
-    for facet in shape_model:
+    for facet in tqdm(shape_model, desc='Calculating insolation for each facet'):
         for t in range(timesteps_per_day):
             # Normal vector of the facet at time t=0
             normal = facet['normal']
+            rotation_matrix = calculate_rotation_matrix(rotation_axis, (2 * np.pi * delta_t / rotation_period) * t)
 
-            new_normal = np.dot(rotation_matrix(rotation_axis, (2 * np.pi * delta_t / rotation_period) * t), normal)
+            new_normal = np.dot(rotation_matrix, normal)
+
+            # Calculate the rotated sunlight direction from the body's fixed reference frame (NB rotation matrix is transposed as this is for rotation of the sunlight direction not the body)
+            rotated_sunlight_direction = np.dot(rotation_matrix.T, sunlight_direction)
+
+            # Normalize the rotated sunlight direction to ensure it is a unit vector
+            rotated_sunlight_direction /= np.linalg.norm(rotated_sunlight_direction)
 
             # Calculate zenith angle
             zenith_angle = np.arccos(np.dot(sunlight_direction, new_normal) / (np.linalg.norm(sunlight_direction) * np.linalg.norm(new_normal)))
@@ -200,7 +256,7 @@ def calculate_insolation(shape_model):
 
             else:
                 # Calculate illumination factor, pass facet position, sunlight direction, shape model and rotation information (rotation axis, rotation period, timesteps per day, delta t, t)
-                illumination_factor = calculate_shadowing(facet['position'], sunlight_direction, facet['visible_facets'], rotation_axis, rotation_period, timesteps_per_day, delta_t, t)
+                illumination_factor = calculate_shadowing(facet['position'], rotated_sunlight_direction, shape_model, facet['visible_facets'])
 
                 # Calculate insolation converting AU to m
                 insolation = solar_luminosity * (1 - albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * solar_distance**2) 
@@ -255,11 +311,14 @@ def main():
     '''
 
     # Get the shape model and setup data storage arrays
-    path_to_filename = "shape_models/Bennu_not_to_scale_98_facets.stl"
+    path_to_filename = "shape_models/67P_not_to_scale_1666_facets.stl"
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
     visualise_shape_model(path_to_filename, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day)
+
+    # Calculate visible facets for each facet
+    shape_model = calculate_visible_facets(shape_model)
 
     # Calculate insolation array for each facet
     shape_model = calculate_insolation(shape_model)
