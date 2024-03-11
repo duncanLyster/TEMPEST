@@ -13,13 +13,11 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
 NEXT STEPS:
-- Implement vector intersection calculation for secondary radiation and shadowing | DONE
-- Implement shadowing | DONE
 - Implement secondary radiation
 - Implement sublimation energy loss
 - Ensure colour scale is consistent across frames
 - Build in mesh converstion for binary .STL and .OBJ files
-- Come up with a way of representing output data for many rotation axes and periods for mission planning
+- Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
 - Create web interface for ease of use
 - Speed up shadow calculations - could be parallelised
 
@@ -27,9 +25,8 @@ KNOWN BUGS:
 None currently. (8/3/24)
 
 OPEN QUESTIONS: 
-Do we consider partial shadow? 
-Do we treat facets as points or full 2D polygons?
-Why are initial temperatures not normally distributed?
+Do we consider partial shadow? | Currently no - just use smaller facets 
+Why are initial temperatures not normally distributed? 
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -125,6 +122,8 @@ def read_shape_model(filename):
         facet['insolation'] = np.zeros(timesteps_per_day) # Insolation curve doesn't change day to day
         # initialise visible facets array NOTE: Need to add secondary radiation coefficients
         facet['visible_facets'] = np.zeros(len(shape_model))
+        # initialise secondary radiation coefficients array
+        facet['secondary_radiation_coefficients'] = np.zeros(len(shape_model))
         #initialise temperature arrays
         facet['temperature'] = np.zeros((timesteps_per_day * (max_days + 1), n_layers))
 
@@ -159,6 +158,8 @@ def calculate_visible_facets(shape_model):
                     visible_facets.append(j)
         # Store the list of visible facet indices in the subject facet
         subject_facet['visible_facets'] = visible_facets
+
+    # NOTE TO DO: Check if there are visible facets shadowed by other visible facets and remove them from the list
 
     print("Calculated visible facets for each facet.\n")
 
@@ -305,31 +306,45 @@ def calculate_initial_temperatures(shape_model):
 
     return shape_model
 
+def calculate_secondary_radiation_coefficients(shape_model):
+    ''' 
+    This function calculates the secondary radiation coefficients for each facet. It only considers the visible facets (as calculated in calculate_visible_facets) from each subject facet. It calculates the angle between the normal vector of the test facet and the line of sight to the subject facet. It then calculates the geometric coefficient of secondary radiation and writes the index and coefficient to the data cube.
+    '''
+
+    return shape_model
+
+def calculate_secondary_radiation_term(shape_model, facet, delta_t):
+    ''' 
+    This function calculates the secondary radiation received by the facet in question from all visible facets. It calculates the geometric coefficient of secondary radiation from each facet and writes the index and coefficient to the data cube.
+
+    Issues:
+    - Doesn't account for shadowing of secondary raditation by a third facet (e.g. if three facets are in a line, the third will not be shadowed by the second from radiation emitted by the first).
+    
+    NOTE: I will need to calculate the secondary radiation coefficients for each facet before this function can be completed.
+    '''
+
+    # Calculate the secondary radiation term
+    secondary_radiation_term = 0
+
+    return secondary_radiation_term
+
 def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
     '''
 
     # Get the shape model and setup data storage arrays
-    path_to_filename = "shape_models/67P_not_to_scale_1666_facets.stl"
+    path_to_filename = "shape_models/67P_not_to_scale_low_res.stl"
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
     visualise_shape_model(path_to_filename, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day)
 
-    # Calculate visible facets for each facet
+    # Setup the model
     shape_model = calculate_visible_facets(shape_model)
-
-    # Calculate insolation array for each facet
     shape_model = calculate_insolation(shape_model)
-
-    # Calulate initial temperature array
     shape_model = calculate_initial_temperatures(shape_model)
-
-    # Calculate secondary radiation array
-        # Ray tracing to work out which facets are visible from each facet
-        # Calculate the geometric coefficient of secondary radiation from each facet
-        # Write the index and coefficient to the data cube
+    shape_model = calculate_secondary_radiation_coefficients(shape_model)
     
     convergence_factor = 10 # Set to a value greater than 1 to start the iteration
     day = 0 
@@ -346,6 +361,9 @@ def main():
                 re_emitted_radiation_term = emmisivity * beaming_factor * 5.67e-8 * (facet['temperature'][current_step][0]**4) * delta_t / (layer_thickness * density * specific_heat_capacity)
 
                 # Calculate secondary radiation term (identify facets above horizon first, then check if they face, same process for shadows but maybe segment facet into shadow/light with a calculated line?)
+
+                secondary_radiation_term = calculate_secondary_radiation_term(shape_model, facet, delta_t) #NOTE calculate secondary radiation coefficients first
+
                 # Calculate conducted heat term
                 conducted_heat_term = thermal_conductivity * (facet['temperature'][current_step][1] - facet['temperature'][current_step][0]) * delta_t / (layer_thickness * density * specific_heat_capacity)
 
