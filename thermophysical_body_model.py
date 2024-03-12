@@ -13,13 +13,12 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
 NEXT STEPS:
-- Implement secondary radiation
+- Implement secondary radiation/self-heating
 - Implement sublimation energy loss
 - Ensure colour scale is consistent across frames
 - Build in mesh converstion for binary .STL and .OBJ files
 - Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
 - Create web interface for ease of use
-- Speed up shadow calculations - could be parallelised
 
 KNOWN BUGS:
 None currently. (8/3/24)
@@ -143,11 +142,11 @@ def calculate_visible_facets(shape_model):
     ''' 
     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
     
-    Issues:
+    Limitations:
         1) Doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. 
         2) Shadowing is not calculated for secondary radiation ie if three or more facets are in a line, the third facet will not be shadowed by the second from radiation emitted by the first.
     '''
-    for i, subject_facet in enumerate(shape_model):
+    for i, subject_facet in tqdm(enumerate(shape_model), total=len(shape_model), desc='Processing visible facets'):
         visible_facets = []  # Initialize an empty list for storing indices of visible facets
         for j, test_facet in enumerate(shape_model):
             if i == j:
@@ -338,7 +337,7 @@ def main():
     '''
 
     # Get the shape model and setup data storage arrays
-    path_to_filename = "shape_models/Bennu_not_to_scale_1966_facets.stl"
+    path_to_filename = "shape_models/67P_not_to_scale_1666_facets.stl"
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
