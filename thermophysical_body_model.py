@@ -14,7 +14,7 @@ Full documentation to be found (one day) at: https://github.com/duncanLyster/com
 
 NEXT STEPS:
 - Import body parameters from a separate text file so it doesn't need to be done manually with every update
-- Include Bea's code for converting rotation axis coordinates to a unit vector
+- Parameter sensitivity analysis
 - Implement secondary radiation/self-heating
 - Implement sublimation energy loss
 - Print thermal intertia to screen for user to check
@@ -25,11 +25,7 @@ NEXT STEPS:
 - Integrate with JPL Horizons ephemeris to get real-time insolation data
 
 KNOWN BUGS:
-None
-
-OPEN QUESTIONS: 
-Do we consider partial shadow? | Currently no - just use smaller facets 
-Why are initial temperatures not normally distributed? 
+Issues with the model crashing when using low numbers for specific heat capacity or density at low time resolutions - not clear why. 
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -61,7 +57,7 @@ from numba import jit
 emmisivity = 0.5                                    # Dimensionless
 albedo = 0.5                                        # Dimensionless
 thermal_conductivity = 1.0                          # W/mK 
-density = 500.0                                     # kg/m^3
+density = 500.0                                     # kg/m^3 BUG model crashes with even slightly low numbers
 specific_heat_capacity = 1000.0                     # J/kgK BUG model crashes with very low numbers 
 beaming_factor = 1.0                                # Dimensionless
 
@@ -380,29 +376,42 @@ def main():
     convergence_factor = 10 # Set to a value greater than 1 to start the iteration
     day = 0 
 
-    # Proceed to iterate the model until it converges
+    # Proceed to iterate the model until it converges NOTE Put loading bar on here 
     while day < max_days and convergence_factor > 1:
         for time_step in range(timesteps_per_day):
+            test_facet = 0
             for facet in shape_model:
                 current_step = int(time_step + (day * timesteps_per_day))
 
                 # Check for nan, inf or negative temperature
                 if np.isnan(facet.temperature[current_step][0]) or np.isinf(facet.temperature[current_step][0]) or facet.temperature[current_step][0] < 0:
-                    print("Stopping script due to nan, inf or negative temperature")
+                    print(f"Ending run at timestep {current_step} due to facet {shape_model.index(facet)} having a temperature of {facet.temperature[current_step][0]} K.\n Try increasing the number of time steps per day")
+                    # Plot temperature of this facet for the duration of the model (ignoring last step as it will be nan or inf)
+                    plt.plot(facet.temperature[:current_step, 0])
+                    plt.xlabel('Timestep')
+                    plt.ylabel('Temperature (K)')
+                    plt.title('Temperature of this facet for the duration of the model')
+                    plt.show()
+
                     sys.exit()  # Terminate the script immediately
 
                 # Calculate insolation term, bearing in mind that the insolation curve is constant for each facet and repeats every rotation period
                 insolation_term = facet.insolation[time_step] * delta_t / (layer_thickness * density * specific_heat_capacity)
+                if test_facet == 1:
+                    print(f"Insolation term: {insolation_term}")
 
                 # Calculate re-emitted radiation term
                 re_emitted_radiation_term = emmisivity * beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * delta_t / (layer_thickness * density * specific_heat_capacity)
+                if test_facet == 1:
+                    print(f"Re-emitted radiation term: {re_emitted_radiation_term}")
 
                 # Calculate secondary radiation term
-
                 secondary_radiation_term = calculate_secondary_radiation_term(shape_model, facet, delta_t) #NOTE calculate secondary radiation coefficients first
 
-                # Calculate conducted heat term
+                # Calculate conducted heat term BUG: This term is becoming oscillatory and unstable 
                 conducted_heat_term = thermal_conductivity * (facet.temperature[current_step][1] - facet.temperature[current_step][0]) * delta_t / (layer_thickness * density * specific_heat_capacity)
+                if test_facet == 1:
+                    print(f"Conducted heat term: {conducted_heat_term}")
 
                 # Calculate sublimation energy loss term
 
@@ -412,7 +421,7 @@ def main():
                 # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value
                 for layer in range(1, n_layers - 1):
                     facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + thermal_conductivity * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1]) * delta_t / (layer_thickness**2 * density * specific_heat_capacity)
-
+                test_facet += 1
         # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
         day += 1
 
