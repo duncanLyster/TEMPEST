@@ -25,7 +25,7 @@ NEXT STEPS:
 - Integrate with JPL Horizons ephemeris to get real-time insolation data
 
 KNOWN BUGS:
-1) Calculation of initial temperature is not correct - sets model up for non-realistic stable state later. 
+None
 
 OPEN QUESTIONS: 
 Do we consider partial shadow? | Currently no - just use smaller facets 
@@ -73,13 +73,21 @@ solar_distance_au = 1.0                             # AU
 solar_distance = solar_distance_au * 1.496e11       # m
 solar_luminosity = 3.828e26                         # W
 sunlight_direction = np.array([1, 0, 0])            # Unit vector pointing from the sun to the 
-timesteps_per_day = 100                             # Number of time steps per day
+timesteps_per_day = 40                              # Number of time steps per day
 delta_t = 86400 / timesteps_per_day                 # s (1 day in seconds)
-rotation_period = 100000                            # s
-max_days = 10                                       # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time as this will be determined by convergence. Just a safety limit.
-rotation_axis = np.array([0, 0.1, 0.9])             # Unit vector pointing along the rotation axis
+rotation_period = 10000                             # s
+max_days = 10                                       # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time, just a safety limit.
 body_orientation = np.array([1, 0, 1])              # Unit vector pointing along the body's orientation
-convergence_target = 1                              # K
+convergence_target = 0.1                            # K
+
+# Rotation parameters
+ra_degrees = 0                                      # Right ascension in degrees
+dec_degrees = 90                                     # Declination in degrees
+
+# Compute unit vector from ra and dec
+ra = np.radians(ra_degrees)
+dec = np.radians(dec_degrees)
+rotation_axis = np.array([np.cos(ra) * np.cos(dec), np.sin(ra) * np.cos(dec), np.sin(dec)]) # Unit vector pointing along the rotation axis
 
 class Facet:
     def __init__(self, normal, vertices, timesteps_per_day, max_days, n_layers):
@@ -352,7 +360,7 @@ def main():
     '''
 
     # Get the shape model and setup data storage arrays
-    path_to_filename = "shape_models/500m_ico_sphere_1280_facets.stl"
+    path_to_filename = "shape_models/500m_ico_sphere_80_facets.stl"
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
@@ -438,7 +446,7 @@ def main():
         animate_temperature_distribution(path_to_filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
 
         # Visualise the results - animation of final day's temperature distribution
-        nice_gif(path_to_filename, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
+        #nice_gif(path_to_filename, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
 
         # Save a sample of the final day's temperature distribution to a file
         np.savetxt('test_data/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
