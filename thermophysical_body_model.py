@@ -44,11 +44,13 @@ Author: Duncan Lyster
 import numpy as np
 import os
 import matplotlib.pyplot as plt
+import time
 from visualise_shape_model import visualise_shape_model
 from animate_temperature_distribution import animate_temperature_distribution
 from nice_gif import nice_gif
 from matplotlib import colormaps
 from tqdm import tqdm
+from numba import jit
 
 # Define global variables
 # Material properties (currently placeholders)
@@ -161,10 +163,9 @@ def calculate_visible_facets(shape_model):
 
     # NOTE TO DO: Check if there are visible facets shadowed by other visible facets and remove them from the list
 
-    print("Calculated visible facets for each facet.\n")
-
     return shape_model
 
+@jit(nopython=True)
 def does_triangle_intersect_line(line_start, line_direction, triangle_vertices):
     '''
     This function implements the Möller–Trumbore intersection algorithm to determine whether a triangle intersects a line. It returns True if the triangle intersects the line, and False if it does not.'''
@@ -210,7 +211,10 @@ def calculate_shadowing(facet_position, sunlight_direction, shape_model, facet_i
 
     for facet_index in facet_indices:
         facet = shape_model[facet_index] # Get the visible facet
-        if does_triangle_intersect_line(facet_position, sunlight_direction, facet['vertices']):
+
+        vertices_np = np.array(facet['vertices'])
+
+        if does_triangle_intersect_line(facet_position, sunlight_direction, vertices_np):
             return 0 # The facet is in shadow
         
     return 1 # The facet is not in shadow
@@ -268,11 +272,11 @@ def calculate_insolation(shape_model):
     print(f"Calculated insolation for each facet.\n")
 
     # Plot the insolation curve for a single facet with number of days on the x-axis
-    plt.plot(shape_model[0]['insolation'])
-    plt.xlabel('Number of timesteps')
-    plt.ylabel('Insolation (W/m^2)')
-    plt.title('Insolation curve for a single facet for one full rotation of the body')
-    plt.show()
+    #plt.plot(shape_model[0]['insolation'])
+    #plt.xlabel('Number of timesteps')
+    #plt.ylabel('Insolation (W/m^2)')
+    #plt.title('Insolation curve for a single facet for one full rotation of the body')
+    #plt.show()
 
     return shape_model
 
@@ -298,11 +302,11 @@ def calculate_initial_temperatures(shape_model):
     initial_temperatures = [facet['temperature'][0][0] for facet in shape_model]
     #print initial temperatures for debugging
     print(f"")
-    plt.hist(initial_temperatures, bins=20)
-    plt.xlabel('Initial temperature (K)')
-    plt.ylabel('Number of facets')
-    plt.title('Initial temperature distribution of all facets')
-    plt.show()
+    #plt.hist(initial_temperatures, bins=20)
+    #plt.xlabel('Initial temperature (K)')
+    #plt.ylabel('Number of facets')
+    #plt.title('Initial temperature distribution of all facets')
+    #plt.show()
 
     return shape_model
 
@@ -334,11 +338,13 @@ def main():
     '''
 
     # Get the shape model and setup data storage arrays
-    path_to_filename = "shape_models/67P_not_to_scale_low_res.stl"
+    path_to_filename = "shape_models/Bennu_not_to_scale_1966_facets.stl"
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
     visualise_shape_model(path_to_filename, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day)
+
+    start_time = time.time()  # Start timing
 
     # Setup the model
     shape_model = calculate_visible_facets(shape_model)
@@ -402,6 +408,10 @@ def main():
         for i, facet in enumerate(shape_model):
             for t in range(timesteps_per_day):
                 final_day_temperatures[i][t] = facet['temperature'][day * timesteps_per_day + t][0]
+
+        end_time = time.time()  # End timing
+        execution_time = end_time - start_time  # Calculate the execution time
+        print(f"Execution time: {execution_time} seconds")
 
         # Plot the final day's temperature distribution for all facets
         plt.plot(final_day_temperatures.T)
