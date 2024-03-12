@@ -13,15 +13,19 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
 NEXT STEPS:
+- Import body parameters from a separate text file so it doesn't need to be done manually with every update
+- Include Bea's code for converting rotation axis coordinates to a unit vector
 - Implement secondary radiation/self-heating
 - Implement sublimation energy loss
+- Print thermal intertia to screen for user to check
 - Ensure colour scale is consistent across frames
 - Build in mesh converstion for binary .STL and .OBJ files
 - Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
-- Create web interface for ease of use
+- Create web interface for ease of use?
+- Integrate with JPL Horizons ephemeris to get real-time insolation data
 
 KNOWN BUGS:
-None currently. (8/3/24)
+1) Calculation of initial temperature is not correct - sets model up for non-realistic stable state later. 
 
 OPEN QUESTIONS: 
 Do we consider partial shadow? | Currently no - just use smaller facets 
@@ -57,8 +61,10 @@ emmisivity = 0.5                                    # Dimensionless
 albedo = 0.5                                        # Dimensionless
 thermal_conductivity = 1.0                          # W/mK 
 density = 500.0                                     # kg/m^3
-specific_heat_capacity = 1000.0                     # J/kgK
+specific_heat_capacity = 1000.0                     # J/kgK BUG model crashes with very low numbers 
 beaming_factor = 1.0                                # Dimensionless
+
+# NOTE: Print thermal inertia to screen for user to check
 
 # Model setup parameters
 layer_thickness = 0.1                               # m (this may be calculated properly from insolation curve later, but just a value for now)
@@ -147,7 +153,6 @@ def calculate_area(v1, v2, v3):
     v = v3 - v1
     return np.linalg.norm(np.cross(u, v)) / 2
 
-@jit
 def calculate_visible_facets(shape_model):
     ''' 
     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
@@ -251,7 +256,7 @@ def calculate_insolation(shape_model):
         for t in range(timesteps_per_day):
             # Normal vector of the facet at time t=0
             normal = facet.normal
-            rotation_matrix = calculate_rotation_matrix(rotation_axis, (2 * np.pi * delta_t / rotation_period) * t)
+            rotation_matrix = calculate_rotation_matrix(rotation_axis, (2 * np.pi / timesteps_per_day) * t)
 
             new_normal = np.dot(rotation_matrix, normal)
 
@@ -311,11 +316,11 @@ def calculate_initial_temperatures(shape_model):
     initial_temperatures = [facet.temperature[0][0] for facet in shape_model]
     #print initial temperatures for debugging
     print(f"")
-    #plt.hist(initial_temperatures, bins=20)
-    #plt.xlabel('Initial temperature (K)')
-    #plt.ylabel('Number of facets')
-    #plt.title('Initial temperature distribution of all facets')
-    #plt.show()
+    plt.hist(initial_temperatures, bins=20)
+    plt.xlabel('Initial temperature (K)')
+    plt.ylabel('Number of facets')
+    plt.title('Initial temperature distribution of all facets')
+    plt.show()
 
     return shape_model
 
@@ -347,7 +352,7 @@ def main():
     '''
 
     # Get the shape model and setup data storage arrays
-    path_to_filename = "shape_models/67P_not_to_scale_1666_facets.stl"
+    path_to_filename = "shape_models/500m_ico_sphere_1280_facets.stl"
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
