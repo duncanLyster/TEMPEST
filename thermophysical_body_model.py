@@ -373,8 +373,8 @@ def main():
     '''
 
     # Get the setup file and shape model
-    path_to_setup_file = "model_setups/generic_model_parameters.json"
-    path_to_shape_model_file = "shape_models/500m_ico_sphere_80_facets.stl"
+    path_to_setup_file = "model_setups/Bennu_model_parameters.json"
+    path_to_shape_model_file = "shape_models/Bennu_not_to_scale_1966_facets.stl"
 
     load_and_assign_model_parameters(path_to_setup_file)
     shape_model = read_shape_model(path_to_shape_model_file)
@@ -481,7 +481,7 @@ def main():
         animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
 
         # Visualise the results - animation of final day's temperature distribution
-        #nice_gif(path_to_filename, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
+        nice_gif(path_to_shape_model_file, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
 
         # Save a sample of the final day's temperature distribution to a file
         np.savetxt('test_data/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
