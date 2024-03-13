@@ -12,20 +12,24 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
-NEXT STEPS:
-- Import body parameters from a separate text file so it doesn't need to be done manually with every update
+NEXT STEPS (scientifically important):
 - Parameter sensitivity analysis
+- Find ways to make the model more robust
+    - Calculate n_layers and layer thickness based on thermal inertia (?) - these shouldn't be input by the user
+    - Look into ML/optimisation of finite difference method to avoid instability
+    - Look into gradient descent optimisation technique
+- Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
+
+OPTIONAL NEXT STEPS (fun):
 - Implement secondary radiation/self-heating
 - Implement sublimation energy loss
-- Print thermal intertia to screen for user to check
 - Ensure colour scale is consistent across frames
 - Build in mesh converstion for binary .STL and .OBJ files
-- Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
 - Create web interface for ease of use?
 - Integrate with JPL Horizons ephemeris to get real-time insolation data
 
 KNOWN BUGS:
-Issues with the model crashing when using low numbers for specific heat capacity or density at low time resolutions - not clear why. 
+Issues with the model instability - very sensitive to low numbers for specific heat capacity or density at low time resolutions, possibly linked to layer depth, n_layers
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -49,7 +53,6 @@ import json
 from visualise_shape_model import visualise_shape_model
 from animate_temperature_distribution import animate_temperature_distribution
 from nice_gif import nice_gif
-from matplotlib import colormaps
 from tqdm import tqdm
 from numba import jit
 
@@ -118,6 +121,9 @@ def load_and_assign_model_parameters(json_filepath):
     ra = np.radians(ra_degrees)
     dec = np.radians(dec_degrees)
     rotation_axis = np.array([np.cos(ra) * np.cos(dec), np.sin(ra) * np.cos(dec), np.sin(dec)]) # Unit vector pointing along the rotation 
+
+    # Print thermal inertia to screen for user to check 
+    print(f"Thermal inertia: {thermal_conductivity * density * specific_heat_capacity} W/m^2/K")
 
 # Define any necessary functions
 def read_shape_model(filename):
