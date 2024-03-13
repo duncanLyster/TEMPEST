@@ -119,7 +119,6 @@ def load_and_assign_model_parameters(json_filepath):
     dec = np.radians(dec_degrees)
     rotation_axis = np.array([np.cos(ra) * np.cos(dec), np.sin(ra) * np.cos(dec), np.sin(dec)]) # Unit vector pointing along the rotation 
 
-
 # Define any necessary functions
 def read_shape_model(filename):
     ''' 
@@ -367,14 +366,15 @@ def main():
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
     '''
 
-    load_and_assign_model_parameters("model_parameters.json")
+    # Get the setup file and shape model
+    path_to_setup_file = "model_setups/generic_model_parameters.json"
+    path_to_shape_model_file = "shape_models/500m_ico_sphere_80_facets.stl"
 
-    # Get the shape model and setup data storage arrays
-    path_to_filename = "shape_models/500m_ico_sphere_80_facets.stl"
-    shape_model = read_shape_model(path_to_filename)
+    load_and_assign_model_parameters(path_to_setup_file)
+    shape_model = read_shape_model(path_to_shape_model_file)
 
     # Visualise the shape model
-    visualise_shape_model(path_to_filename, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day)
+    visualise_shape_model(path_to_shape_model_file, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day)
 
     start_time = time.time()  # Start timing
 
@@ -472,7 +472,7 @@ def main():
         plt.show()
         
         # Visualise the results - animation of final day's temperature distribution
-        animate_temperature_distribution(path_to_filename, final_day_temperatures, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
+        animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
 
         # Visualise the results - animation of final day's temperature distribution
         #nice_gif(path_to_filename, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
