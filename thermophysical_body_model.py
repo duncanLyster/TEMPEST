@@ -45,6 +45,7 @@ import os
 import matplotlib.pyplot as plt
 import time
 import sys
+import json
 from visualise_shape_model import visualise_shape_model
 from animate_temperature_distribution import animate_temperature_distribution
 from nice_gif import nice_gif
@@ -52,42 +53,27 @@ from matplotlib import colormaps
 from tqdm import tqdm
 from numba import jit
 
-# Define global variables
-# Material properties (currently placeholders)
-emmisivity = 0.5                                    # Dimensionless
-albedo = 0.5                                        # Dimensionless
-thermal_conductivity = 1.0                          # W/mK 
-density = 500.0                                     # kg/m^3 BUG model crashes with even slightly low numbers
-specific_heat_capacity = 1000.0                     # J/kgK BUG model crashes with very low numbers 
-beaming_factor = 1.0                                # Dimensionless
-
 # NOTE: Print thermal inertia to screen for user to check
 
-# Model setup parameters
-layer_thickness = 0.1                               # m (this may be calculated properly from insolation curve later, but just a value for now)
-n_layers = 10                                       # Number of layers in the conduction model
-solar_distance_au = 1.0                             # AU
-solar_distance = solar_distance_au * 1.496e11       # m
-solar_luminosity = 3.828e26                         # W
-sunlight_direction = np.array([1, 0, 0])            # Unit vector pointing from the sun to the 
-timesteps_per_day = 40                              # Number of time steps per day
-delta_t = 86400 / timesteps_per_day                 # s (1 day in seconds)
-rotation_period = 100000                            # s
-max_days = 10                                       # Maximum number of days to run the model for NOTE - this is not intended to be the final model run time, just a safety limit.
-body_orientation = np.array([1, 0, 1])              # Unit vector pointing along the body's orientation
-convergence_target = 0.1                            # K
-
-# Rotation parameters
-ra_degrees = 0                                      # Right ascension in degrees
-dec_degrees = 90                                     # Declination in degrees
-
-# Compute unit vector from ra and dec
-ra = np.radians(ra_degrees)
-dec = np.radians(dec_degrees)
-rotation_axis = np.array([np.cos(ra) * np.cos(dec), np.sin(ra) * np.cos(dec), np.sin(dec)]) # Unit vector pointing along the rotation 
-
-# Debugging
-stop_iteration = False
+# Initalise global variables (to be assigned later by the model parameters file)
+emissivity = None 
+albedo = None
+thermal_conductivity = None
+density = None
+specific_heat_capacity = None
+beaming_factor = None
+layer_thickness = None
+n_layers = None
+solar_distance_au = None
+solar_luminosity = None
+sunlight_direction = None
+timesteps_per_day = None
+rotation_period_hours = None
+max_days = None
+body_orientation = None
+convergence_target = None
+ra_degrees = None
+dec_degrees = None
 
 class Facet:
     def __init__(self, normal, vertices, timesteps_per_day, max_days, n_layers):
@@ -110,6 +96,29 @@ class Facet:
         # Implement area calculation based on vertices
         v0, v1, v2 = vertices
         return np.linalg.norm(np.cross(v1-v0, v2-v0)) / 2
+
+def load_and_assign_model_parameters(json_filepath):
+    with open(json_filepath, "r") as file:
+        parameters = json.load(file)
+    
+    # Convert lists back to numpy arrays where necessary before assignment
+    parameters["sunlight_direction"] = np.array(parameters["sunlight_direction"])
+    parameters["body_orientation"] = np.array(parameters["body_orientation"])
+    
+    # Assign each parameter as a global variable
+    for key, value in parameters.items():
+        globals()[key] = value
+
+    global solar_distance, delta_t, rotation_period_s, ra, dec, rotation_axis
+    solar_distance = solar_distance_au * 1.496e11       # m
+    delta_t = 86400 / timesteps_per_day    
+    rotation_period_s = rotation_period_hours * 3600      # s
+
+    # Compute unit vector from ra and dec
+    ra = np.radians(ra_degrees)
+    dec = np.radians(dec_degrees)
+    rotation_axis = np.array([np.cos(ra) * np.cos(dec), np.sin(ra) * np.cos(dec), np.sin(dec)]) # Unit vector pointing along the rotation 
+
 
 # Define any necessary functions
 def read_shape_model(filename):
@@ -315,7 +324,7 @@ def calculate_initial_temperatures(shape_model):
         power_in = np.mean(facet.insolation)
         # Calculate the temperature of the facet using the Stefan-Boltzmann law and set the initial temperature of all layers to the same value
         for layer in range(n_layers):
-            facet.temperature[0][layer] = (power_in / (emmisivity * 5.67e-8))**(1/4)
+            facet.temperature[0][layer] = (power_in / (emissivity * 5.67e-8))**(1/4)
 
     print(f"Calculated initial temperatures for each facet.\n")
 
@@ -358,12 +367,14 @@ def main():
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
     '''
 
+    load_and_assign_model_parameters("model_parameters.json")
+
     # Get the shape model and setup data storage arrays
     path_to_filename = "shape_models/500m_ico_sphere_80_facets.stl"
     shape_model = read_shape_model(path_to_filename)
 
     # Visualise the shape model
-    visualise_shape_model(path_to_filename, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day)
+    visualise_shape_model(path_to_filename, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day)
 
     start_time = time.time()  # Start timing
 
@@ -401,7 +412,7 @@ def main():
                     print(f"Insolation term: {insolation_term}")
 
                 # Calculate re-emitted radiation term
-                re_emitted_radiation_term = emmisivity * beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * delta_t / (layer_thickness * density * specific_heat_capacity)
+                re_emitted_radiation_term = emissivity * beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * delta_t / (layer_thickness * density * specific_heat_capacity)
                 if test_facet == 1:
                     print(f"Re-emitted radiation term: {re_emitted_radiation_term}")
 
@@ -461,7 +472,7 @@ def main():
         plt.show()
         
         # Visualise the results - animation of final day's temperature distribution
-        animate_temperature_distribution(path_to_filename, final_day_temperatures, rotation_axis, rotation_period, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
+        animate_temperature_distribution(path_to_filename, final_day_temperatures, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
 
         # Visualise the results - animation of final day's temperature distribution
         #nice_gif(path_to_filename, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
