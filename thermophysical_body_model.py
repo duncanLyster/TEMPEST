@@ -66,7 +66,6 @@ density = None
 specific_heat_capacity = None
 beaming_factor = None
 layer_thickness = None
-n_layers = None
 solar_distance_au = None
 solar_luminosity = None
 sunlight_direction = None
@@ -74,9 +73,13 @@ timesteps_per_day = None
 rotation_period_hours = None
 max_days = None
 body_orientation = None
+angular_velocity = None
 convergence_target = None
 ra_degrees = None
 dec_degrees = None
+
+# Test variable while debugging layers equation 
+X = None
 
 class Facet:
     def __init__(self, normal, vertices, timesteps_per_day, max_days, n_layers):
@@ -112,18 +115,30 @@ def load_and_assign_model_parameters(json_filepath):
     for key, value in parameters.items():
         globals()[key] = value
 
-    global solar_distance, delta_t, rotation_period_s, ra, dec, rotation_axis
-    solar_distance = solar_distance_au * 1.496e11       # m
-    delta_t = 86400 / timesteps_per_day    
-    rotation_period_s = rotation_period_hours * 3600      # s
+    global solar_distance, delta_t, rotation_period_s, ra, dec, rotation_axis, skin_depth, thermal_inertia, n_layers, layer_thickness, X, angular_velocity
+    solar_distance = solar_distance_au * 1.496e11           # m 
+    rotation_period_s = rotation_period_hours * 3600        # s
+    delta_t = rotation_period_s / timesteps_per_day   
+    angular_velocity = (2 * np.pi) / rotation_period_s
+    skin_depth = (thermal_conductivity / (density * specific_heat_capacity * angular_velocity))**0.5
+    thermal_inertia = (density * specific_heat_capacity * thermal_conductivity)**0.5
+
+    # Model depth is 8 times the skin depth
+    layer_thickness = 8 * skin_depth / n_layers
+    
+    X = layer_thickness / skin_depth
+    print(f"X: {X}\n")
+    print(f"Layer thickness: {layer_thickness} m\n")
+    print(f"Skin depth: {skin_depth} m\n")
+
+    # Print thermal inertia and skin depth to screen for user to check 
+    print(f"Thermal inertia: {thermal_inertia} W m^-2 K^-1 s^0.5\n")
+    print(f"Skin depth: {skin_depth} m\n")
 
     # Compute unit vector from ra and dec
     ra = np.radians(ra_degrees)
     dec = np.radians(dec_degrees)
     rotation_axis = np.array([np.cos(ra) * np.cos(dec), np.sin(ra) * np.cos(dec), np.sin(dec)]) # Unit vector pointing along the rotation 
-
-    # Print thermal inertia to screen for user to check 
-    print(f"Thermal inertia: {thermal_conductivity * density * specific_heat_capacity} W/m^2/K")
 
 # Define any necessary functions
 def read_shape_model(filename):
@@ -330,7 +345,7 @@ def calculate_initial_temperatures(shape_model):
         # Calculate the temperature of the facet using the Stefan-Boltzmann law and set the initial temperature of all layers to the same value
         for layer in range(n_layers):
             facet.temperature[0][layer] = (power_in / (emissivity * 5.67e-8))**(1/4)
-
+            facet.temperature[:,-1] = (power_in / (emissivity * 5.67e-8))**(1/4)
     print(f"Calculated initial temperatures for each facet.\n")
 
     # Plot a histogram of the initial temperatures for all facets
@@ -373,8 +388,8 @@ def main():
     '''
 
     # Get the setup file and shape model
-    path_to_setup_file = "model_setups/Bennu_model_parameters.json"
-    path_to_shape_model_file = "shape_models/Bennu_not_to_scale_1966_facets.stl"
+    path_to_setup_file = "model_setups/generic_model_parameters.json"
+    path_to_shape_model_file = "shape_models/500m_ico_sphere_80_facets.stl"
 
     load_and_assign_model_parameters(path_to_setup_file)
     shape_model = read_shape_model(path_to_shape_model_file)
@@ -404,41 +419,44 @@ def main():
                 if np.isnan(facet.temperature[current_step][0]) or np.isinf(facet.temperature[current_step][0]) or facet.temperature[current_step][0] < 0:
                     print(f"Ending run at timestep {current_step} due to facet {shape_model.index(facet)} having a temperature of {facet.temperature[current_step][0]} K.\n Try increasing the number of time steps per day")
                     # Plot temperature of this facet for the duration of the model (ignoring last step as it will be nan or inf)
-                    plt.plot(facet.temperature[:current_step, 0])
+                    plt.plot(facet.temperature[:current_step+1, 0])
                     plt.xlabel('Timestep')
                     plt.ylabel('Temperature (K)')
-                    plt.title('Temperature of this facet for the duration of the model')
+                    plt.title(f'Temperature of facet {shape_model.index(facet)} for the duration of the model')
+                    plt.show()
+
+                    # Plot the temperatures for all subsurface layers of this facet for the duration of the model (ignoring last step as it will be nan or inf)
+                    plt.plot(facet.temperature[:current_step+1, 0:])
+                    plt.xlabel('Timestep')
+                    plt.ylabel('Temperature (K)')
+                    plt.title(f'Temperatures for all subsurface layers of facet {shape_model.index(facet)} for the duration of the model')
+                    plt.legend([f'Layer {i}' for i in range(1, n_layers)])
                     plt.show()
 
                     sys.exit()  # Terminate the script immediately
 
                 # Calculate insolation term, bearing in mind that the insolation curve is constant for each facet and repeats every rotation period
                 insolation_term = facet.insolation[time_step] * delta_t / (layer_thickness * density * specific_heat_capacity)
-                if test_facet == 1:
-                    print(f"Insolation term: {insolation_term}")
 
                 # Calculate re-emitted radiation term
                 re_emitted_radiation_term = emissivity * beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * delta_t / (layer_thickness * density * specific_heat_capacity)
-                if test_facet == 1:
-                    print(f"Re-emitted radiation term: {re_emitted_radiation_term}")
 
                 # Calculate secondary radiation term
                 secondary_radiation_term = calculate_secondary_radiation_term(shape_model, facet, delta_t) #NOTE calculate secondary radiation coefficients first
 
-                # Calculate conducted heat term BUG: This term is becoming oscillatory and unstable 
-                conducted_heat_term = thermal_conductivity * (facet.temperature[current_step][1] - facet.temperature[current_step][0]) * delta_t / (layer_thickness * density * specific_heat_capacity)
-                if test_facet == 1:
-                    print(f"Conducted heat term: {conducted_heat_term}")
-
                 # Calculate sublimation energy loss term
+
+                # Calculate conducted heat term NOTE: Something wrong with this equation?
+                conducted_heat_term = 0 #2 * (delta_t * angular_velocity / (X**2)) * (facet.temperature[current_step][1] - facet.temperature[current_step][0])
 
                 # Calculate the new temperature of the surface layer (currently very simplified)
                 facet.temperature[current_step + 1][0] = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
 
-                # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value
+                # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value NOTE: Something wrong with this
                 for layer in range(1, n_layers - 1):
-                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + thermal_conductivity * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1]) * delta_t / (layer_thickness**2 * density * specific_heat_capacity)
+                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + (delta_t / (X**2 * rotation_period_s)) * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
                 test_facet += 1
+                
         # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
         day += 1
 
@@ -481,7 +499,7 @@ def main():
         animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
 
         # Visualise the results - animation of final day's temperature distribution
-        nice_gif(path_to_shape_model_file, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
+        #nice_gif(path_to_shape_model_file, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
 
         # Save a sample of the final day's temperature distribution to a file
         np.savetxt('test_data/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
