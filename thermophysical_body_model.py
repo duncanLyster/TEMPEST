@@ -14,11 +14,13 @@ Full documentation to be found (one day) at: https://github.com/duncanLyster/com
 
 NEXT STEPS (scientifically important):
 - Parameter sensitivity analysis
+- Implement CFL Stability Condition check - run anyway but throw a warning if not met | Ideally, set timestep based on CFL condition
 - Find ways to make the model more robust
     - Calculate n_layers and layer thickness based on thermal inertia (?) - these shouldn't be input by the user
     - Look into ML/optimisation of finite difference method to avoid instability
     - Look into gradient descent optimisation technique
 - Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
+- Write a performance report for the model
 
 OPTIONAL NEXT STEPS (fun):
 - Implement secondary radiation/self-heating
@@ -29,7 +31,7 @@ OPTIONAL NEXT STEPS (fun):
 - Integrate with JPL Horizons ephemeris to get real-time insolation data
 
 KNOWN BUGS:
-Issues with the model instability - very sensitive to low numbers for specific heat capacity or density at low time resolutions, possibly linked to layer depth, n_layers
+Issues with the model instability - very sensitive to low numbers for specific heat capacity or density at low time resolutions, possibly linked to layer depth, n_layers | UPDATE decided this isn't a bug but a sympton of using finite difference method. Need to implement Courant-Friedrichs-Lewy condition to avoid instability.
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -129,8 +131,6 @@ def load_and_assign_model_parameters(json_filepath):
     X = layer_thickness / skin_depth
     print(f"X: {X}\n")
     print(f"Layer thickness: {layer_thickness} m\n")
-    print(f"Skin depth: {skin_depth} m\n")
-
     # Print thermal inertia and skin depth to screen for user to check 
     print(f"Thermal inertia: {thermal_inertia} W m^-2 K^-1 s^0.5\n")
     print(f"Skin depth: {skin_depth} m\n")
@@ -180,8 +180,6 @@ def read_shape_model(filename):
     for facet in shape_model:
         facet.set_dynamic_arrays(len(shape_model))
     
-    print(f"Read {len(shape_model)} facets from the shape model.\n")
-    
     return shape_model
 
 def calculate_area(v1, v2, v3):
@@ -219,7 +217,9 @@ def calculate_visible_facets(shape_model):
 @jit(nopython=True)
 def does_triangle_intersect_line(line_start, line_direction, triangle_vertices):
     '''
-    This function implements the Möller–Trumbore intersection algorithm to determine whether a triangle intersects a line. It returns True if the triangle intersects the line, and False if it does not.'''
+    This function implements the Möller–Trumbore intersection algorithm to determine whether a triangle intersects a line. It returns True if the triangle intersects the line, and False if it does not.
+    THESIS: Reference https://dl.acm.org/doi/abs/10.1145/1198555.1198746 
+    '''
 
     # Check inputs
     if len(line_start) != 3 or len(line_direction) != 3:
@@ -385,10 +385,12 @@ def calculate_secondary_radiation_term(shape_model, facet, delta_t):
 def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
+
+    TODO: Separate out the iteration, visualisation and saving of results into separate functions.
     '''
 
     # Get the setup file and shape model
-    path_to_setup_file = "model_setups/generic_model_parameters.json"
+    path_to_setup_file = "model_setups/Bennu_model_parameters.json"
     path_to_shape_model_file = "shape_models/500m_ico_sphere_80_facets.stl"
 
     load_and_assign_model_parameters(path_to_setup_file)
@@ -408,7 +410,7 @@ def main():
     convergence_factor = 10 # Set to a value greater than 1 to start the iteration
     day = 0 
 
-    # Proceed to iterate the model until it converges NOTE Put loading bar on here 
+    # Proceed to iterate the model until it converges NOTE Put loading bar on here
     while day < max_days and convergence_factor > 1:
         for time_step in range(timesteps_per_day):
             test_facet = 0
@@ -441,20 +443,26 @@ def main():
                 # Calculate re-emitted radiation term
                 re_emitted_radiation_term = emissivity * beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * delta_t / (layer_thickness * density * specific_heat_capacity)
 
-                # Calculate secondary radiation term
-                secondary_radiation_term = calculate_secondary_radiation_term(shape_model, facet, delta_t) #NOTE calculate secondary radiation coefficients first
+                # Calculate secondary radiation term TODO: Implement this
+                # secondary_radiation_term = calculate_secondary_radiation_term(shape_model, facet, delta_t) #NOTE calculate secondary radiation coefficients first
 
-                # Calculate sublimation energy loss term
+                # Calculate sublimation energy loss term TODO: Implement this
 
-                # Calculate conducted heat term NOTE: Something wrong with this equation?
-                conducted_heat_term = 0 #2 * (delta_t * angular_velocity / (X**2)) * (facet.temperature[current_step][1] - facet.temperature[current_step][0])
+                # Calculate conducted heat term TODO: Update as per Muller (2007)
+                conducted_heat_term = 2 * (delta_t / (X**2 * rotation_period_s)) * (facet.temperature[current_step][1] - facet.temperature[current_step][0])
 
                 # Calculate the new temperature of the surface layer (currently very simplified)
                 facet.temperature[current_step + 1][0] = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
 
-                # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value NOTE: Something wrong with this
+                # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value
+                # THESIS: Courant-Friedrichs-Lewy condition. 
+                # REFERENCE: Useful info in Muller (2007) sect 3.2.2 and 3.3.2
+
+                # TODO: Implement piecewise fix if temperature adjustment is greater than temperature difference - throw a warning. 
+                # TODO: Implement a check for the Courant-Friedrichs-Lewy condition
                 for layer in range(1, n_layers - 1):
                     facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + (delta_t / (X**2 * rotation_period_s)) * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
+
                 test_facet += 1
                 
         # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
@@ -508,7 +516,9 @@ def main():
         print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
 
     # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulations NOTE: This may be a large file that takes a long time to run for large shape models
-    #np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
+    print(f"Saving final day temperatures to file.\n")
+    np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
+    print(f"Saved final day temperatures to file.\n")
 
 # Call the main program to start execution
 if __name__ == "__main__":
