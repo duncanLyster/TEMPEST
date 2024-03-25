@@ -546,7 +546,7 @@ def main():
     else:
         print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
 
-    # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulations NOTE: This may be a large file that takes a long time to run for large shape models
+    # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulation NOTE: This may be a large file that takes a long time to run for large shape models
     np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
     print(f"Saved final day temperatures to file.\n")
 
