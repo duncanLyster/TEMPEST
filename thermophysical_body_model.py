@@ -114,8 +114,7 @@ def load_and_assign_model_parameters(json_filepath):
     
     # Convert lists back to numpy arrays where necessary before assignment
     parameters["sunlight_direction"] = np.array(parameters["sunlight_direction"])
-    parameters["body_orientation"] = np.array(parameters["body_orientation"])
-    
+
     # Assign each parameter as a global variable
     for key, value in parameters.items():
         globals()[key] = value
@@ -411,10 +410,10 @@ def main():
     '''
 
     # Shape model name
-    shape_model_name = "500m_ico_sphere_80_facets.stl"
+    shape_model_name = "5km_ico_sphere_80_facets.stl"
 
     # Get the setup file and shape model
-    path_to_setup_file = "model_setups/Bennu_model_parameters.json"
+    path_to_setup_file = "model_setups/generic_model_parameters.json"
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
  
     load_and_assign_model_parameters(path_to_setup_file)
