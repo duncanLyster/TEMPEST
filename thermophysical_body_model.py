@@ -13,14 +13,15 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
 NEXT STEPS (scientifically important):
-- Parameter sensitivity analysis
-- Implement CFL Stability Condition check - run anyway but throw a warning if not met | Ideally, set timestep based on CFL condition
-- Find ways to make the model more robust
-    - Calculate n_layers and layer thickness based on thermal inertia (?) - these shouldn't be input by the user
-    - Look into ML/optimisation of finite difference method to avoid instability
-    - Look into gradient descent optimisation technique
-- Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
-- Write a performance report for the model
+1) Parameter sensitivity analysis
+2) Implement CFL Stability Condition check - run anyway but throw a warning if not met | Ideally, set timestep based on CFL condition
+3) Animate a model showing shadowing as a sanity check
+4) Find ways to make the model more robust
+    a) Calculate n_layers and layer thickness based on thermal inertia (?) - these shouldn't be input by the user
+    b) Look into ML/optimisation of finite difference method to avoid instability
+    c) Look into gradient descent optimisation technique
+5) Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
+6) Write a performance report for the model
 
 OPTIONAL NEXT STEPS (fun):
 - Implement secondary radiation/self-heating
@@ -54,9 +55,11 @@ import sys
 import json
 from visualise_shape_model import visualise_shape_model
 from animate_temperature_distribution import animate_temperature_distribution
+from plot_temperature_distribution import plot_temperature_distribution
 from nice_gif import nice_gif
 from tqdm import tqdm
 from numba import jit
+from stl import mesh
 
 # NOTE: Print thermal inertia to screen for user to check
 
@@ -382,6 +385,24 @@ def calculate_secondary_radiation_term(shape_model, facet, delta_t):
 
     return secondary_radiation_term
 
+def export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, temperature_array):
+    ''' 
+    This function exports the final results of the model to be used in an instrument simulator. It creates a folder within /outputs with the shape model, model parameters, a plot of the temperature distribution, and final timestep temperatures.
+    '''
+
+    folder_name = f"{shape_model_name}_{time.strftime('%d-%m-%Y_%H-%M-%S')}" # Create new folder name
+    os.makedirs(f"outputs/{folder_name}") # Create folder for results
+    shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file) # Load shape model
+    os.system(f"cp {path_to_shape_model_file} outputs/{folder_name}") # Copy shape model .stl file to folder
+    os.system(f"cp {path_to_setup_file} outputs/{folder_name}") # Copy model parameters .json file to folder
+    np.savetxt(f"outputs/{folder_name}/temperatures.csv", temperature_array, delimiter=',') # Save the final timestep temperatures to .csv file
+
+    # Plot the temperature distribution for the final timestep and save it to the folder
+    path_to_save = f"outputs/{folder_name}/"
+    plot_temperature_distribution(shape_mesh, temperature_array, path_to_save)
+
+    print(f"Exported results to outputs/{folder_name}.\n")
+
 def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
@@ -389,10 +410,13 @@ def main():
     TODO: Separate out the iteration, visualisation and saving of results into separate functions.
     '''
 
+    # Shape model name
+    shape_model_name = "500m_ico_sphere_80_facets.stl"
+
     # Get the setup file and shape model
     path_to_setup_file = "model_setups/Bennu_model_parameters.json"
-    path_to_shape_model_file = "shape_models/500m_ico_sphere_80_facets.stl"
-
+    path_to_shape_model_file = f"shape_models/{shape_model_name}"
+ 
     load_and_assign_model_parameters(path_to_setup_file)
     shape_model = read_shape_model(path_to_shape_model_file)
 
@@ -516,9 +540,11 @@ def main():
         print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
 
     # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulations NOTE: This may be a large file that takes a long time to run for large shape models
-    print(f"Saving final day temperatures to file.\n")
     np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
     print(f"Saved final day temperatures to file.\n")
+
+    # Save to a new folder the shape model, model parameters, and final timestep temperatures (1 temp per facet)
+    export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, final_day_temperatures[:, -1])
 
 # Call the main program to start execution
 if __name__ == "__main__":
