@@ -13,7 +13,6 @@
     "timesteps_per_day": 100,
     "rotation_period_hours": 4.3,
     "max_days": 20,
-    "body_orientation": [1, 0, 1],
     "convergence_target": 0.1,
     "ra_degrees": 85.65,
     "dec_degrees": -60.17
