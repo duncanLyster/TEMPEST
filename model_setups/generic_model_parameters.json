@@ -5,15 +5,15 @@
     "density": 500.0,
     "specific_heat_capacity": 1000.0,
     "beaming_factor": 1.0,
+    "layer_thickness": 0.1,
+    "n_layers": 32,
     "solar_distance_au": 1.0,
     "solar_luminosity": 3.828e+26,
     "sunlight_direction": [1, 0, 0],
-    "rotation_period_hours": 27.0,
-    "body_orientation": [1, 0, 1],
-    "ra_degrees": 0,
-    "dec_degrees": 90,
-    "timesteps_per_day": 50,
-    "max_days": 100,
+    "timesteps_per_day": 100,
+    "rotation_period_hours": 12.0,
+    "max_days": 10,
     "convergence_target": 0.1,
-    "n_layers": 32
+    "ra_degrees": 0,
+    "dec_degrees": 90
 }
