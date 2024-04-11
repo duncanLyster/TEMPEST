@@ -12,6 +12,10 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 
 Full documentation to be found (one day) at: https://github.com/duncanLyster/comet_nucleus_model
 
+CURRENT TASK:
+Modify so model can be run by an external script. 
+Setup so it can be passed input parameters and run as a function. (if run locally these should be taken in from the JSON file still)
+
 NEXT STEPS (scientifically important):
 1) Parameter sensitivity analysis
 2) Implement CFL Stability Condition check - run anyway but throw a warning if not met | Ideally, set timestep based on CFL condition
