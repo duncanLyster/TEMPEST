@@ -349,20 +349,12 @@ def export_results(shape_model_name, path_to_setup_file, path_to_shape_model_fil
     temp_output_file_path = f"outputs/{folder_name}/"
     plot_temperature_distribution(shape_mesh, temperature_array, temp_output_file_path)
 
-def thermophysical_body_model(path_to_shape_model_file, path_to_setup_file):
+def thermophysical_body_model(shape_model, simulation):
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
 
     '''
-    simulation = Simulation('model_setups/generic_model_parameters.json')
-    shape_model = read_shape_model('shape_models/5km_ico_sphere_80_facets.stl', simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
 
-    # Setup the model
-    shape_model = calculate_visible_facets(shape_model)
-    shape_model = calculate_insolation(shape_model, simulation)
-    shape_model = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity)
-    shape_model = calculate_secondary_radiation_coefficients(shape_model)
-    
     convergence_factor = 10 # Set to a value greater than 1 to start the iteration
     day = 0 
 
@@ -443,7 +435,7 @@ def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
 
-    TODO: Separate out the iteration, visualisation and saving of results into separate functions.
+    TODO: Remove all redundant code that is covered by thermophysical_body_model function.
     '''
 
     # Shape model name
@@ -452,9 +444,19 @@ def main():
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
     path_to_setup_file = "model_setups/generic_model_parameters.json"
 
+    simulation = Simulation('model_setups/generic_model_parameters.json')
+    shape_model = read_shape_model('shape_models/5km_ico_sphere_80_facets.stl', simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
+
+    # Setup the model
+    shape_model = calculate_visible_facets(shape_model)
+    shape_model = calculate_insolation(shape_model, simulation)
+    shape_model = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity)
+    shape_model = calculate_secondary_radiation_coefficients(shape_model)
+    
+
     # Start timer
     start_time = time.time()
-    final_timestep_temperatures = thermophysical_body_model(path_to_shape_model_file, path_to_setup_file)
+    final_timestep_temperatures = thermophysical_body_model(shape_model, simulation)
     # End timer
     end_time = time.time()
     execution_time = end_time - start_time
