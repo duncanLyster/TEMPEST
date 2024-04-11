@@ -311,8 +311,6 @@ def calculate_insolation(shape_model, simulation):
 def calculate_initial_temperatures(shape_model, n_layers, emissivity):
     ''' 
     This function calculates the initial temperature of each facet and sub-surface layer of the body based on the insolation curve for that facet. It writes the initial temperatures to the data cube.
-
-    Additionally, it plots a histogram of the initial temperatures for all facets.
     '''
 
     # Calculate initial temperature for each facet
@@ -323,19 +321,11 @@ def calculate_initial_temperatures(shape_model, n_layers, emissivity):
         for layer in range(n_layers):
             facet.temperature[0][layer] = (power_in / (emissivity * 5.67e-8))**(1/4)
             facet.temperature[:,-1] = (power_in / (emissivity * 5.67e-8))**(1/4)
-    print(f"Calculated initial temperatures for each facet.\n")
 
     # Plot a histogram of the initial temperatures for all facets
     initial_temperatures = [facet.temperature[0][0] for facet in shape_model]
-    #print initial temperatures for debugging
-    print(f"")
-    plt.hist(initial_temperatures, bins=20)
-    plt.xlabel('Initial temperature (K)')
-    plt.ylabel('Number of facets')
-    plt.title('Initial temperature distribution of all facets')
-    plt.show()
 
-    return shape_model
+    return shape_model, initial_temperatures
 
 def calculate_secondary_radiation_coefficients(shape_model):
     ''' 
@@ -407,7 +397,14 @@ def main():
     # Setup the model
     shape_model = calculate_visible_facets(shape_model)
     shape_model = calculate_insolation(shape_model, simulation)
-    shape_model = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity)
+    shape_model, initial_temperatures = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity)
+    # Plot a histogram of the initial temperatures for all facets
+    plt.hist(initial_temperatures, bins=20)
+    plt.xlabel('Initial temperature (K)')
+    plt.ylabel('Number of facets')
+    plt.title('Initial temperature distribution of all facets')
+    plt.show()
+
     shape_model = calculate_secondary_radiation_coefficients(shape_model)
     
     convergence_factor = 10 # Set to a value greater than 1 to start the iteration
