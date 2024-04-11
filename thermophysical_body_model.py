@@ -65,30 +65,35 @@ from tqdm import tqdm
 from numba import jit
 from stl import mesh
 
-# NOTE: Print thermal inertia to screen for user to check
-
-# Initalise global variables (to be assigned later by the model parameters file)
-emissivity = None 
-albedo = None
-thermal_conductivity = None
-density = None
-specific_heat_capacity = None
-beaming_factor = None
-layer_thickness = None
-solar_distance_au = None
-solar_luminosity = None
-sunlight_direction = None
-rotation_period_hours = None
-n_layers = None
-max_days = None
-body_orientation = None
-angular_velocity = None
-convergence_target = None
-ra_degrees = None
-dec_degrees = None
-
-# Test variable while debugging layers equation 
-X = None
+class Simulation:
+    def __init__(self, config_path):
+        self.load_configuration(config_path)
+    
+    def load_configuration(self, config_path):
+        with open(config_path, "r") as file:
+            config = json.load(file)
+        
+        # Assign configuration to attributes, converting lists to numpy arrays as needed
+        for key, value in config.items():
+            if isinstance(value, list):  # Convert lists to numpy arrays
+                value = np.array(value)
+            setattr(self, key, value)
+        
+        # Initialization calculations based on the loaded parameters
+        self.solar_distance = self.solar_distance_au * 1.496e11  # Convert AU to meters
+        self.rotation_period_s = self.rotation_period_hours * 3600  # Convert hours to seconds
+        self.angular_velocity = (2 * np.pi) / self.rotation_period_s  # Calculate angular velocity
+        self.skin_depth = (self.thermal_conductivity / (self.density * self.specific_heat_capacity * self.angular_velocity))**0.5
+        self.thermal_inertia = (self.density * self.specific_heat_capacity * self.thermal_conductivity)**0.5
+        self.layer_thickness = 8 * self.skin_depth / self.n_layers
+        self.timesteps_per_day = int(round(self.layer_thickness**2 * self.density * self.specific_heat_capacity / (2 * self.thermal_conductivity)))
+        self.delta_t = self.rotation_period_s / self.timesteps_per_day
+        self.X = self.layer_thickness / self.skin_depth
+        
+        # Compute unit vector from ra and dec
+        ra_radians = np.radians(self.ra_degrees)
+        dec_radians = np.radians(self.dec_degrees)
+        self.rotation_axis = np.array([np.cos(ra_radians) * np.cos(dec_radians), np.sin(ra_radians) * np.cos(dec_radians), np.sin(dec_radians)])
 
 class Facet:
     def __init__(self, normal, vertices, timesteps_per_day, max_days, n_layers):
@@ -112,50 +117,8 @@ class Facet:
         v0, v1, v2 = vertices
         return np.linalg.norm(np.cross(v1-v0, v2-v0)) / 2
 
-def load_and_assign_model_parameters(json_filepath):
-    with open(json_filepath, "r") as file:
-        parameters = json.load(file)
-    
-    # Convert lists back to numpy arrays where necessary before assignment
-    parameters["sunlight_direction"] = np.array(parameters["sunlight_direction"])
-
-    # Assign each parameter as a global variable
-    for key, value in parameters.items():
-        globals()[key] = value
-
-    global solar_distance, delta_t, rotation_period_s, ra, dec, rotation_axis, skin_depth, thermal_inertia, layer_thickness, X, angular_velocity, timesteps_per_day
-    solar_distance = solar_distance_au * 1.496e11           # m 
-    rotation_period_s = rotation_period_hours * 3600        # s
-    angular_velocity = (2 * np.pi) / rotation_period_s
-    skin_depth = (thermal_conductivity / (density * specific_heat_capacity * angular_velocity))**0.5
-    thermal_inertia = (density * specific_heat_capacity * thermal_conductivity)**0.5
-
-    # Model depth is 8 times the skin depth
-    layer_thickness = 8 * skin_depth / n_layers
-
-    # Set timestep based on Courant-Friedrichs-Lewy condition for 1D thermal conduction equation (set to 1 significant figure for simplicity)
-    timesteps_per_day = layer_thickness**2 * density * specific_heat_capacity / (2 * thermal_conductivity)
-
-    # Round to the nearest integer
-    timesteps_per_day = int(round(timesteps_per_day, 0))
-    delta_t = rotation_period_s / timesteps_per_day
-
-    print(f"Number of timesteps per day: {timesteps_per_day}\n")
-    
-    X = layer_thickness / skin_depth
-    print(f"X: {X}\n")
-    print(f"Layer thickness: {layer_thickness} m\n")
-    # Print thermal inertia and skin depth to screen for user to check 
-    print(f"Thermal inertia: {thermal_inertia} W m^-2 K^-1 s^0.5\n")
-    print(f"Skin depth: {skin_depth} m\n")
-
-    # Compute unit vector from ra and dec
-    ra = np.radians(ra_degrees)
-    dec = np.radians(dec_degrees)
-    rotation_axis = np.array([np.cos(ra) * np.cos(dec), np.sin(ra) * np.cos(dec), np.sin(dec)]) # Unit vector pointing along the rotation 
-
 # Define any necessary functions
-def read_shape_model(filename):
+def read_shape_model(filename, timesteps_per_day, n_layers, max_days):
     ''' 
     This function reads in the shape model of the body from a .stl file and return an array of facets, each with its own area, position, and normal vector.
 
@@ -284,7 +247,7 @@ def calculate_shadowing(facet_position, sunlight_direction, shape_model, facet_i
         
     return 1 # The facet is not in shadow
 
-def calculate_insolation(shape_model):
+def calculate_insolation(shape_model, simulation):
     ''' 
     This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
     '''
@@ -304,21 +267,21 @@ def calculate_insolation(shape_model):
 
     # Calculate the zenith angle (angle between the sun and the normal vector of the facet) for each facet at every timestep for one full rotation of the body 
     for facet in tqdm(shape_model, desc='Calculating insolation for each facet'):
-        for t in range(timesteps_per_day):
+        for t in range(simulation.timesteps_per_day):
             # Normal vector of the facet at time t=0
             normal = facet.normal
-            rotation_matrix = calculate_rotation_matrix(rotation_axis, (2 * np.pi / timesteps_per_day) * t)
+            rotation_matrix = calculate_rotation_matrix(simulation.rotation_axis, (2 * np.pi / simulation.timesteps_per_day) * t)
 
             new_normal = np.dot(rotation_matrix, normal)
 
             # Calculate the rotated sunlight direction from the body's fixed reference frame (NB rotation matrix is transposed as this is for rotation of the sunlight direction not the body)
-            rotated_sunlight_direction = np.dot(rotation_matrix.T, sunlight_direction)
+            rotated_sunlight_direction = np.dot(rotation_matrix.T, simulation.sunlight_direction)
 
             # Normalize the rotated sunlight direction to ensure it is a unit vector
             rotated_sunlight_direction /= np.linalg.norm(rotated_sunlight_direction)
 
             # Calculate zenith angle
-            zenith_angle = np.arccos(np.dot(sunlight_direction, new_normal) / (np.linalg.norm(sunlight_direction) * np.linalg.norm(new_normal)))
+            zenith_angle = np.arccos(np.dot(simulation.sunlight_direction, new_normal) / (np.linalg.norm(simulation.sunlight_direction) * np.linalg.norm(new_normal)))
 
             #  Elimate angles where the sun is below the horizon
             if zenith_angle > np.pi / 2:
@@ -329,7 +292,7 @@ def calculate_insolation(shape_model):
                 illumination_factor = calculate_shadowing(facet.position, rotated_sunlight_direction, shape_model, facet.visible_facets)
 
                 # Calculate insolation converting AU to m
-                insolation = solar_luminosity * (1 - albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * solar_distance**2) 
+                insolation = simulation.solar_luminosity * (1 - simulation.albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * simulation.solar_distance**2) 
                 
             # Write the insolation value to the insolation array for this facet at time t
             facet.insolation[t] = insolation
@@ -345,7 +308,7 @@ def calculate_insolation(shape_model):
 
     return shape_model
 
-def calculate_initial_temperatures(shape_model):
+def calculate_initial_temperatures(shape_model, n_layers, emissivity):
     ''' 
     This function calculates the initial temperature of each facet and sub-surface layer of the body based on the insolation curve for that facet. It writes the initial temperatures to the data cube.
 
@@ -425,32 +388,37 @@ def main():
     shape_model_name = "5km_ico_sphere_80_facets.stl"
 
     # Get the setup file and shape model
-    path_to_setup_file = "model_setups/generic_model_parameters.json"
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
- 
-    load_and_assign_model_parameters(path_to_setup_file)
-    shape_model = read_shape_model(path_to_shape_model_file)
+    simulation = Simulation('model_setups/generic_model_parameters.json')
+
+    print(f"Number of timesteps per day: {simulation.timesteps_per_day}\n")
+    print(f"X: {simulation.X}\n")
+    print(f"Layer thickness: {simulation.layer_thickness} m\n")
+    print(f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5\n")
+    print(f"Skin depth: {simulation.skin_depth} m\n")
+
+    shape_model = read_shape_model('shape_models/5km_ico_sphere_80_facets.stl', simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
 
     # Visualise the shape model
-    visualise_shape_model(path_to_shape_model_file, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day)
+    visualise_shape_model(path_to_shape_model_file, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day)
 
     start_time = time.time()  # Start timing
 
     # Setup the model
     shape_model = calculate_visible_facets(shape_model)
-    shape_model = calculate_insolation(shape_model)
-    shape_model = calculate_initial_temperatures(shape_model)
+    shape_model = calculate_insolation(shape_model, simulation)
+    shape_model = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity)
     shape_model = calculate_secondary_radiation_coefficients(shape_model)
     
     convergence_factor = 10 # Set to a value greater than 1 to start the iteration
     day = 0 
 
     # Proceed to iterate the model until it converges NOTE Put loading bar on here
-    while day < max_days and convergence_factor > 1:
-        for time_step in range(timesteps_per_day):
+    while day < simulation.max_days and convergence_factor > 1:
+        for time_step in range(simulation.timesteps_per_day):
             test_facet = 0
             for facet in shape_model:
-                current_step = int(time_step + (day * timesteps_per_day))
+                current_step = int(time_step + (day * simulation.timesteps_per_day))
 
                 # Check for nan, inf or negative temperature
                 if np.isnan(facet.temperature[current_step][0]) or np.isinf(facet.temperature[current_step][0]) or facet.temperature[current_step][0] < 0:
@@ -467,16 +435,16 @@ def main():
                     plt.xlabel('Timestep')
                     plt.ylabel('Temperature (K)')
                     plt.title(f'Temperatures for all subsurface layers of facet {shape_model.index(facet)} for the duration of the model')
-                    plt.legend([f'Layer {i}' for i in range(1, n_layers)])
+                    plt.legend([f'Layer {i}' for i in range(1, simulation.n_layers)])
                     plt.show()
 
                     sys.exit()  # Terminate the script immediately
 
                 # Calculate insolation term, bearing in mind that the insolation curve is constant for each facet and repeats every rotation period
-                insolation_term = facet.insolation[time_step] * delta_t / (layer_thickness * density * specific_heat_capacity)
+                insolation_term = facet.insolation[time_step] * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
 
                 # Calculate re-emitted radiation term
-                re_emitted_radiation_term = emissivity * beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * delta_t / (layer_thickness * density * specific_heat_capacity)
+                re_emitted_radiation_term = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
 
                 # Calculate secondary radiation term TODO: Implement this
                 # secondary_radiation_term = calculate_secondary_radiation_term(shape_model, facet, delta_t) #NOTE calculate secondary radiation coefficients first
@@ -484,7 +452,7 @@ def main():
                 # Calculate sublimation energy loss term TODO: Implement this
 
                 # Calculate conducted heat term TODO: Update as per Muller (2007)
-                conducted_heat_term = 2 * (delta_t / (X**2 * rotation_period_s)) * (facet.temperature[current_step][1] - facet.temperature[current_step][0])
+                conducted_heat_term = 2 * (simulation.delta_t / (simulation.X**2 * simulation.rotation_period_s)) * (facet.temperature[current_step][1] - facet.temperature[current_step][0])
 
                 # Calculate the new temperature of the surface layer (currently very simplified)
                 facet.temperature[current_step + 1][0] = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
@@ -495,8 +463,8 @@ def main():
 
                 # TODO: Implement piecewise fix if temperature adjustment is greater than temperature difference - throw a warning. 
                 # TODO: Implement a check for the Courant-Friedrichs-Lewy condition
-                for layer in range(1, n_layers - 1):
-                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + (delta_t / (X**2 * rotation_period_s)) * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
+                for layer in range(1, simulation.n_layers - 1):
+                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + (simulation.delta_t / (simulation.X**2 * simulation.rotation_period_s)) * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
 
                 test_facet += 1
                 
@@ -505,9 +473,9 @@ def main():
 
         temperature_error = 0
         for facet in shape_model:
-                temperature_error += abs(facet.temperature[day * timesteps_per_day][0] - facet.temperature[(day - 1) * timesteps_per_day][0])
+                temperature_error += abs(facet.temperature[day * simulation.timesteps_per_day][0] - facet.temperature[(day - 1) * simulation.timesteps_per_day][0])
 
-        convergence_factor = (temperature_error / (len(shape_model))) / convergence_target
+        convergence_factor = (temperature_error / (len(shape_model))) / simulation.convergence_target
 
         print(f"Day {day} temperature error: {temperature_error / (len(shape_model))} K\n")
 
@@ -520,12 +488,12 @@ def main():
 
         # Create an array of temperatures at each timestep in final day for each facet
         # Initialise the array
-        final_day_temperatures = np.zeros((len(shape_model), timesteps_per_day))
+        final_day_temperatures = np.zeros((len(shape_model), simulation.timesteps_per_day))
 
         # Fill the array
         for i, facet in enumerate(shape_model):
-            for t in range(timesteps_per_day):
-                final_day_temperatures[i][t] = facet.temperature[day * timesteps_per_day + t][0]
+            for t in range(simulation.timesteps_per_day):
+                final_day_temperatures[i][t] = facet.temperature[day * simulation.timesteps_per_day + t][0]
 
         end_time = time.time()  # End timing
         execution_time = end_time - start_time  # Calculate the execution time
@@ -539,7 +507,7 @@ def main():
         plt.show()
         
         # Visualise the results - animation of final day's temperature distribution
-        animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, rotation_axis, rotation_period_s, solar_distance_au, sunlight_direction, timesteps_per_day, delta_t)
+        animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
 
         # Visualise the results - animation of final day's temperature distribution
         #nice_gif(path_to_shape_model_file, final_day_temperatures, rotation_axis, sunlight_direction, timesteps_per_day)
