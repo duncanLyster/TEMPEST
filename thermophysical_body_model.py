@@ -444,8 +444,8 @@ def main():
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
     path_to_setup_file = "model_setups/generic_model_parameters.json"
 
-    simulation = Simulation('model_setups/generic_model_parameters.json')
-    shape_model = read_shape_model('shape_models/5km_ico_sphere_80_facets.stl', simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
+    simulation = Simulation(path_to_setup_file)
+    shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
 
     # Setup the model
     shape_model = calculate_visible_facets(shape_model)
@@ -453,7 +453,6 @@ def main():
     shape_model = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity)
     shape_model = calculate_secondary_radiation_coefficients(shape_model)
     
-
     # Start timer
     start_time = time.time()
     final_timestep_temperatures = thermophysical_body_model(shape_model, simulation)
@@ -475,7 +474,7 @@ def main():
     plt.title('Histogram of final timestep temperatures')
     plt.show()
 
-    simulation = Simulation('model_setups/generic_model_parameters.json')
+    simulation = Simulation(path_to_setup_file)
 
     print(f"Number of timesteps per day: {simulation.timesteps_per_day}\n")
     print(f"X: {simulation.X}\n")
@@ -483,7 +482,7 @@ def main():
     print(f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5\n")
     print(f"Skin depth: {simulation.skin_depth} m\n")
 
-    shape_model = read_shape_model('shape_models/5km_ico_sphere_80_facets.stl', simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
+    shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
 
     # Visualise the shape model
     visualise_shape_model(path_to_shape_model_file, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day)
@@ -613,7 +612,7 @@ def main():
         animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
 
         # Visualise the results - animation of final day's temperature distribution
-        # nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
+        nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
         # Save a sample of the final day's temperature distribution to a file
         #np.savetxt('test_data/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
