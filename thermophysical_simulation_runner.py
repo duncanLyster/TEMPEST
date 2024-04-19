@@ -13,11 +13,6 @@ Dependencies:
 - matplotlib
 - thermophysical_body_model module and its components
 
-You might need to pip install some of these dependencies if you haven't already.
-
-TODO: 
-1. Parallelize the exploration process to speed up the analysis.
-
 Author: Duncan Lyster
 """
 
@@ -38,11 +33,10 @@ from thermophysical_body_model import (
     calculate_initial_temperatures,
     calculate_secondary_radiation_coefficients
 )
+from sklearn.linear_model import LinearRegression
 
 def run_model_with_parameters(combination, shape_model_snapshot, path_to_setup_file, param_names):
     simulation = Simulation(path_to_setup_file)  # Create a new simulation instance for thread safety
-
-    # No need for a global param_names variable as it is now passed as a parameter
 
     # Update simulation parameters for the current combination
     for param_name, value in zip(param_names, combination):
@@ -60,6 +54,16 @@ def run_model_with_parameters(combination, shape_model_snapshot, path_to_setup_f
         'execution_time': execution_time
     }
 
+def generate_heatmaps(df, parameters, value_column, output_folder):
+    for param_pair in combinations(parameters, 2):  # Get all combinations of parameter pairs
+        pivot_table = df.pivot_table(index=param_pair[0], columns=param_pair[1], values=value_column, aggfunc="mean")
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(pivot_table, annot=True, fmt=".2f", cmap="coolwarm", cbar_kws={'label': value_column})
+        plt.title(f'{value_column} by {param_pair[0]} and {param_pair[1]}')
+        plt.xlabel(param_pair[1])
+        plt.ylabel(param_pair[0])
+        plt.savefig(f"{output_folder}heatmap_{param_pair[0]}_vs_{param_pair[1]}.png")  # Save each heatmap as a PNG file
+        plt.close()  # Close the figure to avoid displaying it inline if running in a notebook
 
 def main():
     # Model setup and initialization
@@ -77,10 +81,23 @@ def main():
 
     # Parameters for analysis with their ranges
     parameter_ranges = {
-        'density': np.linspace(200, 800, 5),  # Example ranges
-        'thermal_conductivity': np.linspace(0.1, 1.0, 5),
-        'specific_heat_capacity': np.linspace(500, 2500, 5),
-        # Add or remove parameters as needed
+        'emissivity': np.linspace(0, 1, 100),
+        'albedo': np.linspace(0, 1, 1000),
+        'thermal_conductivity': np.linspace(0, 1, 100),
+        'density': np.linspace(450, 550, 100), 
+        'specific_heat_capacity': np.linspace(500, 2500, 100),
+        'beaming_factor': np.linspace(0.9, 1.1,  100),
+        'layer_thickness': [0.1],
+        'n_layers': [32],
+        'solar_distance': np.linspace(0.5, 1.5, 100),
+        'solar_luminosity': np.linspace(3E26, 3.5E26, 100),
+        'sunlight_direction': [1,0,0],
+        'timesteps': [100],
+        'rotation_period': [12],
+        'max_days': [10],
+        'convergence_target': [0.1],
+        'ra_degrees': [0],
+        'dec_degrees': [90],
     }
 
     param_names = list(parameter_ranges.keys())
@@ -98,32 +115,17 @@ def main():
         futures = [executor.submit(run_model_with_parameters, *params) for params in param_combinations_with_shape_model]
         results = list(tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures)))
 
-    results = [f.result() for f in futures]
-
     # Convert the list of results to a DataFrame
     results_df = pd.DataFrame(results)
 
     # Flatten the 'parameters' dictionary into separate columns for easier analysis
-    # Assuming 'results_df' is already defined and contains a 'parameters' column with dictionary-like data
     parameters_df = pd.json_normalize(results_df['parameters'])
     results_df = pd.concat([results_df.drop(columns=['parameters']), parameters_df], axis=1)
 
     output_folder = "runner_outputs/"
 
-    # Function to generate and save heatmaps
-    def generate_heatmaps(df, parameters, value_column):
-        for param_pair in combinations(parameters, 2):  # Get all combinations of parameter pairs
-            pivot_table = df.pivot_table(index=param_pair[0], columns=param_pair[1], values=value_column, aggfunc="mean")
-            plt.figure(figsize=(10, 8))
-            sns.heatmap(pivot_table, annot=True, fmt=".2f", cmap="coolwarm", cbar_kws={'label': value_column})
-            plt.title(f'{value_column} by {param_pair[0]} and {param_pair[1]}')
-            plt.xlabel(param_pair[1])
-            plt.ylabel(param_pair[0])
-            plt.savefig(f"{output_folder}heatmap_{param_pair[0]}_vs_{param_pair[1]}.png")  # Save each heatmap as a PNG file
-            plt.close()  # Close the figure to avoid displaying it inline if running in a notebook
-
-    # Call the function for mean_temperature
-    generate_heatmaps(results_df, param_names, 'mean_temperature')
+    # Call the function for generating and saving heatmaps
+    generate_heatmaps(results_df, param_names, 'mean_temperature', output_folder)
 
     print("Heatmaps generated and saved.")
 

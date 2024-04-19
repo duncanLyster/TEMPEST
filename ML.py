@@ -5,9 +5,6 @@ from sklearn.linear_model import LinearRegression
 
 # Define a function to calculate comet temperature given input parameters
 def calculate_comet_temperature(input_parameters):
-    # Assign input parameters to global variables
-    global emissivity, albedo, thermal_conductivity, density, specific_heat_capacity, beaming_factor, \
-        solar_distance_au, solar_luminosity
 
     # Assign input parameters
     emissivity, albedo, thermal_conductivity, density, specific_heat_capacity, beaming_factor, \
