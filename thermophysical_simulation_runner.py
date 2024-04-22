@@ -13,6 +13,11 @@ Dependencies:
 - matplotlib
 - thermophysical_body_model module and its components
 
+TODO: 
+1) Allow for model crashing and identify but run the next model (needs to be implemented in the thermophysical_body_model.py)
+2) Fix tqdm progress bar
+3) Use for model validation 
+
 Author: Duncan Lyster
 """
 
@@ -22,7 +27,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
-import tqdm
+from tqdm import tqdm
 from itertools import product, combinations
 from thermophysical_body_model import (
     thermophysical_body_model,
@@ -47,10 +52,18 @@ def run_model_with_parameters(combination, shape_model_snapshot, path_to_setup_f
     final_timestep_temperatures = thermophysical_body_model(shape_model_snapshot, simulation)
     execution_time = time.time() - start_time
 
+    # Check if temperatures were calculated
+    if final_timestep_temperatures is None:
+        mean_temperature = None
+        temperature_iqr = None
+    else:
+        mean_temperature = np.mean(final_timestep_temperatures)
+        temperature_iqr = np.percentile(final_timestep_temperatures, 75) - np.percentile(final_timestep_temperatures, 25)
+
     return {
         'parameters': dict(zip(param_names, combination)),
-        'mean_temperature': np.mean(final_timestep_temperatures),
-        'temperature_iqr': np.percentile(final_timestep_temperatures, 75) - np.percentile(final_timestep_temperatures, 25),
+        'mean_temperature': mean_temperature,
+        'temperature_iqr': temperature_iqr,
         'execution_time': execution_time
     }
 
@@ -81,23 +94,14 @@ def main():
 
     # Parameters for analysis with their ranges
     parameter_ranges = {
-        'emissivity': np.linspace(0, 1, 100),
-        'albedo': np.linspace(0, 1, 1000),
-        'thermal_conductivity': np.linspace(0, 1, 100),
-        'density': np.linspace(450, 550, 100), 
-        'specific_heat_capacity': np.linspace(500, 2500, 100),
-        'beaming_factor': np.linspace(0.9, 1.1,  100),
-        'layer_thickness': [0.1],
-        'n_layers': [32],
-        'solar_distance': np.linspace(0.5, 1.5, 100),
-        'solar_luminosity': np.linspace(3E26, 3.5E26, 100),
-        'sunlight_direction': [1,0,0],
-        'timesteps': [100],
-        'rotation_period': [12],
-        'max_days': [10],
-        'convergence_target': [0.1],
-        'ra_degrees': [0],
-        'dec_degrees': [90],
+        'emissivity': np.linspace(0.4, 0.6, 3),
+        'albedo': np.linspace(0.4, 0.6, 3),
+       # 'thermal_conductivity': np.linspace(0.9, 1.1, 3),
+       # 'density': np.linspace(450, 550, 3), 
+       # 'specific_heat_capacity': np.linspace(950, 1050, 3),
+       # 'beaming_factor': np.linspace(0.9, 1.1,  3),
+       # 'solar_distance': np.linspace(0.8, 1.2, 3),
+       # 'solar_luminosity': np.linspace(3.6E26, 4.0E26, 3),
     }
 
     param_names = list(parameter_ranges.keys())
@@ -109,11 +113,12 @@ def main():
         (combination, shape_model, path_to_setup_file, param_names) for combination in all_combinations
     ]
 
-    # Parallel exploration execution
     print("Starting parameter exploration...")
-    with concurrent.futures.ProcessPoolExecutor() as executor:
-        futures = [executor.submit(run_model_with_parameters, *params) for params in param_combinations_with_shape_model]
-        results = list(tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures)))
+    with concurrent.futures.ProcessPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(run_model_with_parameters, *params) for params in param_combinations_with_shape_model}
+        results = []
+        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing models"):
+            results.append(future.result())
 
     # Convert the list of results to a DataFrame
     results_df = pd.DataFrame(results)

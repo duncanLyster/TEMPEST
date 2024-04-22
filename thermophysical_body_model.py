@@ -427,7 +427,8 @@ def thermophysical_body_model(shape_model, simulation):
             final_timestep_temperatures[i] = facet.temperature[(day + 1) * simulation.timesteps_per_day][0]
 
     else:
-        print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n Try increasing max_days or decreasing convergence_target.")
+        final_timestep_temperatures = None
+        # print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n Try increasing max_days or decreasing convergence_target.")
 
     return final_timestep_temperatures
 
@@ -463,16 +464,6 @@ def main():
 
     temperature_min = np.min(final_timestep_temperatures)
     temperature_max = np.max(final_timestep_temperatures)
-    
-    # Create a histogram of the final timstep temperatures binned per K as a numpy array
-    temperature_bins = np.arange(temperature_min, temperature_max + 1, 1)
-    temperature_histogram = np.histogram(final_timestep_temperatures, bins=temperature_bins)
-
-    plt.bar(temperature_bins[:-1], temperature_histogram[0], width=1)
-    plt.xlabel('Temperature (K)')
-    plt.ylabel('Number of facets')
-    plt.title('Histogram of final timestep temperatures')
-    plt.show()
 
     simulation = Simulation(path_to_setup_file)
 
