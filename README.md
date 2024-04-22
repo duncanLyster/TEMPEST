@@ -32,10 +32,7 @@ Feel free to fork the project for custom enhancements or issue tracking on GitHu
 ## Author
 Duncan Lyster | Started: 15 Feb 2024
 
-With contributions from:
-Joe Penn
-Maisie Rashman 
-Bea Chikani
+With contributions from: Joe Penn, Maisie Rashman, and Bea Chikani
 
 ## Licence
 This project is open-source and available under the MIT License - see the License.md file for details.
