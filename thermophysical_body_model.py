@@ -79,10 +79,10 @@ class Simulation:
         self.solar_distance = self.solar_distance_au * 1.496e11  # Convert AU to meters
         self.rotation_period_s = self.rotation_period_hours * 3600  # Convert hours to seconds
         self.angular_velocity = (2 * np.pi) / self.rotation_period_s  # Calculate angular velocity
-        self.skin_depth = (self.thermal_conductivity / (self.density * self.specific_heat_capacity * self.angular_velocity))**0.5
+        self.skin_depth = 0.247e-2 #(self.thermal_conductivity / (self.density * self.specific_heat_capacity * self.angular_velocity))**0.5
         self.thermal_inertia = (self.density * self.specific_heat_capacity * self.thermal_conductivity)**0.5
-        self.layer_thickness = 8 * self.skin_depth / self.n_layers
-        self.timesteps_per_day = int(round(self.layer_thickness**2 * self.density * self.specific_heat_capacity / (2 * self.thermal_conductivity)))
+        self.layer_thickness = 0.049e-2#8 * self.skin_depth / self.n_layers
+        self.timesteps_per_day = 500 #int(round(self.layer_thickness**2 * self.density * self.specific_heat_capacity / (2 * self.thermal_conductivity)))
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
         self.X = self.layer_thickness / self.skin_depth
         
@@ -441,6 +441,7 @@ def main():
 
     # Shape model name
     shape_model_name = "5km_ico_sphere_80_facets.stl"
+
     # Get the setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
     path_to_setup_file = "model_setups/generic_model_parameters.json"
@@ -603,7 +604,7 @@ def main():
         animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
 
         # Visualise the results - animation of final day's temperature distribution
-        nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
+        # nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
         # Save a sample of the final day's temperature distribution to a file
         #np.savetxt('test_data/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
@@ -612,25 +613,13 @@ def main():
         final_timestep_temperatures = np.zeros(len(shape_model))
         for i, facet in enumerate(shape_model):
             final_timestep_temperatures[i] = facet.temperature[(day + 1) * simulation.timesteps_per_day][0]
-
-        temperature_min = np.min(final_timestep_temperatures)
-        temperature_max = np.max(final_timestep_temperatures)
-        
-        # Create a histogram of the final timstep temperatures binned per K as a numpy array
-        temperature_bins = np.arange(temperature_min, temperature_max + 1, 1)
-        temperature_histogram = np.histogram(final_timestep_temperatures, bins=temperature_bins)
-        plt.bar(temperature_bins[:-1], temperature_histogram[0], width=1)
-        plt.xlabel('Temperature (K)')
-        plt.ylabel('Number of facets')
-        plt.title('Histogram of final timestep temperatures')
-        plt.show()
     
     else:
         print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
 
     # Save the final day temperatures to a file that can be used with ephemeris to produce instrument simulation NOTE: This may be a large file that takes a long time to run for large shape models
-    #np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
-    #print(f"Saved final day temperatures to file.\n")
+    np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures, delimiter=',')
+    print(f"Saved final day temperatures to file.\n")
 
     # Save to a new folder the shape model, model parameters, and final timestep temperatures (1 temp per facet)
     # export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, final_day_temperatures[:, -1])
