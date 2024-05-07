@@ -172,21 +172,18 @@ def calculate_visible_facets(shape_model):
         1) Doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. 
         2) Shadowing is not calculated for secondary radiation ie if three or more facets are in a line, the third facet will not be shadowed by the second from radiation emitted by the first.
     '''
+    positions = np.array([facet.position for facet in shape_model])
+    normals = np.array([facet.normal for facet in shape_model])
+    
     for i, subject_facet in enumerate(shape_model):
-        visible_facets = []  # Initialize an empty list for storing indices of visible facets
-        for j, test_facet in enumerate(shape_model):
-            if i == j:
-                continue  # Skip the subject facet itself
-            # Calculate whether the center of the test facet is above the plane of the subject facet
-            if np.dot(subject_facet.normal, test_facet.position - subject_facet.position) > 0:
-                # Calculate whether the test facet faces towards the subject facet
-                if np.dot(subject_facet.normal, test_facet.normal) > 0:
-                    # Add the index of the visible facet to the list
-                    visible_facets.append(j)
-        # Store the list of visible facet indices in the subject facet
-        subject_facet.visible_facets = visible_facets
+        relative_positions = positions - subject_facet.position
+        dot_products = np.dot(normals[i], relative_positions.T)
+        facing_towards = np.dot(normals[i], normals.T)
 
-    # NOTE TO DO: Check if there are visible facets shadowed by other visible facets and remove them from the list
+        visible = (dot_products > 0) & (facing_towards > 0)
+        visible[i] = False  # Exclude the subject facet itself
+
+        subject_facet.visible_facets = np.where(visible)[0]
 
     return shape_model
 
@@ -462,7 +459,7 @@ def main():
     '''
 
     # Shape model name
-    shape_model_name = "67P_not_to_scale_16670_facets.stl"
+    shape_model_name = "67P_not_to_scale_1666_facets.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
