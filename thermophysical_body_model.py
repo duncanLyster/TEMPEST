@@ -26,6 +26,7 @@ NEXT STEPS (scientifically important):
     c) Look into gradient descent optimisation technique
 5) Write a performance report for the model
 6) Remove all NOTE and TODO comments from the code
+7) Work out why model not converging since adding deep temp 
 
 OPTIONAL NEXT STEPS (fun):
 - Implement secondary radiation/self-heating
@@ -168,21 +169,28 @@ def calculate_visible_facets(shape_model):
     ''' 
     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
     
-    Limitations:
-        1) Doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. 
-        2) Shadowing is not calculated for secondary radiation ie if three or more facets are in a line, the third facet will not be shadowed by the second from radiation emitted by the first.
+    NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Additionally, for very complicated shapes, facets may be identified as visible when there are structures in the way.
     '''
     positions = np.array([facet.position for facet in shape_model])
     normals = np.array([facet.normal for facet in shape_model])
     
     for i, subject_facet in enumerate(shape_model):
+        # Compute the relative positions of all facets from the current subject facet, this results in a vector from the subject facet to every other facet
         relative_positions = positions - subject_facet.position
+        
+        # Compute the dot product between the normal of the subject facet and the vectors to all other facets. This checks if the other facets are in the direction the subject facet is facing.
         dot_products = np.dot(normals[i], relative_positions.T)
+        
+        # Compute the dot product between the normal of the subject facet and the normals of all other facets. This checks if the other facets are facing towards the subject facet.
         facing_towards = np.dot(normals[i], normals.T)
-
+        
+        # Combine the conditions to find facets that are visible
         visible = (dot_products > 0) & (facing_towards > 0)
-        visible[i] = False  # Exclude the subject facet itself
-
+        
+        # Ensure that the facet does not consider itself as visible
+        visible[i] = False
+        
+        # Write the indices of the visible facets to the subject facet
         subject_facet.visible_facets = np.where(visible)[0]
 
     return shape_model
@@ -203,14 +211,11 @@ def does_triangle_intersect_line(line_start, line_direction, triangle_vertices):
     if not np.isclose(np.linalg.norm(line_direction), 1, atol=1e-8):
         raise ValueError("The line direction must be a unit vector.")
 
-    epsilon = 1e-6 # A small number to avoid division by zero
     vertex0, vertex1, vertex2 = triangle_vertices
     edge1 = vertex1 - vertex0
     edge2 = vertex2 - vertex0
     h = np.cross(line_direction, edge2)
     a = np.dot(edge1, h)
-    if a > -epsilon and a < epsilon:
-        return False # No intersection
     f = 1 / a
     s = line_start - vertex0
     u = f * np.dot(s, h)
@@ -221,7 +226,7 @@ def does_triangle_intersect_line(line_start, line_direction, triangle_vertices):
     if v < 0 or u + v > 1:
         return False # No intersection
     t = f * np.dot(edge2, q)
-    if t > epsilon:
+    if t > 0:
         return True # Intersection
     else:
         return False # No intersection
@@ -231,6 +236,7 @@ def calculate_shadowing(facet_position, sunlight_direction, shape_model, facet_i
     This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to does_triangle_intersect_line which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
     
     It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not. 
+    BUG: Shadow visualisation shows some facets are coming out unshadowed when they shouldn't be - possible mathematial error? 
     '''
 
     for facet_index in facet_indices:
@@ -243,25 +249,24 @@ def calculate_shadowing(facet_position, sunlight_direction, shape_model, facet_i
         
     return 1 # The facet is not in shadow
 
+# Calculate rotation matrix for the body's rotation
+@jit(nopython=True)
+def calculate_rotation_matrix(axis, theta):
+    '''Return the rotation matrix associated with counterclockwise rotation about the given axis by theta radians.'''
+    axis = np.asarray(axis)
+    axis = axis / np.sqrt(np.dot(axis, axis))
+    a = np.cos(theta / 2.0)
+    b, c, d = -axis * np.sin(theta / 2.0)
+    aa, bb, cc, dd = a * a, b * b, c * c, d * d
+    bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
+    return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
+                        [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
+                        [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
+
 def calculate_insolation(shape_model, simulation):
     ''' 
     This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
     '''
-
-    # Calculate rotation matrix for the body's rotation
-    @jit(nopython=True)
-    def calculate_rotation_matrix(axis, theta):
-        '''Return the rotation matrix associated with counterclockwise rotation about the given axis by theta radians.'''
-        axis = np.asarray(axis)
-        axis = axis / np.sqrt(np.dot(axis, axis))
-        a = np.cos(theta / 2.0)
-        b, c, d = -axis * np.sin(theta / 2.0)
-        aa, bb, cc, dd = a * a, b * b, c * c, d * d
-        bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
-        return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
-                         [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
-                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
-    
     # Initialize insolation array with zeros for all facets and timesteps
     insolation_array = np.zeros((len(shape_model), simulation.timesteps_per_day))
 
