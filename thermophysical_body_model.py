@@ -56,7 +56,6 @@ import matplotlib.pyplot as plt
 import time
 import sys
 import json
-from visualise_shape_model import visualise_shape_model
 from animate_temperature_distribution import animate_temperature_distribution
 from plot_temperature_distribution import plot_temperature_distribution
 from nice_gif import nice_gif
@@ -464,7 +463,7 @@ def main():
     '''
 
     # Shape model name
-    shape_model_name = "67P_not_to_scale_1666_facets.stl"
+    shape_model_name = "500m_cube.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
@@ -481,15 +480,10 @@ def main():
 
     shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
 
-    # Visualise the shape model
-    print(f"Preparing shape model visualisation.\n")
-    visualise_shape_model(path_to_shape_model_file, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day)
-
     # Setup the model
     print(f"Calculating visible facets.\n")
     shape_model = calculate_visible_facets(shape_model)
 
-    print(f"Calculating insolation.\n")
     shape_model, insolation_array = calculate_insolation(shape_model, simulation)
 
     # Visualise the shadowing across the shape model

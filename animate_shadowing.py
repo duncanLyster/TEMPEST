@@ -3,6 +3,7 @@ Script to animate shadows.
 
 TODO: Generalise so this can be used for all visualisations by passign data to be plotted on facets and colour scale to be used. 
 Add ability to click on a facet to get information about it. 
+Leave animation up (or save it in an interactable mode) but allow main code to continue running.
 
 '''
 
@@ -15,11 +16,12 @@ from stl import mesh
 # Global variables to control the animation state
 is_paused = False
 current_frame = 0
+picked_indices = []
 
 def onPress(event):
     global is_paused
     if event.key == ' ':
-        is_paused ^= True  # Toggle pause state with each 'p' key press
+        is_paused ^= True
 
 def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis, sunlight_direction, timesteps_per_day):
     ''' 
@@ -69,7 +71,7 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
 
     # Initialize colour map and normalization
     norm = plt.Normalize(insolation_array.min(), insolation_array.max())
-    colormap = plt.cm.rainbow #plt.cm.binary_r  # Use plt.cm.coolwarm to ensure compatibility
+    colormap = plt.cm.binary_r  # Use plt.cm.coolwarm to ensure compatibility
 
     # Create a ScalarMappable object with the normalization and colormap
     mappable = plt.cm.ScalarMappable(norm=norm, cmap=colormap)
@@ -81,28 +83,33 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
     cbar = fig.colorbar(mappable, ax=ax, shrink=0.5, aspect=5)
     cbar.set_label('Insolation (W/m^2)', rotation=270, labelpad=20)
 
-    plt.figtext(0.05, 0.01, 'Rotate with mouse, pause/resume with spacebar', fontsize=10, ha='left')
+    plt.figtext(0.05, 0.01, 'Rotate with mouse, pause/resume with spacebar, click facet for more info.', fontsize=10, ha='left')
 
     def update(frame, shape_mesh, ax):
         global current_frame
         if not is_paused:
             current_frame = (current_frame + 1) % timesteps_per_day
         else:
-            return
+            if any(picked_indices):
+                pass
+            else:
+                return
 
         # Rotate the mesh
         theta = (2 * np.pi / timesteps_per_day) * current_frame
         rot_mat = rotation_matrix(rotation_axis, theta)
         rotated_vertices = np.dot(shape_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
-
         # Get temperatures for the current frame and apply colour map
         temp_for_frame = insolation_array[:, current_frame % timesteps_per_day]
         face_colours = colormap(norm(temp_for_frame))
 
+        for ind in picked_indices:
+            face_colours[ind] = [1, 0, 0, 1]  # Ensure picked indices remain red
+
         for art in reversed(ax.collections):
             art.remove()
 
-        ax.add_collection3d(art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0, edgecolors='k', alpha=1.0))
+        ax.add_collection3d(art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0, edgecolors='k', alpha=1.0, picker=0.01))
 
         # Plot the reversed sunlight direction arrow pointing towards the center
         shift_factor = line_length * 2
@@ -110,6 +117,20 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
         ax.quiver(arrow_start[0], arrow_start[1], arrow_start[2],
                 -sunlight_direction[0], -sunlight_direction[1], -sunlight_direction[2],
                 length=line_length, color='orange', linewidth=2)
+
+    def on_pick(event):
+        global picked_indices
+        if isinstance(event.artist, art3d.Poly3DCollection):
+            print(dir(event.artist))
+            print(event.artist.set_visible(False))
+
+            picked_indices = event.ind
+            
+            print(f'Picked indices: {picked_indices}')
+
+            plt.draw()  # Redraw to reflect changes 
+        
+    fig.canvas.mpl_connect('pick_event', on_pick)
 
     # Animate
     ani = animation.FuncAnimation(fig, update, frames=np.arange(0, timesteps_per_day), fargs=(shape_mesh, ax), blit=False)
