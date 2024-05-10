@@ -34,6 +34,9 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
     # Load the shape model from the STL file
     shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
 
+    # Create an array of facet indices with their corresponding centroids
+    facet_centroids = np.array([np.mean(facet, axis=0) for facet in shape_mesh.vectors])
+
     # Create a figure and a 3D subplot
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
@@ -89,11 +92,6 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
         global current_frame
         if not is_paused:
             current_frame = (current_frame + 1) % timesteps_per_day
-        else:
-            if any(picked_indices):
-                pass
-            else:
-                return
 
         # Rotate the mesh
         theta = (2 * np.pi / timesteps_per_day) * current_frame
@@ -119,15 +117,28 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
                 length=line_length, color='orange', linewidth=2)
 
     def on_pick(event):
+        # NOTE: I worked out from the insolation values that the issue is with the picker, not the display. Ie facets that turn red are the ones that are picked. The issue is between the mouse click and returning the facet index.
+        
         global picked_indices
         if isinstance(event.artist, art3d.Poly3DCollection):
-            print(dir(event.artist))
-            print(event.artist.set_visible(False))
-
-            picked_indices = event.ind
-            
+            picked_indices = event.ind # NOTE: The issue is here or upstream in the picker.
             print(f'Picked indices: {picked_indices}')
 
+            # Return the centroid and vertex indices of the picked facet
+            for ind in picked_indices:
+                vertices = shape_mesh.vectors[ind]
+                picked_centroid = np.mean(vertices, axis=0)
+                print(f'Centroid: {picked_centroid}')
+
+            # Print the facet index in facet_centroids that corresponds to the picked facet's centroid coordinates
+            for i, centroid in enumerate(facet_centroids):
+                if np.allclose(centroid, picked_centroid):
+                    print(f'Facet index: {i}')
+
+            # Print the insolation value of the picked facets
+            for ind in picked_indices:
+                print(f'Insolation value: {insolation_array[ind, current_frame % timesteps_per_day]}')
+                
             plt.draw()  # Redraw to reflect changes 
         
     fig.canvas.mpl_connect('pick_event', on_pick)
