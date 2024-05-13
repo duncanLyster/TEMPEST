@@ -16,7 +16,7 @@ from stl import mesh
 # Global variables to control the animation state
 is_paused = False
 current_frame = 0
-picked_indices = []
+# picked_indices = []
 
 def onPress(event):
     global is_paused
@@ -34,8 +34,8 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
     # Load the shape model from the STL file
     shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
 
-    # Create an array of facet indices with their corresponding centroids
-    facet_centroids = np.array([np.mean(facet, axis=0) for facet in shape_mesh.vectors])
+    # # Create an array of facet indices with their corresponding centroids
+    # facet_centroids = np.array([np.mean(facet, axis=0) for facet in shape_mesh.vectors])
 
     # Create a figure and a 3D subplot
     fig = plt.figure()
@@ -86,7 +86,7 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
     cbar = fig.colorbar(mappable, ax=ax, shrink=0.5, aspect=5)
     cbar.set_label('Insolation (W/m^2)', rotation=270, labelpad=20)
 
-    plt.figtext(0.05, 0.01, 'Rotate with mouse, pause/resume with spacebar, click facet for more info.', fontsize=10, ha='left')
+    plt.figtext(0.05, 0.01, 'Rotate with mouse, pause/resume with spacebar.', fontsize=10, ha='left')
 
     def update(frame, shape_mesh, ax):
         global current_frame
@@ -97,17 +97,24 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
         theta = (2 * np.pi / timesteps_per_day) * current_frame
         rot_mat = rotation_matrix(rotation_axis, theta)
         rotated_vertices = np.dot(shape_mesh.vectors.reshape((-1, 3)), rot_mat.T).reshape((-1, 3, 3))
+
         # Get temperatures for the current frame and apply colour map
         temp_for_frame = insolation_array[:, current_frame % timesteps_per_day]
         face_colours = colormap(norm(temp_for_frame))
 
-        for ind in picked_indices:
-            face_colours[ind] = [1, 0, 0, 1]  # Ensure picked indices remain red
+        # for ind in picked_indices:
+        #     face_colours[ind] = [1, 0, 0, 1]  # Ensure picked indices remain red
 
         for art in reversed(ax.collections):
             art.remove()
 
-        ax.add_collection3d(art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0, edgecolors='k', alpha=1.0, picker=0.01))
+
+        poly_collection = art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0.5, edgecolors=face_colours, alpha=1.0) # picker=0.01)
+
+        # Print poly_collection indices to check if the issue is with the picker NOTE: Could be an issue with z  sorting?
+        # print(f'Poly collection indices: {poly_collection.get_array()}')
+
+        ax.add_collection3d(poly_collection)
 
         # Plot the reversed sunlight direction arrow pointing towards the center
         shift_factor = line_length * 2
@@ -116,32 +123,34 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
                 -sunlight_direction[0], -sunlight_direction[1], -sunlight_direction[2],
                 length=line_length, color='orange', linewidth=2)
 
-    def on_pick(event):
-        # NOTE: I worked out from the insolation values that the issue is with the picker, not the display. Ie facets that turn red are the ones that are picked. The issue is between the mouse click and returning the facet index.
+    # def on_pick(event):
+    #     # NOTE: I worked out from the insolation values that the issue is with the picker, not the display. Ie facets that turn red are the ones that are picked. The issue is between the mouse click and returning the facet index. 
         
-        global picked_indices
-        if isinstance(event.artist, art3d.Poly3DCollection):
-            picked_indices = event.ind # NOTE: The issue is here or upstream in the picker.
-            print(f'Picked indices: {picked_indices}')
+    #     global picked_indices
+    #     if isinstance(event.artist, art3d.Poly3DCollection):
+    #         picked_indices = event.ind # NOTE: The issue is here or upstream in the picker.
+            
+    #         print(f'Picked indices: {picked_indices}')
 
-            # Return the centroid and vertex indices of the picked facet
-            for ind in picked_indices:
-                vertices = shape_mesh.vectors[ind]
-                picked_centroid = np.mean(vertices, axis=0)
-                print(f'Centroid: {picked_centroid}')
+    #         # Return the centroid and vertex indices of the picked facet
+    #         for ind in picked_indices:
+    #             vertices = shape_mesh.vectors[ind]
+    #             print(f'Vertices: {vertices}')
+    #             picked_centroid = np.mean(vertices, axis=0)
+    #             print(f'Centroid: {picked_centroid}')
 
-            # Print the facet index in facet_centroids that corresponds to the picked facet's centroid coordinates
-            for i, centroid in enumerate(facet_centroids):
-                if np.allclose(centroid, picked_centroid):
-                    print(f'Facet index: {i}')
+    #         # Print the facet index in facet_centroids that corresponds to the picked facet's centroid coordinates
+    #         for i, centroid in enumerate(facet_centroids):
+    #             if np.allclose(centroid, picked_centroid):
+    #                 print(f'Facet index: {i}')
 
-            # Print the insolation value of the picked facets
-            for ind in picked_indices:
-                print(f'Insolation value: {insolation_array[ind, current_frame % timesteps_per_day]}')
+    #         # Print the insolation value of the picked facets
+    #         for ind in picked_indices:
+    #             print(f'Insolation value: {insolation_array[ind, current_frame % timesteps_per_day]}')
                 
-            plt.draw()  # Redraw to reflect changes 
+    #         plt.draw()  # Redraw to reflect changes 
         
-    fig.canvas.mpl_connect('pick_event', on_pick)
+    # fig.canvas.mpl_connect('pick_event', on_pick)
 
     # Animate
     ani = animation.FuncAnimation(fig, update, frames=np.arange(0, timesteps_per_day), fargs=(shape_mesh, ax), blit=False)
