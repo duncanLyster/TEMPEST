@@ -60,9 +60,15 @@ from animate_temperature_distribution import animate_temperature_distribution
 from plot_temperature_distribution import plot_temperature_distribution
 from nice_gif import nice_gif
 from animate_shadowing import animate_shadowing
-from numba import jit
+from numba import jit, types
 from stl import mesh
 from tqdm import tqdm
+from typing import Tuple
+import ipywidgets as widgets
+from IPython.display import display
+from numba.typed import List
+from numba.core import types
+from numba.extending import overload
 
 class Simulation:
     def __init__(self, config_path):
@@ -164,35 +170,34 @@ def calculate_area(v1, v2, v3):
     v = v3 - v1
     return np.linalg.norm(np.cross(u, v)) / 2
 
-def calculate_visible_facets(shape_model):
+def calculate_visible_facets(positions, normals):
     ''' 
     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It writes the indices of the visible facets to the data cube.
     
     NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Additionally, for very complicated shapes, facets may be identified as visible when there are structures in the way.
     '''
-    positions = np.array([facet.position for facet in shape_model])
-    normals = np.array([facet.normal for facet in shape_model])
+    visible_indices =[[] for _ in range(len(positions))]
     
-    for i, subject_facet in enumerate(shape_model):
+    for i in range(len((positions))):
         # Compute the relative positions of all facets from the current subject facet, this results in a vector from the subject facet to every other facet
-        relative_positions = positions - subject_facet.position
+        relative_positions =  positions[i] - positions
+
+        # The dot product between the relative positions and the normals of the subject facet tells us if the facet is above the horizon
+        above_horizon = relative_positions @ normals[i] < 0
         
-        # Compute the dot product between the normal of the subject facet and the vectors to all other facets. This checks if the other facets are in the direction the subject facet is facing.
-        dot_products = np.dot(normals[i], relative_positions.T)
-        
-        # Compute the dot product between the normal of the subject facet and the normals of all other facets. This checks if the other facets are facing towards the subject facet.
-        facing_towards = np.dot(normals[i], normals.T)
-        
-        # Combine the conditions to find facets that are visible
-        visible = (dot_products > 0) & (facing_towards > 0)
-        
+        # Thr dot product between the relative positions and the normals of the subject facet tells us if the facet is facing towards the subject facet
+        facing_towards = np.einsum('ij,ij->i', -relative_positions, normals) < 0 
+    
+        # Combine the two conditions to determine if the facet is visible
+        visible = above_horizon & facing_towards
+    
         # Ensure that the facet does not consider itself as visible
         visible[i] = False
         
         # Write the indices of the visible facets to the subject facet
-        subject_facet.visible_facets = np.where(visible)[0]
+        visible_indices[i] = np.where(visible)[0]
 
-    return shape_model
+    return visible_indices
 
 @jit(nopython=True)
 def does_triangle_intersect_line(line_start, line_direction, triangle_vertices):
@@ -238,15 +243,127 @@ def calculate_shadowing(facet_position, sunlight_direction, shape_model, facet_i
     BUG: Shadow visualisation shows some facets are coming out unshadowed when they shouldn't be - possible mathematial error? 
     '''
 
-    for facet_index in facet_indices:
-        facet = shape_model[facet_index] # Get the visible facet
+    # Ensure ray_origin is a single 3D point
+    ray_origin = np.array(facet_position)
 
-        vertices_np = np.array(facet.vertices)
+    # Ensure ray_direction is wrapped in an array to form (n, 3) even though n=1 here
+    ray_direction = np.array([sunlight_direction])  # n=1, 3
 
-        if does_triangle_intersect_line(facet_position, sunlight_direction, vertices_np):
-            return 0 # The facet is in shadow
+    # Ensure triangles_vertices is an array of shape (m, 3, 3)
+    triangles_vertices = np.array([shape_model[idx].vertices for idx in facet_indices])
+
+    # Call the intersection function
+    intersections, t_values = rays_triangles_intersection(
+        ray_origin,
+        ray_direction,
+        triangles_vertices
+    )
+
+    # Check for any intersection
+    if intersections.any():
+        return 0  # The facet is in shadow
+
+    # for facet_index in facet_indices:
+    #     facet = shape_model[facet_index] # Get the visible facet
+
+    #     vertices_np = np.array(facet.vertices)
+
+    #     if does_triangle_intersect_line(facet_position, sunlight_direction, vertices_np):
+    #         return 0 # The facet is in shadow
         
     return 1 # The facet is not in shadow
+
+@jit(nopython=True)
+def rays_triangles_intersection(
+    ray_origin: np.ndarray, ray_directions: np.ndarray, triangles_vertices: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Sourced from: https://gist.github.com/V0XNIHILI/87c986441d8debc9cd0e9396580e85f4
+
+    Möller–Trumbore intersection algorithm for calculating whether the ray intersects the triangle
+    and for which t-value. Based on: https://github.com/kliment/Printrun/blob/master/printrun/stltool.py,
+    which is based on:
+    http://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
+    Parameters
+    ----------
+    ray_origin : np.ndarray(3)
+        Origin coordinate (x, y, z) from which the ray is fired
+    ray_directions : np.ndarray(n, 3)
+        Directions (dx, dy, dz) in which the rays are going
+    triangle_vertices : np.ndarray(m, 3, 3)
+        3D vertices of multiple triangles
+    Returns
+    -------
+    tuple[np.ndarray<bool>(n, m), np.ndarray(n, m)]
+        The first array indicates whether or not there was an intersection, the second array
+        contains the t-values of the intersections
+    """
+
+    output_shape = (len(ray_directions), len(triangles_vertices))
+
+    all_rays_t = np.full(output_shape, np.nan)
+    all_rays_intersected = np.zeros(output_shape, dtype=np.bool_)
+
+    v1 = triangles_vertices[:, 0]
+    v2 = triangles_vertices[:, 1]
+    v3 = triangles_vertices[:, 2]
+
+    eps = 0.000001
+
+    edge1 = v2 - v1
+    edge2 = v3 - v1
+
+    for i, ray in enumerate(ray_directions):
+        all_t = np.zeros((len(triangles_vertices)))
+        intersected = np.full((len(triangles_vertices)), True)
+
+        pvec = np.cross(ray, edge2)
+
+        det = np.sum(edge1 * pvec, axis=1)
+
+        non_intersecting_original_indices = np.absolute(det) < eps
+
+        all_t[non_intersecting_original_indices] = np.nan
+        intersected[non_intersecting_original_indices] = False
+
+        inv_det = 1.0 / det
+
+        tvec = ray_origin - v1
+
+        u = np.sum(tvec * pvec, axis=1) * inv_det
+
+        non_intersecting_original_indices = (u < 0.0) + (u > 1.0)
+        all_t[non_intersecting_original_indices] = np.nan
+        intersected[non_intersecting_original_indices] = False
+
+        qvec = np.cross(tvec, edge1)
+
+        v = np.sum(ray * qvec, axis=1) * inv_det
+
+        non_intersecting_original_indices = (v < 0.0) + (u + v > 1.0)
+
+        all_t[non_intersecting_original_indices] = np.nan
+        intersected[non_intersecting_original_indices] = False
+
+        t = (
+            np.sum(
+                edge2 * qvec,
+                axis=1,
+            )
+            * inv_det
+        )
+
+        non_intersecting_original_indices = t < eps
+        all_t[non_intersecting_original_indices] = np.nan
+        intersected[non_intersecting_original_indices] = False
+
+        intersecting_original_indices = np.invert(non_intersecting_original_indices)
+        all_t[intersecting_original_indices] = t[intersecting_original_indices]
+
+        all_rays_t[i] = all_t
+        all_rays_intersected[i] = intersected
+
+    return all_rays_intersected, all_rays_t
 
 # Calculate rotation matrix for the body's rotation
 @jit(nopython=True)
@@ -293,7 +410,13 @@ def calculate_insolation(shape_model, simulation):
 
             else:
                 # Calculate illumination factor, pass facet position, sunlight direction, shape model and rotation information (rotation axis, rotation period, timesteps per day, delta t, t)
-                illumination_factor = calculate_shadowing(facet.position, rotated_sunlight_direction, shape_model, facet.visible_facets)
+                
+                # Check if the facet has visible facets
+                if len(facet.visible_facets) != 0:
+                    illumination_factor = calculate_shadowing(facet.position, rotated_sunlight_direction, shape_model, facet.visible_facets)
+                    
+                else:
+                    illumination_factor = 1 # No shadowing
 
                 # Calculate insolation converting AU to m
                 insolation = simulation.solar_luminosity * (1 - simulation.albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * simulation.solar_distance**2) 
@@ -458,12 +581,10 @@ def thermophysical_body_model(shape_model, simulation):
 def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
-
-    TODO: Remove all redundant code that is covered by thermophysical_body_model function.
     '''
 
     # Shape model name
-    shape_model_name = "500m_cube.stl"
+    shape_model_name = "67P_not_to_scale_1666_facets.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
@@ -482,7 +603,12 @@ def main():
 
     # Setup the model
     print(f"Calculating visible facets.\n")
-    shape_model = calculate_visible_facets(shape_model)
+    positions = np.array([facet.position for facet in shape_model])
+    normals = np.array([facet.normal for facet in shape_model])
+    visible_indices = calculate_visible_facets(positions,normals)
+
+    for i in range(len(shape_model)):
+        shape_model[i].visible_facets = visible_indices[i]
 
     shape_model, insolation_array = calculate_insolation(shape_model, simulation)
 
@@ -491,7 +617,7 @@ def main():
     animate_shadowing(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
     # Plot the insolation curve for a single facet with number of days on the x-axis
-    plt.plot(shape_model[4].insolation)
+    plt.plot(shape_model[1069].insolation)
     plt.xlabel('Number of timesteps')
     plt.ylabel('Insolation (W/m^2)')
     plt.title('Insolation curve for a single facet for one full rotation of the body')
@@ -541,9 +667,9 @@ def main():
     print(f"Saving final day temps to file.\n")
     np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures[4], delimiter=',')
 
-    # Save to a new folder the shape model, model parameters, and final timestep temperatures (1 temp per facet)
-    print(f"Saving folder with final timestep temperatures.\n")
-    export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, final_day_temperatures[:, -1])
+    # # Save to a new folder the shape model, model parameters, and final timestep temperatures (1 temp per facet)
+    # print(f"Saving folder with final timestep temperatures.\n")
+    # export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, final_day_temperatures[:, -1])
 
     print(f"Model run complete.\n")
 
