@@ -26,19 +26,25 @@ NEXT STEPS (scientifically important):
     c) Look into gradient descent optimisation technique
 5) Write a performance report for the model
 6) Remove all NOTE and TODO comments from the code
-7) Work out why model not converging since adding deep temp 
+7) Work out why model not converging since adding deep temp
+8) Consider scattering of light from facets (as opposed to just re-radiation)
+9) Add parallelisation to the model
 
 OPTIONAL NEXT STEPS (fun):
 - Implement secondary radiation/self-heating
 - Implement sublimation energy loss
 - Ensure colour scale is consistent across frames
+- Run very high resolution models
 - Build in mesh converstion for binary .STL and .OBJ files
 - Create web interface for ease of use?
 - Integrate with JPL Horizons ephemeris to get real-time insolation data
 - Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
+- Add filter visualisations to thermal model
+    - Simulate retrievals for temperature based on instrument
 
 KNOWN BUGS:
 1) Skin depths and layer thicknesses are surprisingly high. Check these calculations.
+2) Model not converging since adding deep temp
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -85,15 +91,20 @@ class Simulation:
             setattr(self, key, value)
         
         # Initialization calculations based on the loaded parameters
-        self.solar_distance = self.solar_distance_au * 1.496e11  # Convert AU to meters
+        self.solar_distance_m = self.solar_distance_au * 1.496e11  # Convert AU to meters
         self.rotation_period_s = self.rotation_period_hours * 3600  # Convert hours to seconds
-        self.angular_velocity = (2 * np.pi) / self.rotation_period_s  # Calculate angular velocity
+        self.angular_velocity = (2 * np.pi) / self.rotation_period_s  # Calculate angular velocity in rad/s
         self.skin_depth = (self.thermal_conductivity / (self.density * self.specific_heat_capacity * self.angular_velocity))**0.5
         self.thermal_inertia = (self.density * self.specific_heat_capacity * self.thermal_conductivity)**0.5
         self.layer_thickness = 8 * self.skin_depth / self.n_layers
-        self.timesteps_per_day = int(round(self.layer_thickness**2 * self.density * self.specific_heat_capacity / (2 * self.thermal_conductivity))) 
+        self.timesteps_per_day = int(round(self.layer_thickness**2 * self.density * self.specific_heat_capacity / (2 * self.thermal_conductivity))) # Courant-Friedrichs-Lewy condition
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
-        self.X = self.layer_thickness / self.skin_depth
+        self.thermal_diffusivity = self.thermal_conductivity / (self.density * self.specific_heat_capacity)
+
+        # Print out the configuration
+        print(f"Configuration loaded from {config_path}")
+        for key, value in config.items():
+            print(f"{key}: {value}")
         
         # Compute unit vector from ra and dec
         ra_radians = np.radians(self.ra_degrees)
@@ -239,8 +250,7 @@ def calculate_shadowing(facet_position, sunlight_direction, shape_model, facet_i
     '''
     This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to does_triangle_intersect_line which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
     
-    It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not. 
-    BUG: Shadow visualisation shows some facets are coming out unshadowed when they shouldn't be - possible mathematial error? 
+    It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not.
     '''
 
     # Ensure ray_origin is a single 3D point
@@ -419,7 +429,7 @@ def calculate_insolation(shape_model, simulation):
                     illumination_factor = 1 # No shadowing
 
                 # Calculate insolation converting AU to m
-                insolation = simulation.solar_luminosity * (1 - simulation.albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * simulation.solar_distance**2) 
+                insolation = simulation.solar_luminosity * (1 - simulation.albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * simulation.solar_distance_m**2) 
                 
             # Write the insolation value to the insolation array for this facet at time t
             facet.insolation[t] = insolation
@@ -491,10 +501,121 @@ def export_results(shape_model_name, path_to_setup_file, path_to_shape_model_fil
     temp_output_file_path = f"outputs/{folder_name}/"
     plot_temperature_distribution(shape_mesh, temperature_array, temp_output_file_path)
 
+# Test replacement by chatgpt - no human input so far
 def thermophysical_body_model(shape_model, simulation):
     ''' 
-    This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
+    This is the main calculation function for the thermophysical body model. 
+    It calls the necessary functions to read in the shape model, set the material and model properties, 
+    calculate insolation and temperature arrays, and iterate until the model converges.
+    '''
 
+    mean_temperature_error = simulation.convergence_target + 1  # Set to convergence target to start the loop
+    day = 0
+    temperature_error = 0
+
+    # Proceed to iterate the model until it converges
+    while day < simulation.max_days and mean_temperature_error > simulation.convergence_target:
+        for time_step in range(simulation.timesteps_per_day):
+            for facet in shape_model:
+                current_step = int(time_step + (day * simulation.timesteps_per_day))
+
+                # Check for nan, inf or negative temperature
+                if np.isnan(facet.temperature[current_step][0]) or np.isinf(facet.temperature[current_step][0]) or facet.temperature[current_step][0] < 0:
+                    print(f"Ending run at timestep {current_step} due to facet {shape_model.index(facet)} having a temperature of {facet.temperature[current_step][0]} K.\n Try increasing the number of time steps per day")
+                    sys.exit()  # Terminate the script immediately
+
+                # Calculate insolation term
+                insolation_term = facet.insolation[time_step] * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
+
+                # Calculate re-emitted radiation term
+                re_emitted_radiation_term = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
+
+                # Debug: print current temperature and calculated terms
+                print(f"Day: {day}, Timestep: {time_step}, Facet: {shape_model.index(facet)}")
+                print(f"Current Temperature: {facet.temperature[current_step][0]}")
+                print(f"Insolation Term: {insolation_term}")
+                print(f"Re-emitted Radiation Term: {re_emitted_radiation_term}")
+
+                # Calculate conducted heat term (Spencer 1989 method)
+                conducted_heat_term = 0
+                if simulation.n_layers > 1:
+                    temp_diff = facet.temperature[current_step][1] - facet.temperature[current_step][0]
+                    conducted_heat_term = 2 * (simulation.delta_t * simulation.angular_velocity / simulation.layer_thickness**2) * temp_diff
+
+                    # Check for overflow or unreasonable values
+                    if np.isinf(conducted_heat_term) or np.isnan(conducted_heat_term) or abs(conducted_heat_term) > 1e10:
+                        conducted_heat_term = 0
+                        print(f"Warning: Conducted heat term overflow at Day: {day}, Timestep: {time_step}, Facet: {shape_model.index(facet)}")
+
+                # Debug: print conducted heat term
+                print(f"Conducted Heat Term: {conducted_heat_term}")
+
+                for layer in range(1, simulation.n_layers - 1):
+                    temp_update = (simulation.delta_t / simulation.layer_thickness**2) * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
+                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + temp_update
+
+                    # Check for overflow or unreasonable values in layer temperature update
+                    if np.isinf(facet.temperature[current_step + 1][layer]) or np.isnan(facet.temperature[current_step + 1][layer]) or abs(facet.temperature[current_step + 1][layer]) > 300:
+                        facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer]
+                        print(f"Warning: Temperature overflow in layer update at Day: {day}, Timestep: {time_step}, Layer: {layer}, Facet: {shape_model.index(facet)}")
+
+                # Calculate the new temperature of the surface layer
+                new_surface_temperature = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
+
+                # Ensure new_surface_temperature is not negative or unreasonably high
+                if new_surface_temperature < 0:
+                    new_surface_temperature = 0
+                elif new_surface_temperature > 300:
+                    new_surface_temperature = 300
+
+                facet.temperature[current_step + 1][0] = new_surface_temperature
+
+                # Debug: print new surface temperature
+                print(f"New Surface Temperature: {facet.temperature[current_step + 1][0]}")
+
+            # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
+            temperature_error = 0
+            for facet in shape_model:
+                temperature_error += abs(facet.temperature[day * simulation.timesteps_per_day][0] - facet.temperature[(day - 1) * simulation.timesteps_per_day][0])
+
+        mean_temperature_error = temperature_error / len(shape_model)
+
+        print(f"Day: {day} | Temperature error: {mean_temperature_error} K | Convergence target: {simulation.convergence_target} K")
+
+        day += 1
+
+    # Decrement the day counter
+    day -= 1
+
+    if mean_temperature_error < simulation.convergence_target:
+
+        # Create an array of temperatures at each timestep in final day for each facet
+        # Initialise the array
+        final_day_temperatures = np.zeros((len(shape_model), simulation.timesteps_per_day))
+
+        # Fill the array
+        for i, facet in enumerate(shape_model):
+            for t in range(simulation.timesteps_per_day):
+                final_day_temperatures[i][t] = facet.temperature[day * simulation.timesteps_per_day + t][0]
+
+        # Create an array of final timestep temperatures
+        final_timestep_temperatures = np.zeros(len(shape_model))
+        for i, facet in enumerate(shape_model):
+            final_timestep_temperatures[i] = facet.temperature[(day + 1) * simulation.timesteps_per_day][0]
+
+    else:
+        final_timestep_temperatures = None
+        print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / len(shape_model)} K\n Try increasing max_days or decreasing convergence_target.")
+
+        # Break the loop and return None
+        sys.exit()
+
+    return final_day_temperatures, final_timestep_temperatures, day, temperature_error
+
+
+def thermophysical_body_model_current(shape_model, simulation):
+    ''' 
+    This is the main calculation function for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges.
     '''
 
     mean_temperature_error = simulation.convergence_target + 1 # Set to convergence target to start the loop
@@ -512,6 +633,7 @@ def thermophysical_body_model(shape_model, simulation):
                     print(f"Ending run at timestep {current_step} due to facet {shape_model.index(facet)} having a temperature of {facet.temperature[current_step][0]} K.\n Try increasing the number of time steps per day")
                     sys.exit()  # Terminate the script immediately
 
+
                 # Calculate insolation term, bearing in mind that the insolation curve is constant for each facet and repeats every rotation period
                 insolation_term = facet.insolation[time_step] * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
 
@@ -523,22 +645,26 @@ def thermophysical_body_model(shape_model, simulation):
 
                 # Calculate sublimation energy loss term TODO: Implement this
 
-                # Calculate conducted heat term TODO: Update as per Muller (2007)
-                conducted_heat_term = 2 * (simulation.delta_t / (simulation.X**2 * simulation.rotation_period_s)) * (facet.temperature[current_step][1] - facet.temperature[current_step][0])
+                # # Calculate conducted heat term
+                # conducted_heat_term = simulation.thermal_diffusivity * simulation.delta_t * (facet.temperature[current_step][1] - facet.temperature[current_step][0]) / simulation.layer_thickness**2
 
-                # Calculate the new temperature of the surface layer (currently very simplified)
+                # # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value
+                # for layer in range(1, simulation.n_layers - 1):
+                #     facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + simulation.delta_t * simulation.thermal_diffusivity * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1]) / simulation.layer_thickness**2
+
+                # # Calculate the new temperature of the surface layer
+                # facet.temperature[current_step + 1][0] = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
+
+                # Spencer (1989 paper method)
+                conducted_heat_term = 2 * (simulation.delta_t * simulation.angular_velocity / 0.25**2) * (facet.temperature[current_step][1] - facet.temperature[current_step][0])
+
+                for layer in range(1, simulation.n_layers - 1):
+                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + (simulation.delta_t / (0.25**2))* (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
+
+                # Calculate the new temperature of the surface layer
                 facet.temperature[current_step + 1][0] = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
 
-                # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value
-                # THESIS: Courant-Friedrichs-Lewy condition. 
-                # REFERENCE: Useful info in Muller (2007) sect 3.2.2 and 3.3.2
-
-                # TODO: Implement piecewise fix if temperature adjustment is greater than temperature difference - throw a warning. 
-                # TODO: Implement a check for the Courant-Friedrichs-Lewy condition
-                for layer in range(1, simulation.n_layers - 1):
-                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + (simulation.delta_t / (simulation.X**2 * simulation.rotation_period_s)) * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
-                    
-                # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
+            # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
             temperature_error = 0
             
             for facet in shape_model:
@@ -584,17 +710,16 @@ def main():
     '''
 
     # Shape model name
-    shape_model_name = "67P_not_to_scale_1666_facets.stl"
+    shape_model_name = "500m_cube.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
-    path_to_setup_file = "model_setups/generic_model_parameters.json"
+    path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
 
     # Load setup parameters from JSON file
     simulation = Simulation(path_to_setup_file)
 
     print(f"Number of timesteps per day: {simulation.timesteps_per_day}\n")
-    print(f"X: {simulation.X}\n")
     print(f"Layer thickness: {simulation.layer_thickness} m\n")
     print(f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5\n")
     print(f"Skin depth: {simulation.skin_depth} m\n")
@@ -617,7 +742,7 @@ def main():
     animate_shadowing(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
     # Plot the insolation curve for a single facet with number of days on the x-axis
-    plt.plot(shape_model[1069].insolation)
+    plt.plot(shape_model[2].insolation)
     plt.xlabel('Number of timesteps')
     plt.ylabel('Insolation (W/m^2)')
     plt.title('Insolation curve for a single facet for one full rotation of the body')
