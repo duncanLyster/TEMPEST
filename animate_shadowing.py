@@ -1,9 +1,13 @@
 '''
 Script to animate shadows. 
 
-TODO: Generalise so this can be used for all visualisations by passign data to be plotted on facets and colour scale to be used. 
-Add ability to click on a facet to get information about it. 
-Leave animation up (or save it in an interactable mode) but allow main code to continue running.
+TODO: 
+1) Generalise so this can be used for all visualisations by passign data to be plotted on facets and colour scale to be used. 
+2) Add ability to click on a facet to get information about it. 
+3) Leave animation up (or save it in an interactable mode) but allow main code to continue running.
+4) Add option to save as argument.
+5) Add option for background colour. (Or Scene?)
+6) Add option to change colourmap. 
 
 '''
 

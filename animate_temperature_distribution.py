@@ -132,8 +132,8 @@ def animate_temperature_distribution(filename, temperature_array, rotation_axis,
 
     plt.show()
 
-    # Save the animation as a .gif file in an outputs folder
-    ani.save('outputs/temperature_distribution.gif', writer='pillow', fps=10)
+    # # Save the animation as a .gif file in an outputs folder
+    # ani.save('outputs/temperature_distribution.gif', writer='pillow', fps=10)
 
 if __name__ == "__main__":
     filename = "shape_models/67P_not_to_scale_low_res.stl"
