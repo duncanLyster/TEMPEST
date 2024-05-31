@@ -57,14 +57,9 @@ def angular_separation(lat1,lon1,lat2,lon2):
 
 # Define the dtherm function, which calculates the temperature profile of the model
 def dtherm(temp,sol,koverz,emvtysigma,notend,const,endindex,wtmol,sundepth,frost=0):
-    subcalc = 0
-    if frost!=0:
-        subcalc=1
-            
     newtemp = temp
     # Conductive flow from slab below
     condflow = koverz*isub(temp[1:],temp)
-    # Increment temperatures
     
     subheat=0
     # Only top slab can radiate:
@@ -75,43 +70,40 @@ def dtherm(temp,sol,koverz,emvtysigma,notend,const,endindex,wtmol,sundepth,frost
 
 # Define the thermo_model function, which calculates the temperature profile of the model
 def thermo_model(rhel,albedo,thermal_inertia,rot,emissivity=1,density=1,specific_heat_capacity=1.5e7,plat=0,sunlat=0,
-                 heatflow=0,sundepth=0,ice=0,insol=None,zarr=None,nrun=2,nslab=45,ntinc=5000,
-                 nday=4,skdepths=9,showprof=True,showdiur=True,ectimes=np.array([-1,-1]),
+                 heatflow=0,sundepth=0,ice=0,insolation=None,zarr=None,nrun=2,nslab=45,ntinc=5000,
+                 nday=10,skdepths=9,showprof=True,showdiur=True,ectimes=np.array([-1,-1]),
                  corrfactor=0,blind=False,silent=False,waittime=1,noprompt=False,profwaittime=0,saveprofiles=True):
 
     rotsec = rot*24*3600
 
-    # Turn thermal inertia into a list
     thermal_inertias = thermal_inertia*np.ones(nslab)
-    
     thermal_conductivities = thermal_inertias**2/density/specific_heat_capacity
 
     if not silent:
-        print(' ')
-        print('Albedo = ', albedo, ', Upper layer TI = ', thermal_inertias[0], ', Heat flow = ', heatflow, 'erg cm-2 s-1')
-        print('Thermal conductivity = ', thermal_conductivities[0], ' erg cm-1 s-1 K-1')
+        print(f'\nAlbedo = {albedo}, Upper layer TI = {thermal_inertias[0]}, Heat flow = {heatflow} erg cm-2 s-1')
+        print(f'Thermal conductivity = {thermal_conductivities[0]} erg cm-1 s-1 K-1')
+
     dt = rotsec / ntinc 
-    
-    # Physical constants
     solar_constant = 1.374e6
     sigma = 5.670e-5 # The Stefan-Boltzmann constant
     
-    #Skin depth
-    skindepth = (thermal_conductivities * rotsec / (2 * math.pi * density * specific_heat_capacity))**0.5
+    skin_depth = (thermal_conductivities * rotsec / (2 * math.pi * density * specific_heat_capacity))**0.5
 
     if not silent:
-        print('Skindepth for upper layer =', skindepth[0], ' cm')
+        print('Skin depth for upper layer =', skin_depth[0], ' cm')
 
-    moddepth = skindepth[0] * skdepths
+    moddepth = skin_depth[0] * skdepths
     
     #Thermophysical parameter theta
     theta = thermal_inertias[0] * (2 * math.pi / rotsec)**0.5 * rhel**1.5 / ((1 - albedo)**0.75 * emissivity**0.25 * sigma**0.25 * solar_constant**0.75)
+    
     if not silent:
         print('Theta =', theta)
 
     # Auto-determination of corrfac
     thetaarr = np.array([0.01, 0.10, 0.30, 1.01, 2.02, 3.03, 10.1, 30.4, 101.2, 1000.]) # These values
     corrfacarr = np.array([37., 37., 13., 3.80, 1.90, 1.30, 0.50, 0.33, 0.27, 0.27])
+
     if corrfactor==0:
         corrfactor = 10**(np.interp(math.log10(theta), np.log10(thetaarr),np.log10(corrfacarr)))
         if not silent:
@@ -119,7 +111,6 @@ def thermo_model(rhel,albedo,thermal_inertia,rot,emissivity=1,density=1,specific
 
     # Array initialization: Use double precision
     zarr = np.array([(i + 0.5) / (nslab - 0.5) * moddepth for i in range(nslab)])
-    zarr0=zarr
     
     # Various parameters
     zmid,zup,zdown,thick = depthset(zarr)
@@ -132,35 +123,32 @@ def thermo_model(rhel,albedo,thermal_inertia,rot,emissivity=1,density=1,specific
     if saveprofiles:
         tdarr = np.zeros((nslab,200))
         
-    # Time of day
-    tod = np.array([i / ntinc * 2 * np.pi for i in range(ntinc)])
+    time_of_day = np.array([i / ntinc * 2 * np.pi for i in range(ntinc)]) # Time of day in radians
     
     # Return zeros for permanent darkness
-    if insol == None and abs(sunlat - plat) > 0.999 * math.pi / 2:
+    if insolation == None and abs(sunlat - plat) > 0.999 * math.pi / 2:
         print('####### NO SUN - YOU WILL GET STRANGE RESULTS #######')
 
     # Sunlight penetration
     sunfrac = np.zeros(nslab)
-
-    sunfrac[1:] = 0.0
     sunfrac[0] = 1.0
     sundepth = 0.0
 
     # Total insolation each timestep
-    if insol == None:
-        suninc = angular_separation(plat,tod,sunlat,np.deg2rad(180))
+    if insolation == None:
+        suninc = angular_separation(plat,time_of_day,sunlat,np.deg2rad(180))
         soltod = np.clip((1-albedo)*solar_constant/rhel**2*np.cos(suninc),0,1e10)
     else:
-        suninc = angular_separation(plat,tod,sunlat,np.deg2rad(180))
-        nsol = len(insol)
-        soltod = (1 - albedo) * np.interp(tod,np.arange(nsol + 1)/nsol*2*np.pi,np.append(insol, insol[0]))
+        suninc = angular_separation(plat,time_of_day,sunlat,np.deg2rad(180))
+        nsol = len(insolation)
+        soltod = (1 - albedo) * np.interp(time_of_day,np.arange(nsol + 1)/nsol*2*np.pi,np.append(insolation, insolation[0]))
 
     # First guesses at surface and deep temps
     tsurf0 = ((0.25*np.pi*np.mean(soltod)+heatflow)/emissivity/sigma)**0.25
     tdeep = tsurf0+heatflow*np.sum(thick/thermal_conductivities)
     
     # Eclipse
-    eclipse = np.where((tod>ectimes[0]*2*np.pi) & (tod<ectimes[1]*2*np.pi))[0]
+    eclipse = np.where((time_of_day>ectimes[0]*2*np.pi) & (time_of_day<ectimes[1]*2*np.pi))[0]
     try:
         if eclipse[0]!=-1:
             soltod[eclipse]=0
@@ -237,21 +225,21 @@ def thermo_model(rhel,albedo,thermal_inertia,rot,emissivity=1,density=1,specific
             tsurf0 = tdeep-heatflow*moddepth/kmean
         else:
             tsurf0=tdeep
+
     tdeep = tdeepfinal
-    return tsurf,tod,tdeep,teq,balance,tdarr,zarr0
+    return tsurf,time_of_day,tdeep,teq,balance,tdarr
 
 def main():
-    tsurf,tod,tdeep,teq,balance,tdarr,zarr0 = thermo_model(rhel=9.0,albedo=0.5,rot=10.0,emissivity=0.9,thermal_inertia=1e4,plat=0.0,nrun=2,ntinc=5000) #,ectimes=np.array([0.5,0.6]))
+    tsurf,time_of_day,tdeep,teq,balance,tdarr = thermo_model(rhel=9.0,albedo=0.5,rot=10.0,emissivity=0.9,thermal_inertia=1e4,plat=0.0,nrun=1,ntinc=5000) #,ectimes=np.array([0.5,0.6]))
 
     plt.figure()
-    plt.plot(tod,tsurf)
+    plt.plot(time_of_day,tsurf)
     plt.xlabel('Rotation (rad)')
     plt.ylabel('Surface Temperature (K)')
     plt.show()
 
-    # Save the temperature profiles
-    print("Saving temperature profiles to 'temperature_profiles.csv'")
-    np.savetxt('temperature_profiles.csv', tdarr, delimiter=',')
+    # Save the temperature profiles to a CSV file with two columns, rotation angle and temperature
+    np.savetxt('temperature_profiles.csv', np.column_stack((time_of_day, tsurf)), delimiter=',', header='Rotation Angle (rad), Temperature (K)', comments='')
 
 # Call the main program to start execution
 if __name__ == "__main__":

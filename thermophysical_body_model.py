@@ -97,7 +97,7 @@ class Simulation:
         self.skin_depth = (self.thermal_conductivity / (self.density * self.specific_heat_capacity * self.angular_velocity))**0.5
         self.thermal_inertia = (self.density * self.specific_heat_capacity * self.thermal_conductivity)**0.5
         self.layer_thickness = 8 * self.skin_depth / self.n_layers
-        self.timesteps_per_day = int(round(self.layer_thickness**2 * self.density * self.specific_heat_capacity / (2 * self.thermal_conductivity))) # Courant-Friedrichs-Lewy condition
+        self.timesteps_per_day = 5000 #int(round(self.layer_thickness**2 * self.density * self.specific_heat_capacity / (2 * self.thermal_conductivity))) # Courant-Friedrichs-Lewy condition
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
         self.thermal_diffusivity = self.thermal_conductivity / (self.density * self.specific_heat_capacity)
 
@@ -438,17 +438,20 @@ def calculate_insolation(shape_model, simulation):
 
     return shape_model, insolation_array
 
+
 def calculate_initial_temperatures(shape_model, n_layers, emissivity, deep_temperature):
     ''' 
     This function calculates the initial temperature of each facet and sub-surface layer of the body based on the insolation curve for that facet. It writes the initial temperatures to the data cube.
     '''
+    # Stefan-Boltzmann constant
+    sigma = 5.67e-8
 
     # Calculate initial temperature for each facet
     for facet in shape_model:
         # Calculate the initial temperature based on average power in
         power_in = np.mean(facet.insolation)
         # Calculate the temperature of the facet using the Stefan-Boltzmann law
-        calculated_temp = (power_in / (emissivity * 5.67e-8))**(1/4)
+        calculated_temp = (power_in / (emissivity * sigma))**(1/4)
 
         # Check if calculated temperature is below the deep_temperature
         if calculated_temp < deep_temperature:
@@ -460,6 +463,13 @@ def calculate_initial_temperatures(shape_model, n_layers, emissivity, deep_tempe
 
         # Assign the calculated temperatures to the facet's temperature array
         facet.temperature[0] = temperatures
+
+        # Set lowest layer as calculated for the full run
+        facet.temperature[1:] = calculated_temp
+
+        # Print lowest layer temperature for facet 4
+        if shape_model.index(facet) == 4:
+            print(f"Initial temperature of deepest layer for facet 4: {facet.temperature[0][-1]} K")
 
     return shape_model
 
@@ -501,119 +511,8 @@ def export_results(shape_model_name, path_to_setup_file, path_to_shape_model_fil
     temp_output_file_path = f"outputs/{folder_name}/"
     plot_temperature_distribution(shape_mesh, temperature_array, temp_output_file_path)
 
-# Test replacement by chatgpt - no human input so far
+
 def thermophysical_body_model(shape_model, simulation):
-    ''' 
-    This is the main calculation function for the thermophysical body model. 
-    It calls the necessary functions to read in the shape model, set the material and model properties, 
-    calculate insolation and temperature arrays, and iterate until the model converges.
-    '''
-
-    mean_temperature_error = simulation.convergence_target + 1  # Set to convergence target to start the loop
-    day = 0
-    temperature_error = 0
-
-    # Proceed to iterate the model until it converges
-    while day < simulation.max_days and mean_temperature_error > simulation.convergence_target:
-        for time_step in range(simulation.timesteps_per_day):
-            for facet in shape_model:
-                current_step = int(time_step + (day * simulation.timesteps_per_day))
-
-                # Check for nan, inf or negative temperature
-                if np.isnan(facet.temperature[current_step][0]) or np.isinf(facet.temperature[current_step][0]) or facet.temperature[current_step][0] < 0:
-                    print(f"Ending run at timestep {current_step} due to facet {shape_model.index(facet)} having a temperature of {facet.temperature[current_step][0]} K.\n Try increasing the number of time steps per day")
-                    sys.exit()  # Terminate the script immediately
-
-                # Calculate insolation term
-                insolation_term = facet.insolation[time_step] * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
-
-                # Calculate re-emitted radiation term
-                re_emitted_radiation_term = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
-
-                # Debug: print current temperature and calculated terms
-                print(f"Day: {day}, Timestep: {time_step}, Facet: {shape_model.index(facet)}")
-                print(f"Current Temperature: {facet.temperature[current_step][0]}")
-                print(f"Insolation Term: {insolation_term}")
-                print(f"Re-emitted Radiation Term: {re_emitted_radiation_term}")
-
-                # Calculate conducted heat term (Spencer 1989 method)
-                conducted_heat_term = 0
-                if simulation.n_layers > 1:
-                    temp_diff = facet.temperature[current_step][1] - facet.temperature[current_step][0]
-                    conducted_heat_term = 2 * (simulation.delta_t * simulation.angular_velocity / simulation.layer_thickness**2) * temp_diff
-
-                    # Check for overflow or unreasonable values
-                    if np.isinf(conducted_heat_term) or np.isnan(conducted_heat_term) or abs(conducted_heat_term) > 1e10:
-                        conducted_heat_term = 0
-                        print(f"Warning: Conducted heat term overflow at Day: {day}, Timestep: {time_step}, Facet: {shape_model.index(facet)}")
-
-                # Debug: print conducted heat term
-                print(f"Conducted Heat Term: {conducted_heat_term}")
-
-                for layer in range(1, simulation.n_layers - 1):
-                    temp_update = (simulation.delta_t / simulation.layer_thickness**2) * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
-                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + temp_update
-
-                    # Check for overflow or unreasonable values in layer temperature update
-                    if np.isinf(facet.temperature[current_step + 1][layer]) or np.isnan(facet.temperature[current_step + 1][layer]) or abs(facet.temperature[current_step + 1][layer]) > 300:
-                        facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer]
-                        print(f"Warning: Temperature overflow in layer update at Day: {day}, Timestep: {time_step}, Layer: {layer}, Facet: {shape_model.index(facet)}")
-
-                # Calculate the new temperature of the surface layer
-                new_surface_temperature = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
-
-                # Ensure new_surface_temperature is not negative or unreasonably high
-                if new_surface_temperature < 0:
-                    new_surface_temperature = 0
-                elif new_surface_temperature > 300:
-                    new_surface_temperature = 300
-
-                facet.temperature[current_step + 1][0] = new_surface_temperature
-
-                # Debug: print new surface temperature
-                print(f"New Surface Temperature: {facet.temperature[current_step + 1][0]}")
-
-            # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
-            temperature_error = 0
-            for facet in shape_model:
-                temperature_error += abs(facet.temperature[day * simulation.timesteps_per_day][0] - facet.temperature[(day - 1) * simulation.timesteps_per_day][0])
-
-        mean_temperature_error = temperature_error / len(shape_model)
-
-        print(f"Day: {day} | Temperature error: {mean_temperature_error} K | Convergence target: {simulation.convergence_target} K")
-
-        day += 1
-
-    # Decrement the day counter
-    day -= 1
-
-    if mean_temperature_error < simulation.convergence_target:
-
-        # Create an array of temperatures at each timestep in final day for each facet
-        # Initialise the array
-        final_day_temperatures = np.zeros((len(shape_model), simulation.timesteps_per_day))
-
-        # Fill the array
-        for i, facet in enumerate(shape_model):
-            for t in range(simulation.timesteps_per_day):
-                final_day_temperatures[i][t] = facet.temperature[day * simulation.timesteps_per_day + t][0]
-
-        # Create an array of final timestep temperatures
-        final_timestep_temperatures = np.zeros(len(shape_model))
-        for i, facet in enumerate(shape_model):
-            final_timestep_temperatures[i] = facet.temperature[(day + 1) * simulation.timesteps_per_day][0]
-
-    else:
-        final_timestep_temperatures = None
-        print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / len(shape_model)} K\n Try increasing max_days or decreasing convergence_target.")
-
-        # Break the loop and return None
-        sys.exit()
-
-    return final_day_temperatures, final_timestep_temperatures, day, temperature_error
-
-
-def thermophysical_body_model_current(shape_model, simulation):
     ''' 
     This is the main calculation function for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges.
     '''
@@ -622,8 +521,8 @@ def thermophysical_body_model_current(shape_model, simulation):
     day = 0 
     temperature_error = 0
 
-    # Proceed to iterate the model until it converges
-    while day < simulation.max_days and mean_temperature_error > simulation.convergence_target:
+    # Proceed to iterate the model until it converges as long as the maximum number of days has not been reached, ensuring the minimum number of days is observed
+    while day < simulation.max_days and (day < simulation.min_days or mean_temperature_error > simulation.convergence_target):
         for time_step in range(simulation.timesteps_per_day):
             for facet in shape_model:
                 current_step = int(time_step + (day * simulation.timesteps_per_day))
@@ -645,21 +544,12 @@ def thermophysical_body_model_current(shape_model, simulation):
 
                 # Calculate sublimation energy loss term TODO: Implement this
 
-                # # Calculate conducted heat term
-                # conducted_heat_term = simulation.thermal_diffusivity * simulation.delta_t * (facet.temperature[current_step][1] - facet.temperature[current_step][0]) / simulation.layer_thickness**2
+                # Calculate conducted heat term
+                conducted_heat_term = simulation.thermal_diffusivity * simulation.delta_t * (facet.temperature[current_step][1] - facet.temperature[current_step][0]) / simulation.layer_thickness**2
 
-                # # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value
-                # for layer in range(1, simulation.n_layers - 1):
-                #     facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + simulation.delta_t * simulation.thermal_diffusivity * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1]) / simulation.layer_thickness**2
-
-                # # Calculate the new temperature of the surface layer
-                # facet.temperature[current_step + 1][0] = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
-
-                # Spencer (1989 paper method)
-                conducted_heat_term = 2 * (simulation.delta_t * simulation.angular_velocity / 0.25**2) * (facet.temperature[current_step][1] - facet.temperature[current_step][0])
-
+                # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value
                 for layer in range(1, simulation.n_layers - 1):
-                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + (simulation.delta_t / (0.25**2))* (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
+                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + simulation.delta_t * simulation.thermal_diffusivity * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1]) / simulation.layer_thickness**2
 
                 # Calculate the new temperature of the surface layer
                 facet.temperature[current_step + 1][0] = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
@@ -669,6 +559,21 @@ def thermophysical_body_model_current(shape_model, simulation):
             
             for facet in shape_model:
                     temperature_error += abs(facet.temperature[day * simulation.timesteps_per_day][0] - facet.temperature[(day - 1) * simulation.timesteps_per_day][0])
+
+        # Calculate the mean temperature of the surface layer for each facet for the last full day
+        mean_surface_temperatures = np.zeros(len(shape_model))
+        for i, facet in enumerate(shape_model):
+            mean_surface_temperatures[i] = np.mean([facet.temperature[day * simulation.timesteps_per_day + t][0] for t in range(simulation.timesteps_per_day)])
+
+        # Set deep temperature for each facet to the average of surface layer temperature of that facet for the last full day for all future timesteps 
+        for i, facet in enumerate(shape_model):
+            for t in range(simulation.timesteps_per_day):
+                facet.temperature[(day + 1) * simulation.timesteps_per_day + t][simulation.n_layers - 1] = mean_surface_temperatures[i]
+        
+            # Print facet deep temp for facet 4
+            if i == 4:
+                print(f"Facet 4 deep temperature: {mean_surface_temperatures[i]} K")
+
 
         mean_temperature_error = temperature_error / (len(shape_model))
 
@@ -681,8 +586,7 @@ def thermophysical_body_model_current(shape_model, simulation):
     
     if mean_temperature_error < simulation.convergence_target:
 
-        # Create an array of temperatures at each timestep in final day for each facet
-        # Initialise the array
+        # Create an array of temperatures at each timestep in final day for the surface layer of each facet
         final_day_temperatures = np.zeros((len(shape_model), simulation.timesteps_per_day))
 
         # Fill the array
@@ -695,6 +599,15 @@ def thermophysical_body_model_current(shape_model, simulation):
         for i, facet in enumerate(shape_model):
             final_timestep_temperatures[i] = facet.temperature[(day + 1) * simulation.timesteps_per_day][0]
 
+        # Create an array of temperatures at each timestep in final day for all layers of each facet
+        final_day_temperatures_all_layers = np.zeros((len(shape_model), simulation.timesteps_per_day, simulation.n_layers))
+
+        # Fill the array
+        for i, facet in enumerate(shape_model):
+            for t in range(simulation.timesteps_per_day):
+                for layer in range(simulation.n_layers):
+                    final_day_temperatures_all_layers[i][t][layer] = facet.temperature[day * simulation.timesteps_per_day + t][layer]
+
     else:
         final_timestep_temperatures = None
         print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n Try increasing max_days or decreasing convergence_target.")
@@ -702,7 +615,7 @@ def thermophysical_body_model_current(shape_model, simulation):
         # Break the loop and return None
         sys.exit()
 
-    return final_day_temperatures, final_timestep_temperatures, day, temperature_error
+    return final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day+1, temperature_error
 
 def main():
     ''' 
@@ -737,34 +650,34 @@ def main():
 
     shape_model, insolation_array = calculate_insolation(shape_model, simulation)
 
-    # Visualise the shadowing across the shape model
-    print(f"Preparing shadowing visualisation.\n")
-    animate_shadowing(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
+    # # Visualise the shadowing across the shape model
+    # print(f"Preparing shadowing visualisation.\n")
+    # animate_shadowing(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
-    # Plot the insolation curve for a single facet with number of days on the x-axis
-    plt.plot(shape_model[2].insolation)
-    plt.xlabel('Number of timesteps')
-    plt.ylabel('Insolation (W/m^2)')
-    plt.title('Insolation curve for a single facet for one full rotation of the body')
-    plt.show()
+    # # Plot the insolation curve for a single facet with number of days on the x-axis
+    # plt.plot(shape_model[2].insolation)
+    # plt.xlabel('Number of timesteps')
+    # plt.ylabel('Insolation (W/m^2)')
+    # plt.title('Insolation curve for a single facet for one full rotation of the body')
+    # plt.show()
 
     print(f"Calculating initial temperatures.\n")
     shape_model = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity, simulation.deep_temperature)
 
-    # Plot a histogram of the initial temperatures for all facets
-    initial_temperatures = [facet.temperature[0][0] for facet in shape_model]
-    plt.hist(initial_temperatures, bins=20)
-    plt.xlabel('Initial temperature (K)')
-    plt.ylabel('Number of facets')
-    plt.title('Initial temperature distribution of all facets')
-    plt.show()
+    # # Plot a histogram of the initial temperatures for all facets
+    # initial_temperatures = [facet.temperature[0][0] for facet in shape_model]
+    # plt.hist(initial_temperatures, bins=20)
+    # plt.xlabel('Initial temperature (K)')
+    # plt.ylabel('Number of facets')
+    # plt.title('Initial temperature distribution of all facets')
+    # plt.show()
 
     print(f"Calculating secondary radiation coefficients.\n")
     shape_model = calculate_secondary_radiation_coefficients(shape_model)
     
     print(f"Running main simulation loop.\n")
     start_time = time.time()
-    final_day_temperatures, final_timestep_temperatures, day, temperature_error = thermophysical_body_model(shape_model, simulation)
+    final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error = thermophysical_body_model(shape_model, simulation)
     end_time = time.time()
     execution_time = end_time - start_time
     print(f"Convergence target achieved after {day} days.\n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
@@ -773,24 +686,38 @@ def main():
     # temperature_min = np.min(final_timestep_temperatures)
     # temperature_max = np.max(final_timestep_temperatures)
 
-    # Plot the final day's temperature distribution for all facets
-    plt.plot(final_day_temperatures.T)
+    # # Plot the final day's temperature distribution for the surface layer in facet 4
+    # plt.plot(final_day_temperatures[4])
+    # plt.xlabel('Timestep')
+    # plt.ylabel('Temperature (K)')
+    # plt.title('Final day temperature distribution for all facets')
+    # plt.show()
+
+    # # Plot the final day's temperature distribution for all layers in facet 4
+    # plt.plot(final_day_temperatures_all_layers[4])
+    # plt.xlabel('Timestep')
+    # plt.ylabel('Temperature (K)')
+    # plt.title('Final day temperature distribution for all layers in facet 4')
+    # plt.show()
+
+    # Plot the temperature distribution for all layers in facet 4 for each day run (as per 'day' variable)
+    plt.plot(shape_model[4].temperature[:(day) * simulation.timesteps_per_day, :])
     plt.xlabel('Timestep')
     plt.ylabel('Temperature (K)')
-    plt.title('Final day temperature distribution for all facets')
+    plt.title('Temperature distribution for all layers in facet 4 for the full run')
     plt.show()
 
-    # Visualise the results - animation of final day's temperature distribution
-    print(f"Preparing temperature animation.\n")
-    animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
+    # # Visualise the results - animation of final day's temperature distribution
+    # print(f"Preparing temperature animation.\n")
+    # animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
 
     # # Visualise the results - animation of final day's temperature distribution
     # print(f"Preparing beautiful temperature animation.\n")
     # nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
-    # Save the final day temperatures for facet 4 to a file that can be used with ephemeris to produce instrument simulation NOTE: This may be a large file that takes a long time to run for large shape models
-    print(f"Saving final day temps to file.\n")
-    np.savetxt('outputs/final_day_temperatures.csv', final_day_temperatures[4], delimiter=',')
+    # Save the final day temperatures for facet 4 to a CSV file with two columns, rotation angle (rad) then temperature
+    print(f"Saving final day temperatures for facet 4 to CSV file.\n")
+    np.savetxt("final_day_temperatures.csv", np.column_stack((np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[4])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
     # # Save to a new folder the shape model, model parameters, and final timestep temperatures (1 temp per facet)
     # print(f"Saving folder with final timestep temperatures.\n")
