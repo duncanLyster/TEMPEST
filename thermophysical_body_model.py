@@ -122,6 +122,7 @@ class Facet:
         self.visible_facets = None
         self.secondary_radiation_coefficients = None
         self.temperature = np.zeros((timesteps_per_day * (max_days + 1), n_layers))
+        self.unphysical_energy_loss = np.zeros(timesteps_per_day * (max_days + 1))
 
     def set_dynamic_arrays(self, length):
         self.visible_facets = np.zeros(length)
@@ -527,11 +528,11 @@ def thermophysical_body_model(shape_model, simulation):
             for facet in shape_model:
                 current_step = int(time_step + (day * simulation.timesteps_per_day))
 
-                # Check for nan, inf or negative temperature
                 if np.isnan(facet.temperature[current_step][0]) or np.isinf(facet.temperature[current_step][0]) or facet.temperature[current_step][0] < 0:
                     print(f"Ending run at timestep {current_step} due to facet {shape_model.index(facet)} having a temperature of {facet.temperature[current_step][0]} K.\n Try increasing the number of time steps per day")
-                    sys.exit()  # Terminate the script immediately
+                    sys.exit()
 
+                ############################# Calculate temperature of each layer for each facet #############################
 
                 # Calculate insolation term, bearing in mind that the insolation curve is constant for each facet and repeats every rotation period
                 insolation_term = facet.insolation[time_step] * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
@@ -553,6 +554,27 @@ def thermophysical_body_model(shape_model, simulation):
 
                 # Calculate the new temperature of the surface layer
                 facet.temperature[current_step + 1][0] = facet.temperature[current_step][0] + insolation_term - re_emitted_radiation_term + conducted_heat_term
+
+                # ############################# Calculate unphysical energy for facet (assuming unit area) #############################
+                # insolation_energy = facet.insolation[time_step] * simulation.delta_t
+                # re_emitted_energy = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * simulation.delta_t
+                # surface_energy_change = simulation.density * simulation.specific_heat_capacity * simulation.layer_thickness * (facet.temperature[current_step + 1][0] - facet.temperature[current_step][0])
+                # sub_surface_energy_change = 0
+                # sub_surface_energy_conducted = 0
+
+                # for layer in range(1, simulation.n_layers - 1):
+                #     sub_surface_energy_conducted += simulation.density * simulation.specific_heat_capacity * simulation.layer_thickness * (facet.temperature[current_step + 1][layer] - facet.temperature[current_step][layer])
+
+                # facet.unphysical_energy_loss[current_step] = insolation_energy - re_emitted_energy - surface_energy_change - sub_surface_energy_change
+
+                ############################# Calculate unphysical energy for facet surface only #############################
+                insolation_energy = facet.insolation[time_step] * simulation.delta_t
+                re_emitted_energy = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * (facet.temperature[current_step][0]**4) * simulation.delta_t
+                surface_energy_change = simulation.density * simulation.specific_heat_capacity * simulation.layer_thickness * (facet.temperature[current_step + 1][0] - facet.temperature[current_step][0])
+                conducted_energy = simulation.thermal_diffusivity * simulation.delta_t * (facet.temperature[current_step + 1][1] - facet.temperature[current_step][0]) / simulation.layer_thickness**2
+
+                facet.unphysical_energy_loss[current_step] = insolation_energy - re_emitted_energy - surface_energy_change - conducted_energy
+                
 
             # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
             temperature_error = 0
@@ -700,12 +722,29 @@ def main():
     # plt.title('Final day temperature distribution for all layers in facet 4')
     # plt.show()
 
-    # Plot the temperature distribution for all layers in facet 4 for each day run (as per 'day' variable)
+    # Plot the temperature distribution for all layers in facet 4 for the whole run
+    fig1 = plt.figure()
     plt.plot(shape_model[4].temperature[:(day) * simulation.timesteps_per_day, :])
     plt.xlabel('Timestep')
     plt.ylabel('Temperature (K)')
     plt.title('Temperature distribution for all layers in facet 4 for the full run')
-    plt.show()
+    fig1.show()
+
+    # Plot the unphysical energy loss for facet 4 for the final day only
+    fig2 = plt.figure()
+    plt.plot(-shape_model[4].unphysical_energy_loss[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day])
+    plt.xlabel('Timestep')
+    plt.ylabel('Energy (J)')
+    plt.title('Unphysical energy loss for facet 4 for the full run')
+    fig2.show()
+
+    # Plot the temperature distribution for all layers in facet 4 for the final day only 
+    fig3 = plt.figure()
+    plt.plot(shape_model[4].temperature[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day])
+    plt.xlabel('Timestep')
+    plt.ylabel('Temperature (K)')
+    plt.title('Temperature distribution for all layers in facet 4 for the full run')
+    fig3.show()
 
     # # Visualise the results - animation of final day's temperature distribution
     # print(f"Preparing temperature animation.\n")
@@ -722,6 +761,28 @@ def main():
     # # Save to a new folder the shape model, model parameters, and final timestep temperatures (1 temp per facet)
     # print(f"Saving folder with final timestep temperatures.\n")
     # export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, final_day_temperatures[:, -1])
+
+    # Load the temperature profiles from the CSV file
+    thermprojrs_data = np.loadtxt("temperature_profiles.csv", delimiter=',', skiprows=1)
+
+    # Plot the final day temperatures for facet 4 against the rotation angle next to the same info from Thermprojrs
+    fig4 = plt.figure()
+    plt.plot(thermprojrs_data[:, 0], thermprojrs_data[:, 1], label='Thermprojrs')
+    plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[4], label='This model')
+    plt.xlabel('Rotation angle (rad)')
+    plt.ylabel('Temperature (K)')
+    plt.title('Final day temperature distribution for facet 4')
+    plt.legend()
+    fig4.show()
+
+    # Plot final day temps for facet 4 minus thermprojrs data
+    fig5 = plt.figure()
+    plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[4] - thermprojrs_data[:, 1])
+    plt.xlabel('Rotation angle (rad)')
+    plt.ylabel('Temperature difference (K)')
+    plt.title('Temperature difference between this model and Thermprojrs for facet 4')
+    fig5.show()
+    plt.show()
 
     print(f"Model run complete.\n")
 

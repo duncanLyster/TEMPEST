@@ -13,7 +13,7 @@
     "rotation_period_hours": 240.0,
     "max_days": 100,
     "min_days": 2,
-    "convergence_target": 0.01,
+    "convergence_target": 1,
     "ra_degrees": 0,
     "dec_degrees": 90
 }
