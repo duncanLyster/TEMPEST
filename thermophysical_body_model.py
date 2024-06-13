@@ -787,9 +787,9 @@ def main():
     # print(f"Preparing temperature animation.\n")
     # animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
 
-    # # Visualise the results - animation of final day's temperature distribution
-    # print(f"Preparing beautiful temperature animation.\n")
-    # nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
+    # Visualise the results - animation of final day's temperature distribution
+    print(f"Preparing beautiful temperature animation.\n")
+    nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
     # # Save the final day temperatures for facet 4 to a CSV file with two columns, rotation angle (rad) then temperature
     # print(f"Saving final day temperatures for facet 4 to CSV file.\n")
@@ -799,38 +799,38 @@ def main():
     # print(f"Saving folder with final timestep temperatures.\n")
     # export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, final_day_temperatures[:, -1])
 
-    # Load the temperature profiles from the CSV file
-    thermprojrs_data = np.loadtxt("final_output_data.csv", delimiter=',', skiprows=1)
+    # # Load the temperature profiles from the CSV file
+    # thermprojrs_data = np.loadtxt("final_output_data.csv", delimiter=',', skiprows=1)
 
-    # Plot the final day temperatures against the rotation angle next to the same info from Thermprojrs
-    fig4 = plt.figure()
-    plt.plot(thermprojrs_data[:, 0], thermprojrs_data[:, 1], label='Thermprojrs')
-    plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[0], label='This model')
-    plt.xlabel('Rotation angle (rad)')
-    plt.ylabel('Temperature (K)')
-    plt.title('Final day temperature distribution for facet')
-    plt.legend()
-    fig4.show()
+    # # Plot the final day temperatures against the rotation angle next to the same info from Thermprojrs
+    # fig4 = plt.figure()
+    # plt.plot(thermprojrs_data[:, 0], thermprojrs_data[:, 1], label='Thermprojrs')
+    # plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[0], label='This model')
+    # plt.xlabel('Rotation angle (rad)')
+    # plt.ylabel('Temperature (K)')
+    # plt.title('Final day temperature distribution for facet')
+    # plt.legend()
+    # fig4.show()
 
-    x_original = np.linspace(0, 2 * np.pi, simulation.timesteps_per_day)
-    x_new = np.linspace(0, 2 * np.pi, thermprojrs_data.shape[0])
+    # x_original = np.linspace(0, 2 * np.pi, simulation.timesteps_per_day)
+    # x_new = np.linspace(0, 2 * np.pi, thermprojrs_data.shape[0])
 
-    # Interpolate thermprojrs_data to match the length of final_day_temperatures[4]
-    interp_func = interp1d(x_new, thermprojrs_data[:, 1], kind='linear')
-    thermprojrs_interpolated = interp_func(x_original)
+    # # Interpolate thermprojrs_data to match the length of final_day_temperatures[4]
+    # interp_func = interp1d(x_new, thermprojrs_data[:, 1], kind='linear')
+    # thermprojrs_interpolated = interp_func(x_original)
 
-    # Load the interpolated data from the previous run saved at final_day.csv
-    final_day_old = np.loadtxt("final_day.csv", delimiter=',', skiprows=1)
+    # # Load the interpolated data from the previous run saved at final_day.csv
+    # final_day_old = np.loadtxt("final_day.csv", delimiter=',', skiprows=1)
 
-    # Now plot the difference, as well as the results from the previous run saved at thermprojrs_interpolated.csv
-    fig5 = plt.figure()
-    plt.plot(x_original, final_day_temperatures[0] - thermprojrs_interpolated, label='This model')
-    # plt.plot(x_original, final_day_old[:, 1] - thermprojrs_interpolated, label='Previous run')
-    plt.xlabel('Rotation angle (rad)')
-    plt.ylabel('Temperature difference (K)')
-    plt.title('Temperature difference between this model and Thermprojrs for facet')
-    plt.legend()
-    plt.show()
+    # # Now plot the difference, as well as the results from the previous run saved at thermprojrs_interpolated.csv
+    # fig5 = plt.figure()
+    # plt.plot(x_original, final_day_temperatures[0] - thermprojrs_interpolated, label='This model')
+    # # plt.plot(x_original, final_day_old[:, 1] - thermprojrs_interpolated, label='Previous run')
+    # plt.xlabel('Rotation angle (rad)')
+    # plt.ylabel('Temperature difference (K)')
+    # plt.title('Temperature difference between this model and Thermprojrs for facet')
+    # plt.legend()
+    # plt.show()
 
     # Save the interpolated data to a CSV file
     np.savetxt("final_day.csv", np.column_stack((x_original, final_day_temperatures[0])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
