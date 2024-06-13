@@ -1,0 +1,179 @@
+THERMPROJRS
+
+This is a 1-dimensional numerical thermal model, written in IDL, that
+calculates surface and subsurface temperatures on a rotating body as a
+function of local time.  Documentation of the basic model can be found
+in the appendix of Spencer et al. 1989, Icarus 78, 337-354, though
+other people have developed similar thermal models before and since.
+
+You are welcome to use this model for your own research, but please
+acknowledge the source in any resulting publications, and include a
+reference to the above paper.  Thanks!
+
+SPECIAL CAPABILITIES (OPTIONAL):
+ o Depth-dependent thermophysical parameters 
+ o Eclipses
+ o Endogenic heat flow
+ o Subsurface penetration of sunlight (solid-state greenhouse)
+ o Cooling by sublimation of various volatiles
+ o Arbitrary time variation of insolation (new in April 2006)
+
+LIMITATIONS
+ o No temperature-dependent thermophysical parameters
+ o Just calculates diurnal, not seasonal, temperatures
+ o Sublimation cooling is comet-like: no re-condensation of volatiles
+ o Thermal radiation from the surface only
+
+KNOWN BUGS
+ o Solid-state greenhouse calculation may be buggy: 
+   calculated diurnal profiles are different from 
+   those published by Urquhart and Jakosky 1996, JGR 101, 
+   21169-21176
+
+THERMOPHYSICAL PARAMETERS
+
+erg-cgs units are used throughout, except that the heat flows in the
+thermal balance reports are in W m-2, as this is the unit typically
+used for measuring Io's heat flow.
+
+Diurnal surface temperature variations are controlled by the thermal
+inertia, sqrt((thermal conductivity)*(density)*(heat capacity)), not
+by these parameters individually.  However, the length scale of the
+subsurface temperature variations is determined by the skindepth,
+which combines these quantities differently: sqrt((thermal
+conductivity)/((angular velocity of rotation)*(density)*(specific
+heat))).  Thermal inertia thus does not uniquely determine the
+skindepth.  If only the thermal inertia is specified in the model, a
+default specific heat and density are assumed in order to calculate
+the skindepth and thus the depth scale of the model, though the
+surface temperature profile does not depend on the values chosen
+unless other parameters are specificed that explicitly specify the
+vertical length scale of the model, such as the sunlight penetration
+depth SUNDEPTH or the slab depth array ZARR.
+
+Thermal conductivity is not specified directly, but is derived from
+the thermal inertia and the assumed or specified density and specific
+heat.
+
+NUMERICAL STABILITY
+
+Sufficiently high spatial resolution (number and thickness of
+subsurface slabs) is required for accurate results.  However, if a
+slab is so thin that its heat content can change, due to conduction or
+radiation, by a large fraction of its total heat content in one
+timestep, the model becomes numerically unstable and either crashes or
+gives obviously inaccurate results.  The conductive and radiative
+stability criteria are reported when the model starts: each should be
+less than 0.5.  Stability can be increased by increasing the number of
+timesteps per rotation, NTINC.
+
+Parameters such as the number and thickness of subsurface slabs, and
+the number of timesteps per rotation, have default values that give
+accurate and stable results in most situations for vertically
+homogeneous models.  For situations with minimal diurnal temperature
+variation (high thermal inertias, low temperatures, and/or rapid
+rotation), the model can be speeded up by decreasing NTINC, or a
+higher value of NTINC can be specified to avoid numerical instability
+for very large diurnal variability.
+
+Note that the top slab is by default half the thickness of deeper slabs.
+This is because the model tracks temperature at the center of each slab,
+except for the surface temperature which by definition has to be the
+temperature at the TOP of the slab.
+
+DEPTH-DEPENDENT PARAMETERS
+
+It is possible to specify depth-dependent thermophysical parameters by
+providing a 1-D array of thermal inertias, densities, and slab depths
+ZARR.  You then need to make sure the slabs are thin enough at each
+depth for numerical stability: if you have a low thermal inertia layer
+over a high thermal inertia layer you'll probably need thinner slabs
+in the top layer than the bottom layer.  See the example below.
+
+THERMAL BALANCE
+
+One idiosyncrasy of the model is that it assumes a conducting lower
+boundary, whose temperature must be determined accurately in order to
+achieve good thermal balance.  Models that assume an insulating lower
+boundary do not have this problem, though the conducting boundary
+makes it easy for the model to add endogenic heat flow by increasing
+the lower boundary temperature.  Thermal balance is achieved by
+running the model several times (controlled by NRUN), tweaking the
+deep temperature as necessary- the deep temperature is reduced if the
+diurnal mean radiation from the surface, minus any required endogenic
+heat flow, is more than the mean absorbed insolation, and vice versa.
+Adequate convergence is usually obtained in 2 - 4 runs, but to improve
+convergence in difficult cases, the degree of tweaking per run can be
+adjusted using the CORRFACTOR parameter.  See the example below.
+
+The model reports the quality of the thermal balance at the end of
+each run.  For zero endogenic heat flow and zero subsurface
+penetration of sunlight (i.e., no solid-state greenhouse), thermal
+balance is achieved when the deep temperature equals the mean surface
+temperature.  However, large variations in deep temperature generally
+produce only small variations in surface temperature- the "Total
+energy in/out" value is a better guide to the accuracy of the results
+than the surface/deep temperature discrepancy.
+
+EXAMPLES:
+
+Simple homogeneous model:
+
+   thermprojrs,tsurf,tod,rhel=9.0,alb=0.5,rot=10.0,emvty=0.9,ti=1e4
+   plot,tod/!dtor,tsurf
+
+Depth-dependent parameters: low-thermal-inertia layer over
+high-thermal-inertia layer.  Time resolution (NTINC) is increased over
+default value to maintain numerical stability:
+
+   tiarr=[1e4+indgen(5),1e5+indgen(20)]
+   zarr=[0.02*(1+indgen(5)),1+0.1*(1+indgen(20))]
+   thermprojrs,tsurf,tod,rhel=9.0,alb=0.5,rot=10.0,emvty=0.9,ti=tiarr,zarr=zarr,ntinc=10000
+   plot,tod/!dtor,tsurf
+
+Use of CORRFAC to improve thermal balance convergence in the case of a
+solid-state greenhouse model:
+
+   Poor convergence:
+
+      thermprojrs,tsurf,tod,rhel=9.0,alb=0.5,rot=10.0,emvty=0.9,ti=1e4,sundepth=0.2,nrun=5
+      ...
+      Energy Conservation Report at end of each run:
+              Mean       Mean      Total  Net Power  Mean
+            Power In   Power Out  Energy     Out     Surf.  Deep
+       Run    W m-2      W m-2    In/Out    W m-2    Temp.  Temp.
+      -----------------------------------------------------------
+         0  2.700e+00  2.450e+00  0.9075 -2.498e-01  79.73 108.12
+         1  2.700e+00  2.457e+00  0.9101 -2.427e-01  79.81 109.71
+         2  2.700e+00  2.465e+00  0.9131 -2.346e-01  79.90 111.48
+         3  2.700e+00  2.473e+00  0.9161 -2.264e-01  79.99 113.28
+         4  2.700e+00  2.482e+00  0.9192 -2.182e-01  80.08 115.08
+
+   Convergence improved:
+
+      thermprojrs,tsurf,tod,rhel=9.0,alb=0.5,rot=10.0,emvty=0.9,ti=1e4,sundepth=0.2,nrun=5,corrfac=6
+      ... 
+      Energy Conservation Report at end of each run:
+              Mean       Mean      Total  Net Power  Mean
+            Power In   Power Out  Energy     Out     Surf.  Deep
+       Run    W m-2      W m-2    In/Out    W m-2    Temp.  Temp.
+      -----------------------------------------------------------
+         0  2.700e+00  2.450e+00  0.9075 -2.498e-01  79.73 108.12
+         1  2.700e+00  2.574e+00  0.9533 -1.261e-01  81.06 135.35
+         2  2.700e+00  2.669e+00  0.9885 -3.094e-02  82.02 156.25
+         3  2.700e+00  2.697e+00  0.9989 -2.952e-03  82.30 162.38
+         4  2.700e+00  2.700e+00  1.0000  1.979e-05  82.33 163.03
+
+--------------
+For the latest version, see
+http://www.boulder.swri.edu/~spencer/thermprojrs/
+
+Report bugs or suggestions for improvements to:
+
+John Spencer
+Southwest Research Institute
+1050 Walnut St., Suite 400
+Boulder, CO 80302
+spencer@boulder.swri.edu
+
+Last modified April 11th 2006
