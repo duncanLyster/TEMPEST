@@ -12,6 +12,7 @@
     "sunlight_direction": [1, 0, 0],
     "rotation_period_hours": 12.0,
     "max_days": 10,
+    "min_days": 2,
     "convergence_target": 1,
     "ra_degrees": 0,
     "dec_degrees": 90

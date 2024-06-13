@@ -1,0 +1,12 @@
+# Ignore Python bytecode files
+__pycache__/
+
+# Output and temporary files
+outputs/
+*.pyc
+
+# Notebooks and debugging
+debugging/
+verification/
+superseded/
+Bennu_Testing/
