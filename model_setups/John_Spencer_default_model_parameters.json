@@ -1,0 +1,19 @@
+{
+    "emissivity": 0.9,
+    "albedo": 0.5,
+    "deep_temperature": 20,
+    "thermal_conductivity": 6.67e-5,
+    "density": 1000.0,
+    "specific_heat_capacity": 1500.0,
+    "beaming_factor": 1.0,
+    "n_layers": 45,
+    "solar_distance_au": 9.0,
+    "solar_luminosity": 3.86420167e+26,
+    "sunlight_direction": [1, 0, 0],
+    "rotation_period_hours": 240.0,
+    "max_days": 100,
+    "min_days": 2,
+    "convergence_target": 0.01,
+    "ra_degrees": 0,
+    "dec_degrees": 90
+}
