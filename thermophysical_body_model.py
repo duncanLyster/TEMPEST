@@ -63,7 +63,9 @@ from animate_temperature_distribution import animate_temperature_distribution
 from plot_temperature_distribution import plot_temperature_distribution
 from nice_gif import nice_gif
 from animate_shadowing import animate_shadowing
+from animate_model import animate_model
 from numba import jit, types
+from joblib import Parallel, delayed
 from stl import mesh
 from tqdm import tqdm
 from typing import Tuple
@@ -208,56 +210,15 @@ def calculate_visible_facets(positions, normals):
     return visible_indices
 
 @jit(nopython=True)
-def does_triangle_intersect_line(line_start, line_direction, triangle_vertices):
+def calculate_shadowing(ray_origin, ray_direction, shape_model_vertices, facet_indices):
     '''
-    This function implements the Möller–Trumbore intersection algorithm to determine whether a triangle intersects a line. It returns True if the triangle intersects the line, and False if it does not.
-    THESIS: Reference https://dl.acm.org/doi/abs/10.1145/1198555.1198746 
-    '''
-
-    # Check inputs
-    if len(line_start) != 3 or len(line_direction) != 3:
-        raise ValueError("The line start and direction must be 3D vectors.")
-    if len(triangle_vertices) != 3:
-        raise ValueError("The triangle must have three vertices.")
-    # Check if line_direction is a unit vector
-    if not np.isclose(np.linalg.norm(line_direction), 1, atol=1e-8):
-        raise ValueError("The line direction must be a unit vector.")
-
-    vertex0, vertex1, vertex2 = triangle_vertices
-    edge1 = vertex1 - vertex0
-    edge2 = vertex2 - vertex0
-    h = np.cross(line_direction, edge2)
-    a = np.dot(edge1, h)
-    f = 1 / a
-    s = line_start - vertex0
-    u = f * np.dot(s, h)
-    if u < 0 or u > 1:
-        return False # No intersection
-    q = np.cross(s, edge1)
-    v = f * np.dot(line_direction, q)
-    if v < 0 or u + v > 1:
-        return False # No intersection
-    t = f * np.dot(edge2, q)
-    if t > 0:
-        return True # Intersection
-    else:
-        return False # No intersection
-
-def calculate_shadowing(facet_position, sunlight_direction, shape_model, facet_indices):
-    '''
-    This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to does_triangle_intersect_line which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
+    This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to rays_triangles_intersections which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
     
     It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not.
     '''
 
-    # Ensure ray_origin is a single 3D point
-    ray_origin = np.array(facet_position)
-
-    # Ensure ray_direction is wrapped in an array to form (n, 3) even though n=1 here
-    ray_direction = np.array([sunlight_direction])  # n=1, 3
-
     # Ensure triangles_vertices is an array of shape (m, 3, 3)
-    triangles_vertices = np.array([shape_model[idx].vertices for idx in facet_indices])
+    triangles_vertices = shape_model_vertices[facet_indices]
 
     # Call the intersection function
     intersections, t_values = rays_triangles_intersection(
@@ -269,14 +230,6 @@ def calculate_shadowing(facet_position, sunlight_direction, shape_model, facet_i
     # Check for any intersection
     if intersections.any():
         return 0  # The facet is in shadow
-
-    # for facet_index in facet_indices:
-    #     facet = shape_model[facet_index] # Get the visible facet
-
-    #     vertices_np = np.array(facet.vertices)
-
-    #     if does_triangle_intersect_line(facet_position, sunlight_direction, vertices_np):
-    #         return 0 # The facet is in shadow
         
     return 1 # The facet is not in shadow
 
@@ -389,79 +342,83 @@ def calculate_rotation_matrix(axis, theta):
 def calculate_insolation(shape_model, simulation):
     ''' 
     This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
+
+    NOTE: This could be done as the model runs rather than saving at the start to reduce storage in RAM. Would applying rotation matrix to the entire shape model be faster than applying it to each facet? Or don't use the rotation matrix at all and just work out the geometry of the insolation at each timestep?
     '''
     # Initialize insolation array with zeros for all facets and timesteps
     insolation_array = np.zeros((len(shape_model), simulation.timesteps_per_day))
 
-    # Calculate the zenith angle (angle between the sun and the normal vector of the facet) for each facet at every timestep for one full rotation of the body 
-    for facet in tqdm(shape_model, desc="Calculating insolation"):
+    # Precompute rotation matrices and rotated sunlight directions
+    rotation_matrices = np.zeros((simulation.timesteps_per_day, 3, 3))
+    rotated_sunlight_directions = np.zeros((simulation.timesteps_per_day, 3))
+
+    for t in range(simulation.timesteps_per_day):
+        rotation_matrix = calculate_rotation_matrix(simulation.rotation_axis, (2 * np.pi / simulation.timesteps_per_day) * t)
+        rotation_matrices[t] = rotation_matrix
+        
+        rotated_sunlight_direction = np.dot(rotation_matrix.T, simulation.sunlight_direction)
+        rotated_sunlight_direction /= np.linalg.norm(rotated_sunlight_direction)
+        rotated_sunlight_directions[t] = rotated_sunlight_direction
+
+    sunlight_direction_norm = np.linalg.norm(simulation.sunlight_direction)
+
+    shape_model_vertices = np.array([facet.vertices for facet in shape_model])
+    
+    for i, facet in enumerate(tqdm(shape_model, desc="Calculating insolation")):
+        normal = facet.normal
+        
         for t in range(simulation.timesteps_per_day):
-            # Normal vector of the facet at time t=0
-            normal = facet.normal
-            rotation_matrix = calculate_rotation_matrix(simulation.rotation_axis, (2 * np.pi / simulation.timesteps_per_day) * t)
+            new_normal = np.dot(rotation_matrices[t], normal)
+            new_normal_norm = np.linalg.norm(new_normal)  # Precompute new normal vector norm
+            sun_dot_normal = np.dot(simulation.sunlight_direction, new_normal)
+            
+            # Precompute cosine of zenith angle
+            cos_zenith_angle = sun_dot_normal / (sunlight_direction_norm * new_normal_norm)
+            
+            # Zenith angle calculation
+            if cos_zenith_angle > 0:
+                illumination_factor = 1  # Default to no shadowing
 
-            new_normal = np.dot(rotation_matrix, normal)
-
-            # Calculate the rotated sunlight direction from the body's fixed reference frame (NB rotation matrix is transposed as this is for rotation of the sunlight direction not the body)
-            rotated_sunlight_direction = np.dot(rotation_matrix.T, simulation.sunlight_direction)
-
-            # Normalize the rotated sunlight direction to ensure it is a unit vector
-            rotated_sunlight_direction /= np.linalg.norm(rotated_sunlight_direction)
-
-            # Calculate zenith angle
-            zenith_angle = np.arccos(np.dot(simulation.sunlight_direction, new_normal) / (np.linalg.norm(simulation.sunlight_direction) * np.linalg.norm(new_normal)))
-
-            #  Elimate angles where the sun is below the horizon
-            if zenith_angle > np.pi / 2:
-                insolation = 0
-
-            else:
-                # Calculate illumination factor, pass facet position, sunlight direction, shape model and rotation information (rotation axis, rotation period, timesteps per day, delta t, t)
-                
-                # Check if the facet has visible facets
                 if len(facet.visible_facets) != 0:
-                    illumination_factor = calculate_shadowing(facet.position, rotated_sunlight_direction, shape_model, facet.visible_facets)
-                    
-                else:
-                    illumination_factor = 1 # No shadowing
-
-                # Calculate insolation converting AU to m
-                insolation = simulation.solar_luminosity * (1 - simulation.albedo) * illumination_factor * np.cos(zenith_angle) / (4 * np.pi * simulation.solar_distance_m**2) 
+                    illumination_factor = calculate_shadowing(np.array(facet.position), np.array([rotated_sunlight_directions[t]]), shape_model_vertices, facet.visible_facets)
                 
-            # Write the insolation value to the insolation array for this facet at time t
+                # Calculate insolation
+                insolation = simulation.solar_luminosity * (1 - simulation.albedo) * illumination_factor * cos_zenith_angle / (4 * np.pi * simulation.solar_distance_m**2)
+            else:
+                insolation = 0
+            
+            insolation_array[i][t] = insolation
             facet.insolation[t] = insolation
-
-            insolation_array[shape_model.index(facet)][t] = insolation
 
     return shape_model, insolation_array
 
-def calculate_initial_temperatures(shape_model, n_layers, emissivity, deep_temperature):
+def calculate_initial_temperatures(shape_model, n_layers, emissivity, n_jobs=-1):
     ''' 
     This function calculates the initial temperature of each facet and sub-surface layer of the body based on the insolation curve for that facet. It writes the initial temperatures to the data cube.
     '''
     # Stefan-Boltzmann constant
     sigma = 5.67e-8
 
-    # Calculate initial temperature for each facet
-    for facet in shape_model:
+    # Define the facet processing function inside the main function
+    def process_facet(insolation, n_layers, emissivity, sigma):
         # Calculate the initial temperature based on average power in
-        power_in = np.mean(facet.insolation)
+        power_in = np.mean(insolation)
         # Calculate the temperature of the facet using the Stefan-Boltzmann law
         calculated_temp = (power_in / (emissivity * sigma))**(1/4)
 
-        # Check if calculated temperature is below the deep_temperature
-        if calculated_temp < deep_temperature:
-            # Create a linear gradient from calculated_temp at the surface to deep_temperature at the deepest layer
-            temperatures = np.linspace(calculated_temp, deep_temperature, n_layers)
-        else:
-            # Set all layers to the calculated temperature if it's not below deep_temperature
-            temperatures = np.full(n_layers, calculated_temp)
+        # Return the calculated temperature for all layers
+        return np.full(n_layers, calculated_temp)
 
-        # Assign the calculated temperatures to the facet's temperature array
-        facet.temperature[0] = temperatures
+    # Parallel processing of facets
+    results = Parallel(n_jobs=n_jobs)(delayed(process_facet)(facet.insolation, n_layers, emissivity, sigma) for facet in tqdm(shape_model, desc="Calculating initial temperatures"))
 
-        # Set lowest layer as calculated for the full run
-        facet.temperature[1:] = calculated_temp
+    print(f"Initial temperatures calculated for {len(shape_model)} facets.")
+
+    # Update the original shape_model with the results NOTE: This step is causing the crash for large shape models. 
+    for facet, temperature in zip(shape_model, results):
+        facet.temperature[:] = temperature
+
+    print("Initial temperatures saved for all facets.")
 
     return shape_model
 
@@ -515,8 +472,6 @@ def thermophysical_body_model(shape_model, simulation):
     const1 = simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
     const2 = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
     const3 = simulation.thermal_diffusivity * simulation.delta_t / simulation.layer_thickness**2
-
-    print(f"Const 3 is {const3}")
 
     # Proceed to iterate the model until it converges as long as the maximum number of days has not been reached, ensuring the minimum number of days is observed
     while day < simulation.max_days and (day < simulation.min_days or mean_temperature_error > simulation.convergence_target):
@@ -677,7 +632,7 @@ def main():
     '''
 
     # Shape model name
-    shape_model_name = "1D.stl"
+    shape_model_name = "67P_not_to_scale_1666_facets.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
@@ -704,27 +659,46 @@ def main():
 
     shape_model, insolation_array = calculate_insolation(shape_model, simulation)
 
-    # # Visualise the shadowing across the shape model
-    # print(f"Preparing shadowing visualisation.\n")
-    # animate_shadowing(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
+    ################ PLOTTING ################
+    plot_shadowing = True
+    plot_insolation_curve = False
+    plot_initial_temp_histogram = False
+    plot_final_day_temp_distribution = False
+    plot_final_day_all_layers_temp_distribution = False
+    plot_all_days_all_layers_temp_distribution = False
+    plot_energy_terms = False
+    plot_temp_distribution_for_final_day = False
+    animate_final_day_temp_distribution = True
+    animate_final_day_temp_distribution_display = False
+    plot_final_day_comparison = False
 
-    # # Plot the insolation curve for a single facet with number of days on the x-axis
-    # plt.plot(shape_model[0].insolation)
-    # plt.xlabel('Number of timesteps')
-    # plt.ylabel('Insolation (W/m^2)')
-    # plt.title('Insolation curve for a single facet for one full rotation of the body')
-    # plt.show()
+    facet_index = 0 # Index of facet to plot
+
+    if plot_shadowing:
+        print(f"Preparing shadowing visualisation.\n")
+        # animate_shadowing(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
+
+        animate_model(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='binary_r', plot_title='Shadowing on the body', axis_label='Insolation (W/m^2)', animation_frames=100, save_animation=True, save_animation_name='shadowing_animation.gif', background_colour = 'white')
+
+    if plot_insolation_curve:
+        fig_insolation = plt.figure()
+        plt.plot(shape_model[facet_index].insolation)
+        plt.xlabel('Number of timesteps')
+        plt.ylabel('Insolation (W/m^2)')
+        plt.title('Insolation curve for a single facet for one full rotation of the body')
+        fig_insolation.show()
 
     print(f"Calculating initial temperatures.\n")
-    shape_model = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity, simulation.deep_temperature)
+    shape_model = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity)
 
-    # # Plot a histogram of the initial temperatures for all facets
-    # initial_temperatures = [facet.temperature[0][0] for facet in shape_model]
-    # plt.hist(initial_temperatures, bins=20)
-    # plt.xlabel('Initial temperature (K)')
-    # plt.ylabel('Number of facets')
-    # plt.title('Initial temperature distribution of all facets')
-    # plt.show()
+    if plot_initial_temp_histogram:
+        fig_histogram = plt.figure()
+        initial_temperatures = [facet.temperature[0][0] for facet in shape_model]
+        plt.hist(initial_temperatures, bins=20)
+        plt.xlabel('Initial temperature (K)')
+        plt.ylabel('Number of facets')
+        plt.title('Initial temperature distribution of all facets')
+        fig_histogram.show()
 
     print(f"Calculating secondary radiation coefficients.\n")
     shape_model = calculate_secondary_radiation_coefficients(shape_model)
@@ -737,103 +711,94 @@ def main():
     print(f"Convergence target achieved after {day} days.\n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
     print(f"Execution time: {execution_time} seconds")
 
-    # temperature_min = np.min(final_timestep_temperatures)
-    # temperature_max = np.max(final_timestep_temperatures)
+    if plot_final_day_temp_distribution:
+        fig_final_temp_dist = plt.figure()
+        plt.plot(final_day_temperatures[facet_index])
+        plt.xlabel('Timestep')
+        plt.ylabel('Temperature (K)')
+        plt.title('Final day temperature distribution for all facets')
+        fig_final_temp_dist.show()
 
-    # # Plot the final day's temperature distribution for the surface layer in facet 4
-    # plt.plot(final_day_temperatures[4])
-    # plt.xlabel('Timestep')
-    # plt.ylabel('Temperature (K)')
-    # plt.title('Final day temperature distribution for all facets')
-    # plt.show()
+    if plot_final_day_all_layers_temp_distribution:
+        fig_final_all_layers_temp_dist = plt.figure()
+        plt.plot(final_day_temperatures_all_layers[facet_index])
+        plt.xlabel('Timestep')
+        plt.ylabel('Temperature (K)')
+        plt.title('Final day temperature distribution for all layers in facet')
+        fig_final_all_layers_temp_dist.show()
 
-    # # Plot the final day's temperature distribution for all layers in facet 4
-    # plt.plot(final_day_temperatures_all_layers[4])
-    # plt.xlabel('Timestep')
-    # plt.ylabel('Temperature (K)')
-    # plt.title('Final day temperature distribution for all layers in facet 4')
-    # plt.show()
+    if plot_all_days_all_layers_temp_distribution:
+        fig_all_days_all_layers_temp_dist = plt.figure()
+        plt.plot(shape_model[facet_index].temperature[:(day) * simulation.timesteps_per_day, :])
+        plt.xlabel('Timestep')
+        plt.ylabel('Temperature (K)')
+        plt.title('Temperature distribution for all layers in facet for the full run')
+        fig_all_days_all_layers_temp_dist.show()
 
-    # Plot the temperature distribution for all layers in facet 4 for the whole run
-    fig1 = plt.figure()
-    plt.plot(shape_model[0].temperature[:(day) * simulation.timesteps_per_day, :])
-    plt.xlabel('Timestep')
-    plt.ylabel('Temperature (K)')
-    plt.title('Temperature distribution for all layers in facet for the full run')
-    fig1.show()
+    if plot_energy_terms:
+        fig_energy_terms = plt.figure()
+        plt.plot(shape_model[facet_index].unphysical_energy_loss[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Unphysical energy loss')
+        plt.plot(shape_model[facet_index].insolation_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Insolation energy')
+        plt.plot(shape_model[facet_index].re_emitted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Re-emitted energy')
+        plt.plot(-shape_model[facet_index].surface_energy_change[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Surface energy change')
+        plt.plot(shape_model[facet_index].conducted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Conducted energy')
+        plt.legend()
+        plt.xlabel('Timestep')
+        plt.ylabel('Energy (J)')
+        plt.title('Energy terms for facet for the final day')
+        fig_energy_terms.show()
 
-    # # Plot the unphysical energy loss, surface energy change, insolation energy, re-emitted energy, and conducted energy for facet 4 for the final day
-    # fig2 = plt.figure()
-    # plt.plot(shape_model[0].unphysical_energy_loss[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Unphysical energy loss')
-    # plt.plot(shape_model[0].insolation_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Insolation energy')
-    # plt.plot(shape_model[0].re_emitted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Re-emitted energy')
-    # plt.plot(-shape_model[0].surface_energy_change[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Surface energy change')
-    # plt.plot(shape_model[0].conducted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Conducted energy')
-    # plt.legend()
-    # plt.xlabel('Timestep')
-    # plt.ylabel('Energy (J)')
-    # plt.title('Energy terms for facet for the final day')
-    # fig2.show()
+    if plot_temp_distribution_for_final_day:
+        fig_final_day_temps = plt.figure()
+        plt.plot(shape_model[facet_index].temperature[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day])
+        plt.xlabel('Timestep')
+        plt.ylabel('Temperature (K)')
+        plt.title('Temperature distribution for all layers in facet for the full run')
+        fig_final_day_temps.show()
 
-    # # Plot the temperature distribution for all layers for the final day only 
-    # fig3 = plt.figure()
-    # plt.plot(shape_model[0].temperature[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day])
-    # plt.xlabel('Timestep')
-    # plt.ylabel('Temperature (K)')
-    # plt.title('Temperature distribution for all layers in facet for the full run')
-    # fig3.show()
+    if animate_final_day_temp_distribution:
+        print(f"Preparing temperature animation.\n")
+        animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
 
-    # # Visualise the results - animation of final day's temperature distribution
-    # print(f"Preparing temperature animation.\n")
-    # animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
 
-    # Visualise the results - animation of final day's temperature distribution
-    print(f"Preparing beautiful temperature animation.\n")
-    nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
+    if animate_final_day_temp_distribution_display:
+        print(f"Preparing temperature animation for display.\n")
+        nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
-    # # Save the final day temperatures for facet 4 to a CSV file with two columns, rotation angle (rad) then temperature
-    # print(f"Saving final day temperatures for facet 4 to CSV file.\n")
-    # np.savetxt("final_day_temperatures.csv", np.column_stack((np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[4])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
+    if plot_final_day_comparison:
+        print(f"Saving final day temperatures for facet to CSV file.\n")
+        np.savetxt("final_day_temperatures.csv", np.column_stack((np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
-    # # Save to a new folder the shape model, model parameters, and final timestep temperatures (1 temp per facet)
-    # print(f"Saving folder with final timestep temperatures.\n")
-    # export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, final_day_temperatures[:, -1])
+        print(f"Saving folder with final timestep temperatures.\n")
+        export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, final_day_temperatures[:, -1])
 
-    # # Load the temperature profiles from the CSV file
-    # thermprojrs_data = np.loadtxt("final_output_data.csv", delimiter=',', skiprows=1)
+        thermprojrs_data = np.loadtxt("thermprojrs_data.csv", delimiter=',', skiprows=1)
 
-    # # Plot the final day temperatures against the rotation angle next to the same info from Thermprojrs
-    # fig4 = plt.figure()
-    # plt.plot(thermprojrs_data[:, 0], thermprojrs_data[:, 1], label='Thermprojrs')
-    # plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[0], label='This model')
-    # plt.xlabel('Rotation angle (rad)')
-    # plt.ylabel('Temperature (K)')
-    # plt.title('Final day temperature distribution for facet')
-    # plt.legend()
-    # fig4.show()
+        fig_model_comparison = plt.figure()
+        plt.plot(thermprojrs_data[:, 0], thermprojrs_data[:, 1], label='Thermprojrs')
+        plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[facet_index], label='This model')
+        plt.xlabel('Rotation angle (rad)')
+        plt.ylabel('Temperature (K)')
+        plt.title('Final day temperature distribution for facet')
+        plt.legend()
+        fig_model_comparison.show()
 
-    # x_original = np.linspace(0, 2 * np.pi, simulation.timesteps_per_day)
-    # x_new = np.linspace(0, 2 * np.pi, thermprojrs_data.shape[0])
+        x_original = np.linspace(0, 2 * np.pi, simulation.timesteps_per_day)
+        x_new = np.linspace(0, 2 * np.pi, thermprojrs_data.shape[facet_index])
 
-    # # Interpolate thermprojrs_data to match the length of final_day_temperatures[4]
-    # interp_func = interp1d(x_new, thermprojrs_data[:, 1], kind='linear')
-    # thermprojrs_interpolated = interp_func(x_original)
+        interp_func = interp1d(x_new, thermprojrs_data[:, 1], kind='linear')
+        thermprojrs_interpolated = interp_func(x_original)
 
-    # # Load the interpolated data from the previous run saved at final_day.csv
-    # final_day_old = np.loadtxt("final_day.csv", delimiter=',', skiprows=1)
+        fig_model_difference = plt.figure()
+        plt.plot(x_original, final_day_temperatures[facet_index] - thermprojrs_interpolated, label='This model')
+        plt.xlabel('Rotation angle (rad)')
+        plt.ylabel('Temperature difference (K)')
+        plt.title('Temperature difference between this model and Thermprojrs for facet')
+        plt.legend()
+        plt.show()
 
-    # # Now plot the difference, as well as the results from the previous run saved at thermprojrs_interpolated.csv
-    # fig5 = plt.figure()
-    # plt.plot(x_original, final_day_temperatures[0] - thermprojrs_interpolated, label='This model')
-    # # plt.plot(x_original, final_day_old[:, 1] - thermprojrs_interpolated, label='Previous run')
-    # plt.xlabel('Rotation angle (rad)')
-    # plt.ylabel('Temperature difference (K)')
-    # plt.title('Temperature difference between this model and Thermprojrs for facet')
-    # plt.legend()
-    # plt.show()
+        np.savetxt("final_day.csv", np.column_stack((x_original, final_day_temperatures[facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
-    # Save the interpolated data to a CSV file
-    np.savetxt("final_day.csv", np.column_stack((x_original, final_day_temperatures[0])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
     print(f"Model run complete.\n")
 
