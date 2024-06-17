@@ -632,7 +632,7 @@ def main():
     '''
 
     # Shape model name
-    shape_model_name = "67P_not_to_scale_1666_facets.stl"
+    shape_model_name = "67P_not_to_scale_low_res.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
@@ -758,7 +758,9 @@ def main():
 
     if animate_final_day_temp_distribution:
         print(f"Preparing temperature animation.\n")
-        animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
+        #animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
+
+        animate_model(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Temperature distribution on the body', axis_label='Temperature (K)', animation_frames=200, save_animation=False, save_animation_name='temperature_animation.gif', background_colour = 'black')
 
 
     if animate_final_day_temp_distribution_display:

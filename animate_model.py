@@ -16,6 +16,7 @@ import numpy as np
 import pyvista as pv
 from stl import mesh
 import time
+import vtk
 
 # Global variables to control the animation state
 is_paused = False
@@ -54,18 +55,29 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     pv_mesh = pv.PolyData(vertices, faces)
     pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
 
+    # Determine text color based on background color
+    text_color = 'white' if background_colour=='black' else 'black' 
+    bar_color = (1, 1, 1) if background_colour=='black' else (0, 0, 0)
+
     # Create a Plotter object
     plotter = pv.Plotter()
     plotter.add_key_event('space', on_press)
     plotter.iren.initialize()
 
     # Add the text to the window
-    plotter.add_text("Press spacebar to pause", position='lower_edge', font_size=10)
+    plotter.add_text("Press spacebar to pause", position='lower_edge', font_size=10, color=text_color)
 
     # Add the mesh to the plotter
-    mesh_actor = plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=True)
+    mesh_actor = plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False)
 
-    plotter.add_text(plot_title, position='upper_edge', font_size=12)
+
+    # Scale bar properties
+    plotter.scalar_bar.GetLabelTextProperty().SetColor(bar_color)
+
+    plotter.scalar_bar.SetPosition(0.2, 0.05)  # Set the position of the bottom left corner of the scalar bar
+    plotter.scalar_bar.GetLabelTextProperty().SetJustificationToCentered()  # Center the labels
+
+    plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
     plotter.background_color = background_colour
 
     # Calculate the sampling interval
