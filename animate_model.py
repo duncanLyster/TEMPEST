@@ -21,10 +21,9 @@ import time
 is_paused = False
 current_frame = 0
 
-def on_press(event=None):
+def on_press():
     global is_paused
-    if event.key == ' ':
-        is_paused ^= True
+    is_paused = not is_paused
 
 def rotation_matrix(axis, theta):
     axis = np.asarray(axis)
@@ -53,16 +52,20 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     # Create a PyVista mesh
     pv_mesh = pv.PolyData(vertices, faces)
-    pv_mesh.cell_data['Insolation'] = plotted_variable_array[:, 0]
+    pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
 
     # Create a Plotter object
     plotter = pv.Plotter()
     plotter.add_key_event('space', on_press)
     plotter.iren.initialize()
 
+    # Add the text to the window
+    plotter.add_text("Press spacebar to pause", position='lower_edge', font_size=10)
+
     # Add the mesh to the plotter
-    mesh_actor = plotter.add_mesh(pv_mesh, scalars='Insolation', cmap=colour_map, show_edges=True)
-    plotter.add_text(plot_title, font_size=12)
+    mesh_actor = plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=True)
+
+    plotter.add_text(plot_title, position='upper_edge', font_size=12)
     plotter.background_color = background_colour
 
     # Calculate the sampling interval
@@ -82,7 +85,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
             rotated_vertices = np.dot(vertices, rot_mat.T)
 
             pv_mesh.points = rotated_vertices
-            pv_mesh.cell_data['Insolation'] = plotted_variable_array[:, current_frame % timesteps_per_day].copy()
+            pv_mesh.cell_data[axis_label] = plotted_variable_array[:, current_frame % timesteps_per_day].copy()
 
             plotter.render()
 
@@ -93,7 +96,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         picked_index = event.point_id
         if picked_index >= 0:
             print(f'Picked facet index: {picked_index}')
-            print(f'Facet insolation value: {pv_mesh.cell_data["Insolation"][picked_index]}')
+            print(f'Facet insolation value: {pv_mesh.cell_data[axis_label][picked_index]}')
 
     plotter.enable_point_picking(callback=on_pick, show_point=True, show_message=False)
 
@@ -106,5 +109,4 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     else:
         end_time = time.time()
         print(f'Animation took {end_time - start_time:.2f} seconds to run.')
-
         plotter.show(auto_close=False)

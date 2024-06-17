@@ -400,17 +400,17 @@ def calculate_initial_temperatures(shape_model, n_layers, emissivity, n_jobs=-1)
     sigma = 5.67e-8
 
     # Define the facet processing function inside the main function
-    def process_facet(insolation, n_layers, emissivity, sigma):
+    def process_facet(insolation, emissivity, sigma):
         # Calculate the initial temperature based on average power in
         power_in = np.mean(insolation)
         # Calculate the temperature of the facet using the Stefan-Boltzmann law
         calculated_temp = (power_in / (emissivity * sigma))**(1/4)
 
         # Return the calculated temperature for all layers
-        return np.full(n_layers, calculated_temp)
+        return calculated_temp
 
     # Parallel processing of facets
-    results = Parallel(n_jobs=n_jobs)(delayed(process_facet)(facet.insolation, n_layers, emissivity, sigma) for facet in tqdm(shape_model, desc="Calculating initial temperatures"))
+    results = Parallel(n_jobs=n_jobs)(delayed(process_facet)(facet.insolation, emissivity, sigma) for facet in shape_model)
 
     print(f"Initial temperatures calculated for {len(shape_model)} facets.")
 
