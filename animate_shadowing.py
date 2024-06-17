@@ -112,7 +112,6 @@ def animate_shadowing(path_to_shape_model_file, insolation_array, rotation_axis,
         for art in reversed(ax.collections):
             art.remove()
 
-
         poly_collection = art3d.Poly3DCollection(rotated_vertices, facecolors=face_colours, linewidths=0.5, edgecolors=face_colours, alpha=1.0) # picker=0.01)
 
         # Print poly_collection indices to check if the issue is with the picker NOTE: Could be an issue with z  sorting?
