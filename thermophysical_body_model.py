@@ -121,7 +121,7 @@ class Facet:
         # Initialize without knowing the shape model length
         self.visible_facets = None
         self.secondary_radiation_coefficients = None
-        self.temperature = np.zeros((timesteps_per_day * (max_days + 1), n_layers))
+        self.temperature = np.zeros((timesteps_per_day * (max_days + 1), n_layers)) # Can I change this to just keep temps for the last day?
         # self.unphysical_energy_loss = np.zeros(timesteps_per_day * (max_days + 1))
         # self.insolation_energy = np.zeros(timesteps_per_day * (max_days + 1))
         # self.re_emitted_energy = np.zeros(timesteps_per_day * (max_days + 1))
@@ -415,7 +415,9 @@ def calculate_initial_temperatures(shape_model, n_layers, emissivity, n_jobs=-1)
     print(f"Initial temperatures calculated for {len(shape_model)} facets.")
 
     # Update the original shape_model with the results NOTE: This step is causing the crash for large shape models. 
-    for facet, temperature in zip(shape_model, results):
+    # Print size of array about to be allocated
+
+    for facet, temperature in tqdm(zip(shape_model, results), total=len(shape_model), desc='Saving temps'):
         facet.temperature[:] = temperature
 
     print("Initial temperatures saved for all facets.")
@@ -669,7 +671,6 @@ def main():
     plot_energy_terms = False
     plot_temp_distribution_for_final_day = False
     animate_final_day_temp_distribution = True
-    animate_final_day_temp_distribution_display = False
     plot_final_day_comparison = False
 
     facet_index = 0 # Index of facet to plot
@@ -678,7 +679,7 @@ def main():
         print(f"Preparing shadowing visualisation.\n")
         # animate_shadowing(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
-        animate_model(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='binary_r', plot_title='Shadowing on the body', axis_label='Insolation (W/m^2)', animation_frames=200, save_animation=False, save_animation_name='shadowing_animation.gif', background_colour = 'white')
+        animate_model(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='binary_r', plot_title='Shadowing on the body', axis_label='Insolation (W/m^2)', animation_frames=200, save_animation=False, save_animation_name='shadowing_animation.gif', background_colour = 'black')
 
     if plot_insolation_curve:
         fig_insolation = plt.figure()
@@ -761,11 +762,6 @@ def main():
         #animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
 
         animate_model(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Temperature distribution on the body', axis_label='Temperature (K)', animation_frames=200, save_animation=False, save_animation_name='temperature_animation.gif', background_colour = 'black')
-
-
-    if animate_final_day_temp_distribution_display:
-        print(f"Preparing temperature animation for display.\n")
-        nice_gif(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
     if plot_final_day_comparison:
         print(f"Saving final day temperatures for facet to CSV file.\n")
