@@ -6,7 +6,6 @@ TODO:
 2) Fix BUG - plot window doesn't close when you hit x.
 3) Fix BUG - camera movement is jumpy when using arrow keys.
 4) Sort out colour scale bar values - should be more sensibly spaced.
-5) Fix BUG - segmentation fault second time you run the animation. This could be due to the plotter not being closed properly.
 
 NOTE: This is currently very slow when called from the main script for large shape models.
 '''
@@ -19,51 +18,55 @@ import time
 import math
 import matplotlib.pyplot as plt
 
-# Global variables to control the animation state
-is_paused = False
-current_frame = 0
+class AnimationState:
+    def __init__(self):
+        self.is_paused = False
+        self.current_frame = 0
+        self.camera_phi = np.pi / 2
+        self.camera_theta = np.pi / 2
+        self.selected_cells = []
+        self.fig, self.ax = None, None
 
-camera_phi = np.pi / 2  # Initial polar angle
-camera_theta = np.pi / 2  # Initial azimuthal angle
+# def on_press(state):
+#     state.is_paused = not state.is_paused
 
-selected_cells = None
-fig, ax = None, None  # Global variables for the matplotlib figure and axis
+   # Dealing with segmentation faults
+def on_press(state):
+    if state.is_paused:
+        state.is_paused = False
+    else:
+        state.is_paused = True
 
-def on_press():
-    global is_paused
-    is_paused = not is_paused
+    if state.fig is not None and state.ax is not None:
+        state.fig.canvas.draw()
+        state.fig.canvas.flush_events()
 
-def update_camera_position(plotter, camera_radius):
-    global camera_phi, camera_theta
+def update_camera_position(plotter, state, camera_radius):
     # Convert spherical coordinates to Cartesian coordinates
-    x = camera_radius * np.sin(camera_phi) * np.cos(camera_theta)
-    y = camera_radius * np.sin(camera_phi) * np.sin(camera_theta)
-    z = camera_radius * np.cos(camera_phi)
+    x = camera_radius * np.sin(state.camera_phi) * np.cos(state.camera_theta)
+    y = camera_radius * np.sin(state.camera_phi) * np.sin(state.camera_theta)
+    z = camera_radius * np.cos(state.camera_phi)
 
     plotter.camera_position = [(x, y, z), (0, 0, 0), (0, 0, 1)]
     # plotter.reset_camera()
     plotter.camera.view_angle = 30
     plotter.render()
 
-def move_up(plotter, camera_radius):
-    global camera_phi
-    camera_phi -= np.pi / 36  # Decrease polar angle
-    update_camera_position(plotter, camera_radius)
+def move_up(plotter, state, camera_radius):
+    state.camera_phi -= np.pi / 36  # Decrease polar angle
+    update_camera_position(plotter, state, camera_radius)
 
-def move_down(plotter, camera_radius):
-    global camera_phi
-    camera_phi += np.pi / 36  # Increase polar angle
-    update_camera_position(plotter, camera_radius)
+def move_down(plotter, state, camera_radius):
+    state.camera_phi += np.pi / 36  # Increase polar angle
+    update_camera_position(plotter, state, camera_radius)
 
-def move_left(plotter, camera_radius):
-    global camera_theta
-    camera_theta -= np.pi / 36  # Decrease azimuthal angle
-    update_camera_position(plotter, camera_radius)
+def move_left(plotter, state, camera_radius):
+    state.camera_theta -= np.pi / 36  # Decrease azimuthal angle
+    update_camera_position(plotter, state, camera_radius)
 
-def move_right(plotter, camera_radius):
-    global camera_theta
-    camera_theta += np.pi / 36  # Increase azimuthal angle
-    update_camera_position(plotter, camera_radius)
+def move_right(plotter, state, camera_radius):
+    state.camera_theta += np.pi / 36  # Increase azimuthal angle
+    update_camera_position(plotter, state, camera_radius)
 
 def round_up_to_nearest(x, base):
     return base * math.ceil(x / base)
@@ -85,14 +88,8 @@ def rotation_matrix(axis, theta):
 def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
                   timesteps_per_day, colour_map, plot_title, axis_label, animation_frames, 
                   save_animation, save_animation_name, background_colour):
-    global current_frame, selected_cells, fig, ax
 
-    if fig is not None:
-        plt.close(fig)
-
-    # Reset the selected cells and matplotlib figure/axis (remove these lines if you want to keep the selected cells and plot open after closing the animation window)
-    selected_cells = None
-    fig, ax = None, None
+    state = AnimationState()
 
     # Start timer
     start_time = time.time()
@@ -101,7 +98,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
     vertices = shape_mesh.points.reshape(-1, 3)
     faces = np.hstack([np.full((shape_mesh.vectors.shape[0], 1), 3), 
-                       np.arange(shape_mesh.vectors.shape[0] * 3).reshape(-1, 3)])
+                    np.arange(shape_mesh.vectors.shape[0] * 3).reshape(-1, 3)])
 
     # Create a PyVista mesh
     pv_mesh = pv.PolyData(vertices, faces)
@@ -118,14 +115,14 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     # Create a Plotter object
     plotter = pv.Plotter()
-    plotter.add_key_event('space', on_press)
-    plotter.add_key_event('Up', lambda: move_up(plotter, camera_radius))
-    plotter.add_key_event('Down', lambda: move_down(plotter, camera_radius))
-    plotter.add_key_event('Left', lambda: move_left(plotter, camera_radius))
-    plotter.add_key_event('Right', lambda: move_right(plotter, camera_radius))
+    plotter.add_key_event('space', lambda: on_press(state))
+    plotter.add_key_event('Up', lambda: move_up(plotter, state, camera_radius))
+    plotter.add_key_event('Down', lambda: move_down(plotter, state, camera_radius))
+    plotter.add_key_event('Left', lambda: move_left(plotter, state, camera_radius))
+    plotter.add_key_event('Right', lambda: move_right(plotter, state, camera_radius))
     plotter.iren.initialize()
 
-    update_camera_position(plotter, camera_radius)
+    update_camera_position(plotter, state, camera_radius)
 
     # Axis
     cylinder_start = np.array([0, 0, 0])
@@ -144,79 +141,58 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     # Add the text to the window
     plotter.add_text("Press spacebar to pause, right click to select a facet.", position='lower_edge', font_size=10, color=text_color)
 
-    def update(caller, event):
-        global current_frame
-        if not is_paused:
-            current_frame = (current_frame + sampling_interval) % timesteps_per_day
+    def update(caller, event, state):
+        if not state.is_paused:
+            state.current_frame = (state.current_frame + sampling_interval) % timesteps_per_day
 
-            if current_frame >= num_frames:
-                current_frame = 0
+            if state.current_frame >= num_frames:
+                state.current_frame = 0
 
-            theta = (2 * np.pi / timesteps_per_day) * current_frame
+            theta = (2 * np.pi / timesteps_per_day) * state.current_frame
             rot_mat = rotation_matrix(rotation_axis, theta)
             rotated_vertices = np.dot(vertices, rot_mat.T)
 
             pv_mesh.points = rotated_vertices
-            pv_mesh.cell_data[axis_label] = plotted_variable_array[:, current_frame % timesteps_per_day].copy()
+            pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame % timesteps_per_day].copy()
 
             plotter.render()
 
-    plotter.iren.add_observer('TimerEvent', update)
+    plotter.iren.add_observer('TimerEvent', lambda caller, event: update(caller, event, state))
     plotter.iren.create_timer(100)
 
-    # # Plot the variable value of the picked cell over time NOTE: Would it be better to plot all selected cells on the same plot?
-    # def plot_picked_cell_over_time(cell_id):
-    #     values_over_time = plotted_variable_array[cell_id, :]
-    #     time_steps = np.arange(len(values_over_time))/timesteps_per_day
-
-    #     plt.ion()
-    #     plt.figure()
-    #     plt.plot(time_steps, values_over_time, label=f'Cell {cell_id} Value Over Time')
-    #     plt.xlabel('Local time (days)')
-    #     plt.ylabel(axis_label)
-    #     plt.title(f'Diurnal variation of {axis_label} of Cell {cell_id}')
-    #     plt.legend()
-    #     plt.show(block=False)
-
-    # Rewriting the above to put all selected cells on the same plot
-    def plot_picked_cell_over_time(cell_id):
-        global selected_cells, fig, ax
-        if selected_cells is None:
-            selected_cells = [cell_id]
+    def plot_picked_cell_over_time(state, cell_id):
+        if state.selected_cells is None:
+            state.selected_cells = [cell_id]
         else:
-            selected_cells.append(cell_id)
+            state.selected_cells.append(cell_id)
 
-        if fig is None or ax is None:
+        if state.fig is None or state.ax is None:
             plt.ion()
-            fig, ax = plt.subplots()
+            state.fig, state.ax = plt.subplots()
 
-        ax.clear() 
+        state.ax.clear() 
 
-        for cell in selected_cells:
+        for cell in state.selected_cells:
             values_over_time = plotted_variable_array[cell, :]
             time_steps = np.arange(len(values_over_time)) / timesteps_per_day
-            ax.plot(time_steps, values_over_time, label=f'Cell {cell}')
+            state.ax.plot(time_steps, values_over_time, label=f'Cell {cell}')
 
-        ax.set_xlabel('Local time (days)')
-        ax.set_ylabel(axis_label)
-        ax.set_title(f'Diurnal variation of {axis_label} of selected Cells')
-        ax.legend()
-        fig.canvas.draw()
-        fig.canvas.flush_events()
+        state.ax.set_xlabel('Local time (days)')
+        state.ax.set_ylabel(axis_label)
+        state.ax.set_title(f'Diurnal variation of {axis_label} of selected Cells')
+        state.ax.legend()
+        state.fig.canvas.draw()
+        state.fig.canvas.flush_events()
 
 
-    def on_pick(picked_mesh):
+    def on_pick(state, picked_mesh):
         if picked_mesh is not None:
             cell_id = picked_mesh['vtkOriginalCellIds'][0]
-            print(f'Picked cell index: {cell_id}')
-            print(f'Cell value: {pv_mesh.cell_data[axis_label][cell_id]}')
-
-            # Plot the variable value of the picked cell over time
-            plot_picked_cell_over_time(cell_id)
+            plot_picked_cell_over_time(state, cell_id)
 
     # Add the mesh to the plotter
     mesh_actor = plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False)
-    plotter.enable_element_picking(callback=on_pick, mode='cell', show_message=False)
+    plotter.enable_element_picking(callback=lambda picked_mesh: on_pick(state, picked_mesh), mode='cell', show_message=False)
 
     text_color_rgb = (1, 1, 1) if background_colour == 'black' else (0, 0, 0)
 
@@ -268,10 +244,15 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     if save_animation:
         plotter.open_gif(save_animation_name)
         for _ in range(animation_frames):
-            update(plotter, None)
+            update(plotter, None, state)
             plotter.write_frame()
         plotter.close()
     else:
         end_time = time.time()
         print(f'Animation took {end_time - start_time:.2f} seconds to run.')
         plotter.show()#interactive_update=True)
+
+    plotter.close()
+    pv.close_all()
+    plt.close('all')
+

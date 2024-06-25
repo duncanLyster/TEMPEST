@@ -59,10 +59,6 @@ import matplotlib.pyplot as plt
 import time
 import sys
 import json
-from animate_temperature_distribution import animate_temperature_distribution
-from plot_temperature_distribution import plot_temperature_distribution
-from nice_gif import nice_gif
-from animate_shadowing import animate_shadowing
 from animate_model import animate_model
 from numba import jit, types
 from joblib import Parallel, delayed
@@ -70,11 +66,6 @@ from stl import mesh
 from tqdm import tqdm
 from typing import Tuple
 from scipy.interpolate import interp1d
-import ipywidgets as widgets
-from IPython.display import display
-from numba.typed import List
-from numba.core import types
-from numba.extending import overload
 
 class Simulation:
     def __init__(self, config_path):
@@ -460,7 +451,6 @@ def export_results(shape_model_name, path_to_setup_file, path_to_shape_model_fil
 
     # Plot the temperature distribution for the final timestep and save it to the folder
     temp_output_file_path = f"outputs/{folder_name}/"
-    plot_temperature_distribution(shape_mesh, temperature_array, temp_output_file_path)
 
 def thermophysical_body_model(shape_model, simulation):
     ''' 
@@ -767,9 +757,6 @@ def main():
         print(f"Saving final day temperatures for facet to CSV file.\n")
         np.savetxt("final_day_temperatures.csv", np.column_stack((np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
-        print(f"Saving folder with final timestep temperatures.\n")
-        export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, final_day_temperatures[:, -1])
-
         thermprojrs_data = np.loadtxt("thermprojrs_data.csv", delimiter=',', skiprows=1)
 
         fig_model_comparison = plt.figure()
@@ -787,7 +774,6 @@ def main():
         interp_func = interp1d(x_new, thermprojrs_data[:, 1], kind='linear')
         thermprojrs_interpolated = interp_func(x_original)
 
-        fig_model_difference = plt.figure()
         plt.plot(x_original, final_day_temperatures[facet_index] - thermprojrs_interpolated, label='This model')
         plt.xlabel('Rotation angle (rad)')
         plt.ylabel('Temperature difference (K)')
