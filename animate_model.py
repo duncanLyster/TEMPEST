@@ -6,11 +6,11 @@ TODO:
 2) Fix BUG - plot window doesn't close when you hit x.
 3) Fix BUG - camera movement is jumpy when using arrow keys.
 4) Sort out colour scale bar values - should be more sensibly spaced.
+5) Fix BUG - segmentation fault the second time this script is run.
 
 NOTE: This is currently very slow when called from the main script for large shape models.
 '''
 
-import numpy as np
 import pyvista as pv
 import vtk
 from stl import mesh
@@ -22,51 +22,41 @@ class AnimationState:
     def __init__(self):
         self.is_paused = False
         self.current_frame = 0
-        self.camera_phi = np.pi / 2
-        self.camera_theta = np.pi / 2
+        self.camera_phi = math.pi / 2
+        self.camera_theta = math.pi / 2
+        self.camera_radius = None
         self.selected_cells = []
         self.fig, self.ax = None, None
 
-# def on_press(state):
-#     state.is_paused = not state.is_paused
-
-   # Dealing with segmentation faults
 def on_press(state):
-    if state.is_paused:
-        state.is_paused = False
-    else:
-        state.is_paused = True
+    state.is_paused = not state.is_paused
 
-    if state.fig is not None and state.ax is not None:
-        state.fig.canvas.draw()
-        state.fig.canvas.flush_events()
-
-def update_camera_position(plotter, state, camera_radius):
+def update_camera_position(plotter, state):
     # Convert spherical coordinates to Cartesian coordinates
-    x = camera_radius * np.sin(state.camera_phi) * np.cos(state.camera_theta)
-    y = camera_radius * np.sin(state.camera_phi) * np.sin(state.camera_theta)
-    z = camera_radius * np.cos(state.camera_phi)
+    x = state.camera_radius * math.sin(state.camera_phi) * math.cos(state.camera_theta)
+    y = state.camera_radius * math.sin(state.camera_phi) * math.sin(state.camera_theta)
+    z = state.camera_radius * math.cos(state.camera_phi)
 
     plotter.camera_position = [(x, y, z), (0, 0, 0), (0, 0, 1)]
     # plotter.reset_camera()
     plotter.camera.view_angle = 30
     plotter.render()
 
-def move_up(plotter, state, camera_radius):
-    state.camera_phi -= np.pi / 36  # Decrease polar angle
-    update_camera_position(plotter, state, camera_radius)
+def move_up(plotter, state):
+    state.camera_phi -= math.pi / 36  # Decrease polar angle
+    update_camera_position(plotter, state)
 
-def move_down(plotter, state, camera_radius):
-    state.camera_phi += np.pi / 36  # Increase polar angle
-    update_camera_position(plotter, state, camera_radius)
+def move_down(plotter, state):
+    state.camera_phi += math.pi / 36  # Increase polar angle
+    update_camera_position(plotter, state)
 
-def move_left(plotter, state, camera_radius):
-    state.camera_theta -= np.pi / 36  # Decrease azimuthal angle
-    update_camera_position(plotter, state, camera_radius)
+def move_left(plotter, state):
+    state.camera_theta -= math.pi / 36  # Decrease azimuthal angle
+    update_camera_position(plotter, state)
 
-def move_right(plotter, state, camera_radius):
-    state.camera_theta += np.pi / 36  # Increase azimuthal angle
-    update_camera_position(plotter, state, camera_radius)
+def move_right(plotter, state):
+    state.camera_theta += math.pi / 36  # Increase azimuthal angle
+    update_camera_position(plotter, state)
 
 def round_up_to_nearest(x, base):
     return base * math.ceil(x / base)
@@ -75,15 +65,14 @@ def round_down_to_nearest(x, base):
     return base * math.floor(x / base)
 
 def rotation_matrix(axis, theta):
-    axis = np.asarray(axis)
-    axis /= np.linalg.norm(axis)
-    a = np.cos(theta / 2.0)
-    b, c, d = -axis * np.sin(theta / 2.0)
+    axis = [a / math.sqrt(sum(a**2 for a in axis)) for a in axis]
+    a = math.cos(theta / 2.0)
+    b, c, d = [-axis[i] * math.sin(theta / 2.0) for i in range(3)]
     aa, bb, cc, dd = a * a, b * b, c * c, d * d
     bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
-    return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
-                     [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
-                     [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
+    return [[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
+            [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
+            [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]]
 
 def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
                   timesteps_per_day, colour_map, plot_title, axis_label, animation_frames, 
@@ -95,46 +84,50 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     start_time = time.time()
 
     # Load shape model
-    shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
+    try:
+        shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
+    except Exception as e:
+        print(f"Failed to load shape model: {e}")
+        return
+    
     vertices = shape_mesh.points.reshape(-1, 3)
-    faces = np.hstack([np.full((shape_mesh.vectors.shape[0], 1), 3), 
-                    np.arange(shape_mesh.vectors.shape[0] * 3).reshape(-1, 3)])
+    faces = [[3, 3*i, 3*i+1, 3*i+2] for i in range(shape_mesh.vectors.shape[0])]
 
     # Create a PyVista mesh
     pv_mesh = pv.PolyData(vertices, faces)
     pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
 
     # Determine text color based on background color
-    text_color = 'white' if background_colour=='black' else 'black' 
-    bar_color = (1, 1, 1) if background_colour=='black' else (0, 0, 0)
+    text_color = 'white' if background_colour == 'black' else 'black' 
+    bar_color = (1, 1, 1) if background_colour == 'black' else (0, 0, 0)
 
     # Animation dimension calculations
     bounding_box = pv_mesh.bounds
     max_dimension = max(bounding_box[1] - bounding_box[0], bounding_box[3] - bounding_box[2], bounding_box[5] - bounding_box[4])
-    camera_radius = max_dimension * 5
+    state.camera_radius = max_dimension * 5
 
     # Create a Plotter object
     plotter = pv.Plotter()
     plotter.add_key_event('space', lambda: on_press(state))
-    plotter.add_key_event('Up', lambda: move_up(plotter, state, camera_radius))
-    plotter.add_key_event('Down', lambda: move_down(plotter, state, camera_radius))
-    plotter.add_key_event('Left', lambda: move_left(plotter, state, camera_radius))
-    plotter.add_key_event('Right', lambda: move_right(plotter, state, camera_radius))
+    plotter.add_key_event('Up', lambda: move_up(plotter, state))
+    plotter.add_key_event('Down', lambda: move_down(plotter, state))
+    plotter.add_key_event('Left', lambda: move_left(plotter, state))
+    plotter.add_key_event('Right', lambda: move_right(plotter, state))
     plotter.iren.initialize()
 
-    update_camera_position(plotter, state, camera_radius)
+    # update_camera_position(plotter, state)
 
     # Axis
-    cylinder_start = np.array([0, 0, 0])
+    cylinder_start = [0, 0, 0]
     cylinder_length = max_dimension  # Adjust the scale factor as needed
     cylinder = pv.Cylinder(center=cylinder_start, direction=rotation_axis, height=cylinder_length, radius=max_dimension/200)
 
     plotter.add_mesh(cylinder, color='green')
 
     # Sunlight vector
-    sunlight_start = np.array([0, 0, 0]) + sunlight_direction * max_dimension
+    sunlight_start = [sunlight_direction[i] * max_dimension for i in range(3)]
     sunlight_length = max_dimension * 0.3  # Adjust the scale factor as needed
-    sunlight_arrow = pv.Arrow(start=sunlight_start, direction= -sunlight_direction, scale=sunlight_length)
+    sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], scale=sunlight_length)
 
     plotter.add_mesh(sunlight_arrow, color='yellow')
 
@@ -148,12 +141,15 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
             if state.current_frame >= num_frames:
                 state.current_frame = 0
 
-            theta = (2 * np.pi / timesteps_per_day) * state.current_frame
+            theta = (2 * math.pi / timesteps_per_day) * state.current_frame
             rot_mat = rotation_matrix(rotation_axis, theta)
-            rotated_vertices = np.dot(vertices, rot_mat.T)
-
-            pv_mesh.points = rotated_vertices
-            pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame % timesteps_per_day].copy()
+            try:
+                rotated_vertices = [[sum(rot_mat[i][j] * vertices[k][j] for j in range(3)) for i in range(3)] for k in range(len(vertices))]
+                pv_mesh.points = rotated_vertices
+                pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame % timesteps_per_day].copy()
+            except Exception as e:
+                print(f"Error updating mesh vertices: {e}")
+                return
 
             plotter.render()
 
@@ -174,7 +170,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
         for cell in state.selected_cells:
             values_over_time = plotted_variable_array[cell, :]
-            time_steps = np.arange(len(values_over_time)) / timesteps_per_day
+            time_steps = [i / timesteps_per_day for i in range(len(values_over_time))]
             state.ax.plot(time_steps, values_over_time, label=f'Cell {cell}')
 
         state.ax.set_xlabel('Local time (days)')
@@ -183,7 +179,6 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         state.ax.legend()
         state.fig.canvas.draw()
         state.fig.canvas.flush_events()
-
 
     def on_pick(state, picked_mesh):
         if picked_mesh is not None:
@@ -204,8 +199,8 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.scalar_bar.GetTitleTextProperty().SetColor(text_color_rgb)
 
     # Get the range of the plotted variable
-    min_val = np.min(plotted_variable_array)
-    max_val = np.max(plotted_variable_array)
+    min_val = min(min(row) for row in plotted_variable_array)
+    max_val = max(max(row) for row in plotted_variable_array)
     range_val = max_val - min_val
 
     # Determine a suitable interval
@@ -220,7 +215,11 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         interval /= 2
 
     # Create custom labels
-    labels = np.arange(rounded_min_val, rounded_max_val + interval, interval)
+    labels = []
+    label = rounded_min_val
+    while label <= rounded_max_val:
+        labels.append(label)
+        label += interval
 
     # Convert the custom labels to a vtkDoubleArray
     vtk_labels = vtk.vtkDoubleArray()
@@ -250,9 +249,12 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     else:
         end_time = time.time()
         print(f'Animation took {end_time - start_time:.2f} seconds to run.')
-        plotter.show()#interactive_update=True)
+        plotter.show() # interactive_update=True
+        plotter.close()
 
-    plotter.close()
+    if state.fig:
+        plt.close(state.fig)
+
+
     pv.close_all()
     plt.close('all')
-

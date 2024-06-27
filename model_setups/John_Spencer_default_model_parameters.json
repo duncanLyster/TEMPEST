@@ -10,7 +10,7 @@
     "solar_luminosity": 3.86420167e+26,
     "sunlight_direction": [1, 0, 0],
     "rotation_period_hours": 10.0,
-    "max_days": 100,
+    "max_days": 5,
     "min_days": 2,
     "convergence_target": 1,
     "ra_degrees": 0,
