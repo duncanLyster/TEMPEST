@@ -17,18 +17,19 @@ Modify so model can be run by an external script.
 Setup so it can be passed input parameters and run as a function. (if run locally these should be taken in from the JSON file still)
 
 NEXT STEPS (scientifically important):
-1) Modify animations so they have a fixed number of frames and are not dependent on the number of timesteps.
-2) Speed up the model by using numba or other optimisation techniques throughout.
-3) Parameter sensitivity analysis
-4) Find ways to make the model more robust
+1) Speed up the model by using numba or other optimisation techniques throughout.
+2) Parameter sensitivity analysis
+3) Find ways to make the model more robust
     a) Calculate n_layers and layer thickness based on thermal inertia (?) - these shouldn't be input by the user
     b) Look into ML/optimisation of finite difference method to avoid instability
     c) Look into gradient descent optimisation technique
-5) Write a performance report for the model
-6) Remove all NOTE and TODO comments from the code
-7) Work out why model not converging since adding deep temp
-8) Consider scattering of light from facets (as opposed to just re-radiation)
-9) Add parallelisation to the model
+4) Write a performance report for the model
+5) Remove all NOTE and TODO comments from the code
+6) Work out why model not converging since adding deep temp
+7) Consider scattering of light from facets (as opposed to just re-radiation)
+8) Add parallelisation to the model
+9) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
+10) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
 
 OPTIONAL NEXT STEPS (fun):
 - Implement secondary radiation/self-heating
@@ -42,6 +43,7 @@ OPTIONAL NEXT STEPS (fun):
 - Add filter visualisations to thermal model
     - Simulate retrievals for temperature based on instrument
 - Ongoing verification against J. Spencer's thermprojrs - currrently good agreement but there are small systematic differences. 
+- Implement roughness/beaming effects (important to do soon)
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -112,7 +114,7 @@ class Facet:
         # Initialize without knowing the shape model length
         self.visible_facets = None
         self.secondary_radiation_coefficients = None
-        self.temperature = np.zeros((timesteps_per_day * (max_days + 1), n_layers)) # Can I change this to just keep temps for the last day?
+        self.temperature = np.float32(np.zeros((timesteps_per_day * (max_days + 1), n_layers))) # Can I change this to just keep temps for the last day? Could keep option to save all temps for debugging later on if needed
         # self.unphysical_energy_loss = np.zeros(timesteps_per_day * (max_days + 1))
         # self.insolation_energy = np.zeros(timesteps_per_day * (max_days + 1))
         # self.re_emitted_energy = np.zeros(timesteps_per_day * (max_days + 1))
@@ -624,7 +626,7 @@ def main():
     '''
 
     # Shape model name
-    shape_model_name = "67P_not_to_scale_low_res.stl"
+    shape_model_name = "67P_not_to_scale_16670_facets.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
@@ -652,7 +654,7 @@ def main():
     shape_model, insolation_array = calculate_insolation(shape_model, simulation)
 
     ################ PLOTTING ################
-    plot_shadowing = True
+    plot_shadowing = False
     plot_insolation_curve = False
     plot_initial_temp_histogram = False
     plot_final_day_temp_distribution = False
