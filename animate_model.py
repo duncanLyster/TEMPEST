@@ -7,6 +7,8 @@ TODO:
 3) Fix BUG - camera movement is jumpy when using arrow keys.
 4) Sort out colour scale bar values - should be more sensibly spaced.
 5) Fix BUG - segmentation fault the second time this script is run.
+6) Put a vertical line on the plot to show the current time.
+7) Press 'C' to clear the selected cells.
 
 NOTE: This is currently very slow when called from the main script for large shape models.
 '''
@@ -17,6 +19,9 @@ from stl import mesh
 import time
 import math
 import matplotlib.pyplot as plt
+import gc
+import weakref
+import numpy as np  
 
 class AnimationState:
     def __init__(self):
@@ -79,6 +84,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                   save_animation, save_animation_name, background_colour):
 
     state = AnimationState()
+    plotter = None
 
     # Start timer
     start_time = time.time()
@@ -107,6 +113,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     state.camera_radius = max_dimension * 5
 
     # Create a Plotter object
+   
     plotter = pv.Plotter()
     plotter.add_key_event('space', lambda: on_press(state))
     plotter.add_key_event('Up', lambda: move_up(plotter, state))
@@ -144,7 +151,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
             theta = (2 * math.pi / timesteps_per_day) * state.current_frame
             rot_mat = rotation_matrix(rotation_axis, theta)
             try:
-                rotated_vertices = [[sum(rot_mat[i][j] * vertices[k][j] for j in range(3)) for i in range(3)] for k in range(len(vertices))]
+                rotated_vertices = np.dot(vertices, np.array(rot_mat).T)
                 pv_mesh.points = rotated_vertices
                 pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame % timesteps_per_day].copy()
             except Exception as e:
@@ -252,9 +259,28 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         plotter.show() # interactive_update=True
         plotter.close()
 
+    # Cleanup
+    plotter.close()
+    plotter.deep_clean()
+
+    del pv_mesh
+    del shape_mesh
+    del plotter
+
     if state.fig:
         plt.close(state.fig)
-
-
+    
     pv.close_all()
     plt.close('all')
+
+    if 'vtk_labels' in locals():
+        vtk_labels.RemoveAllObservers()
+        del vtk_labels
+
+    # Reset state
+    state.fig = None
+    state.ax = None
+    state.selected_cells = []
+
+    # Force garbage collection
+    gc.collect()
