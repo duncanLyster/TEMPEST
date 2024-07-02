@@ -682,7 +682,7 @@ def main():
     shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
 
     ################ Modelling ################
-    simulation.include_self_heating = True
+    simulation.include_self_heating = False
 
     ################ PLOTTING ################
     plot_shadowing = False
