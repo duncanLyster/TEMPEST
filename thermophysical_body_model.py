@@ -12,40 +12,28 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 
 Full documentation can be found at: https://github.com/duncanLyster/comet_nucleus_model
 
-CURRENT TASK:
-Modify so model can be run by an external script. 
-Setup so it can be passed input parameters and run as a function. (if run locally these should be taken in from the JSON file still)
-
-NEXT STEPS (scientifically important):
+NEXT STEPS:
 1) Speed up the model by using numba or other optimisation techniques throughout.
-2) Parameter sensitivity analysis
+2) Implement roughness/beaming effects (important to do soon)
 3) Find ways to make the model more robust
     a) Calculate n_layers and layer thickness based on thermal inertia (?) - these shouldn't be input by the user
     b) Look into ML/optimisation of finite difference method to avoid instability
     c) Look into gradient descent optimisation technique
 4) Write a performance report for the model
 5) Remove all NOTE and TODO comments from the code
-6) Work out why model not converging since adding deep temp
-7) Consider scattering of light from facets (as opposed to just re-radiation)
-8) Add parallelisation to the model
-9) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
-10) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
-11) BUG: Secondary radiation crashing for rubber duck test shape model
-12) BUG: John Spencer's model parameters crash it at 1 AU - Suspect something to do with timestep calculation. 
-
-OPTIONAL NEXT STEPS (fun):
-- Implement sublimation energy loss
-- Ensure colour scale is consistent across frames
-- Run very high resolution models
-- Build in mesh converstion for binary .STL and .OBJ files
-- Create web interface for ease of use?
-- Integrate with JPL Horizons ephemeris to get real-time insolation data
-- Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
-- Add filter visualisations to thermal model
+6) Consider scattering of light from facets (as opposed to just re-radiation)
+7) Add parallelisation to the model
+8) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
+9) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
+10) BUG: Secondary radiation crashing for rubber duck test shape model
+11) BUG: John Spencer's model parameters crash it at 1 AU - Suspect something to do with timestep calculation. 
+12) Add option to implement sublimation energy loss
+13) Build in mesh converstion for binary .STL and .OBJ files
+14) Create web interface for ease of use?
+15) Integrate with JPL Horizons ephemeris to get real-time insolation data
+16) Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
+17) Add filter visualisations to thermal model
     - Simulate retrievals for temperature based on instrument
-- Ongoing verification against J. Spencer's thermprojrs - currrently good agreement but there are small systematic differences. 
-- Implement roughness/beaming effects (important to do soon)
-- Implement scattering of incident light effects
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -499,7 +487,7 @@ def calculate_energy_terms(temperature, insolation, delta_t, emissivity, beaming
             energy_terms[i, time_step, 4] = energy_terms[i, time_step, 0] + energy_terms[i, time_step, 1] + energy_terms[i, time_step, 2] + energy_terms[i, time_step, 3]
     return energy_terms
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def calculate_temperatures(temperature, insolation, visible_facets_list, coefficients_list, 
                            const1, const2, const3, self_heating_const, 
                            timesteps_per_day, n_layers, include_self_heating,
@@ -539,7 +527,7 @@ def calculate_temperatures(temperature, insolation, visible_facets_list, coeffic
                         re_emitted_radiation_term + 
                         conducted_heat_term + 
                         secondary_radiation_term)
-            
+
             # NOTE: Error message doesn't work with numba - needs to be raised outside of the function
             if np.isnan(new_temp) or np.isinf(new_temp) or new_temp < 0:
                 raise ValueError(f"Invalid temperature calculated for facet {i} at time step {start_index + time_step}, temperature: {new_temp} K.")
@@ -583,98 +571,97 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
 
     error_history = []
 
-    with tqdm(total=simulation.max_days, desc="Simulation progress") as pbar: #NOTE: Progress bar not working. Can this be done another way?
-        while day < simulation.max_days and (day < simulation.min_days or mean_temperature_error > simulation.convergence_target):
-            current_day_start = day * simulation.timesteps_per_day
-            current_day_end = (day + 1) * simulation.timesteps_per_day
-            next_day_start = current_day_end
-                            
-            current_day_temperature = calculate_temperatures(
-                thermal_data.temperatures,
-                thermal_data.insolation,
-                thermal_data.visible_facets,
-                thermal_data.secondary_radiation_coefficients,
-                const1, const2, const3, self_heating_const, 
-                simulation.timesteps_per_day, simulation.n_layers,
-                simulation.include_self_heating,
-                current_day_start, current_day_end
+    while day < simulation.max_days and (day < simulation.min_days or mean_temperature_error > simulation.convergence_target):
+        current_day_start = day * simulation.timesteps_per_day
+        current_day_end = (day + 1) * simulation.timesteps_per_day
+        next_day_start = current_day_end
+                        
+        current_day_temperature = calculate_temperatures(
+            thermal_data.temperatures,
+            thermal_data.insolation,
+            thermal_data.visible_facets,
+            thermal_data.secondary_radiation_coefficients,
+            const1, const2, const3, self_heating_const, 
+            simulation.timesteps_per_day, simulation.n_layers,
+            simulation.include_self_heating,
+            current_day_start, current_day_end
+        )
+
+        thermal_data.temperatures[:, current_day_start:current_day_end, :] = current_day_temperature
+
+        if simulation.calculate_energy_terms:
+            energy_terms = calculate_energy_terms(
+                current_day_temperature, 
+                thermal_data.insolation, 
+                simulation.delta_t, 
+                simulation.emissivity,
+                simulation.beaming_factor, 
+                simulation.density, 
+                simulation.specific_heat_capacity,
+                simulation.layer_thickness, 
+                simulation.thermal_conductivity,
+                simulation.timesteps_per_day, 
+                simulation.n_layers
             )
 
-            thermal_data.temperatures[:, current_day_start:current_day_end, :] = current_day_temperature
+        # Check for invalid temperatures
+        for i in range(thermal_data.temperatures.shape[0]):
+            for time_step in range(simulation.timesteps_per_day):
+                current_step = int(time_step + (day * simulation.timesteps_per_day))
+                if np.isnan(current_day_temperature[i, time_step, 0]) or np.isinf(current_day_temperature[i, time_step, 0]) or current_day_temperature[i, time_step, 0] < 0:
+                    print(f"Ending run at timestep {current_step} due to facet {i} having a temperature of {current_day_temperature[i, time_step, 0]} K.\n Try increasing the number of time steps per day")
 
-            if simulation.calculate_energy_terms:
-                energy_terms = calculate_energy_terms(
-                    current_day_temperature, 
-                    thermal_data.insolation, 
-                    simulation.delta_t, 
-                    simulation.emissivity,
-                    simulation.beaming_factor, 
-                    simulation.density, 
-                    simulation.specific_heat_capacity,
-                    simulation.layer_thickness, 
-                    simulation.thermal_conductivity,
-                    simulation.timesteps_per_day, 
-                    simulation.n_layers
-                )
-
-            # Check for invalid temperatures
-            for i in range(thermal_data.temperatures.shape[0]):
-                for time_step in range(simulation.timesteps_per_day):
-                    current_step = int(time_step + (day * simulation.timesteps_per_day))
-                    if np.isnan(current_day_temperature[i, time_step, 0]) or np.isinf(current_day_temperature[i, time_step, 0]) or current_day_temperature[i, time_step, 0] < 0:
-                        print(f"Ending run at timestep {current_step} due to facet {i} having a temperature of {current_day_temperature[i, time_step, 0]} K.\n Try increasing the number of time steps per day")
-
-                        # Plot the energy terms for the facet
-                        if simulation.calculate_energy_terms:
-                            plt.plot(thermal_data.insolation_energy[i, :current_step], label="Insolation energy")
-                            plt.plot(thermal_data.re_emitted_energy[i, :current_step], label="Re-emitted energy")
-                            plt.plot(thermal_data.surface_energy_change[i, :current_step], label="Surface energy change")
-                            plt.plot(thermal_data.conducted_energy[i, :current_step], label="Conducted energy")
-                            plt.plot(thermal_data.unphysical_energy_loss[i, :current_step], label="Unphysical energy loss")
-                            plt.legend()
-                            plt.xlabel('Timestep')
-                            plt.ylabel('Energy (J)')
-                            plt.title(f'Energy terms for facet {i}')
-                            plt.show()
-
-                        # Plot the insolation curve for the facet
-                        plt.plot(thermal_data.insolation[i])
-                        plt.xlabel('Number of timesteps')
-                        plt.ylabel('Insolation (W/m^2)')
-                        plt.title(f'Insolation curve for facet {i}')
+                    # Plot the energy terms for the facet
+                    if simulation.calculate_energy_terms:
+                        plt.plot(thermal_data.insolation_energy[i, :current_step], label="Insolation energy")
+                        plt.plot(thermal_data.re_emitted_energy[i, :current_step], label="Re-emitted energy")
+                        plt.plot(thermal_data.surface_energy_change[i, :current_step], label="Surface energy change")
+                        plt.plot(thermal_data.conducted_energy[i, :current_step], label="Conducted energy")
+                        plt.plot(thermal_data.unphysical_energy_loss[i, :current_step], label="Unphysical energy loss")
+                        plt.legend()
+                        plt.xlabel('Timestep')
+                        plt.ylabel('Energy (J)')
+                        plt.title(f'Energy terms for facet {i}')
                         plt.show()
 
-                        # Plot sub-surface temperatures for the facet
-                        for layer in range(1, simulation.n_layers):
-                            plt.plot(thermal_data.temperatures[i, :current_step, layer])
-                        plt.xlabel('Number of timesteps')
-                        plt.ylabel('Temperature (K)')
-                        plt.title(f'Sub-surface temperature for facet {i}')
-                        plt.legend([f"Layer {layer}" for layer in range(1, simulation.n_layers)])
-                        plt.show()
+                    # Plot the insolation curve for the facet
+                    plt.plot(thermal_data.insolation[i])
+                    plt.xlabel('Number of timesteps')
+                    plt.ylabel('Insolation (W/m^2)')
+                    plt.title(f'Insolation curve for facet {i}')
+                    plt.show()
 
-                        # Create an array of 0s for all facets for all time steps in the day
-                        facet_highlight_array = np.zeros((thermal_data.temperatures.shape[0], simulation.timesteps_per_day))
-                        facet_highlight_array[i] = 1
+                    # Plot sub-surface temperatures for the facet
+                    for layer in range(1, simulation.n_layers):
+                        plt.plot(thermal_data.temperatures[i, :current_step+100, layer])
+                    plt.xlabel('Number of timesteps')
+                    plt.ylabel('Temperature (K)')
+                    plt.title(f'Sub-surface temperature for facet {i}')
+                    plt.legend([f"Layer {layer}" for layer in range(1, simulation.n_layers)])
+                    plt.show()
 
-                        animate_model(path_to_shape_model_file, facet_highlight_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Problematic facet', axis_label='Problem facet is red', animation_frames=200, save_animation=False, save_animation_name='problematic_facet_animation.gif', background_colour = 'black')
+                    # Create an array of 0s for all facets for all time steps in the day
+                    facet_highlight_array = np.zeros((thermal_data.temperatures.shape[0], simulation.timesteps_per_day))
+                    facet_highlight_array[i] = 1
 
-                        sys.exit()
+                    animate_model(path_to_shape_model_file, facet_highlight_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Problematic facet', axis_label='Problem facet is red', animation_frames=200, save_animation=False, save_animation_name='problematic_facet_animation.gif', background_colour = 'black')
 
-            # Calculate convergence factor
-            temperature_error = np.sum(np.abs(current_day_temperature[:, 0, 0] - current_day_temperature[:, -1, 0]))
-            mean_temperature_error = temperature_error / len(shape_model)
+                    sys.exit()
 
-            # Ensure propagation of the temperatures to the next day
-            if day < simulation.max_days - 1:
-                # Set the deep layer temperature to the mean surface temperature of all timesteps of the current day
-                mean_surface_temp = np.mean(current_day_temperature[:, :, 0])
-                thermal_data.temperatures[:, next_day_start:next_day_start + simulation.timesteps_per_day, -1] = mean_surface_temp
+        # Calculate convergence factor
+        temperature_error = np.sum(np.abs(current_day_temperature[:, 0, 0] - current_day_temperature[:, -1, 0]))
+        mean_temperature_error = temperature_error / len(shape_model)
+
+        # Ensure propagation of the temperatures to the next day
+        if day < simulation.max_days - 1:
+            # Set the deep layer temperature to the mean surface temperature of all timesteps of the current day
+            mean_surface_temp = np.mean(current_day_temperature[:, :, 0])
+            thermal_data.temperatures[:, next_day_start:next_day_start + simulation.timesteps_per_day, -1] = mean_surface_temp
+    
+        print(f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Convergence target: {simulation.convergence_target} K")
         
-            print(f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Convergence target: {simulation.convergence_target} K")
-            
-            error_history.append(mean_temperature_error)
-            day += 1
+        error_history.append(mean_temperature_error)
+        day += 1
 
     # Decrement the day counter
     day -= 1
@@ -722,19 +709,20 @@ def main():
     path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
 
     # Load setup parameters from JSON file
-    simulation = Simulation(path_to_setup_file, calculate_energy_terms=False)
+    simulation = Simulation(path_to_setup_file, calculate_energy_terms=False) #BUG: - numba doesn't work with energy terms being calculated
     
     shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
 
     thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
 
-    print(f"Number of timesteps per day: {simulation.timesteps_per_day}\n")
-    print(f"Layer thickness: {simulation.layer_thickness} m\n")
-    print(f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5\n")
-    print(f"Skin depth: {simulation.skin_depth} m\n")
+    print(f"\nDerived model parameters:")
+    print(f"Number of timesteps per day: {simulation.timesteps_per_day}")
+    print(f"Layer thickness: {simulation.layer_thickness} m")
+    print(f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5")
+    print(f"Skin depth: {simulation.skin_depth} m")
 
     ################ Modelling ################
-    simulation.include_self_heating = True
+    simulation.include_self_heating = False
 
     ################ PLOTTING ################
     plot_shadowing = False
@@ -813,7 +801,10 @@ def main():
         thermal_data.secondary_radiation_coefficients = numba_coefficients
     else:
         # Create an empty Numba List for coefficients when self-heating is not included
-        thermal_data.secondary_radiation_coefficients = List()
+        numba_coefficients = List()
+        for _ in range(len(shape_model)):
+            numba_coefficients.append(np.array([], dtype=np.float64))
+        thermal_data.secondary_radiation_coefficients = numba_coefficients
 
     print(f"Running main simulation loop.\n")
     start_time = time.time()
