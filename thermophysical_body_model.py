@@ -25,7 +25,7 @@ NEXT STEPS:
 7) Add parallelisation to the model
 8) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
 9) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
-10) BUG: Secondary radiation crashing for rubber duck test shape model
+10) BUG: Secondary radiation crashing for rubber duck test shape model. Try plotting visible facets and coefficients for each facet to debug. 
 11) BUG: John Spencer's model parameters crash it at 1 AU - Suspect something to do with timestep calculation. 
 12) Add option to implement sublimation energy loss
 13) Build in mesh converstion for binary .STL and .OBJ files
@@ -184,83 +184,76 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_
     
     return shape_model
 
+# @jit(nopython=True)
 def calculate_visible_facets(positions, normals):
     ''' 
     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It returns the indices of the visible facets.
     
     NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Additionally, for very complicated shapes, facets may be identified as visible when there are structures in the way.
     '''
-    visible_indices =[[] for _ in range(len(positions))]
+    potentially_visible_indices =[[] for _ in range(len(positions))]
+
+    epsilon = 1e-10
     
     for i in range(len((positions))):
         # Compute the relative positions of all facets from the current subject facet, this results in a vector from the subject facet to every other facet
         relative_positions =  positions[i] - positions
 
         # The dot product between the relative positions and the normals of the subject facet tells us if the facet is above the horizon
-        above_horizon = relative_positions @ normals[i] < 0
+        above_horizon = relative_positions @ normals[i] < epsilon
         
         # Thr dot product between the relative positions and the normals of the subject facet tells us if the facet is facing towards the subject facet
-        facing_towards = np.einsum('ij,ij->i', -relative_positions, normals) < 0 
+        facing_towards = np.einsum('ij,ij->i', -relative_positions, normals) < epsilon
     
         # Combine the two conditions to determine if the facet is visible
-        visible = above_horizon & facing_towards
+        potentially_visible = above_horizon & facing_towards
     
-        # Ensure that the facet does not consider itself as visible
-        visible[i] = False
+        potentially_visible[i] = False # Exclude self
         
         # Write the indices of the visible facets to the subject facet
-        visible_indices[i] = np.where(visible)[0]
+        potentially_visible_indices[i] = np.where(potentially_visible)[0]
 
-    return visible_indices
+    return potentially_visible_indices
 
-def calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas):
-    ''' 
-    This function calculates the secondary radiation coefficients for each visible facet from the subject facet. It calculates the geometric coefficient of secondary radiation from each facet and returns an array of coefficients.
-
-    Limitations: Essentially treats radiation as coming from a point source at the centre of the facet. This is accurate for distant facets, but might cause issues for e.g adjacent facets.
-    NOTE: This needs to be double checked carefully. 
-    '''
-    secondary_radiation_coefficients = np.zeros(len(test_normals))
-    epsilon = 1e-10
-
-    for i in range(len(test_normals)):
-        relative_position = test_positions[i] - subject_position
-        distance = np.linalg.norm(relative_position) + epsilon
-        relative_position_unit = relative_position / distance
-
-        cos_theta_1 = np.dot(relative_position_unit, test_normals[i])
-        cos_theta_2 = np.dot(-relative_position_unit, subject_normal)
-
-        # Calculate view factor
-        view_factor = (cos_theta_1 * cos_theta_2 * test_areas[i]) / (np.pi * distance**2)
-
-        secondary_radiation_coefficients[i] = view_factor
-
-    return secondary_radiation_coefficients
-
-@jit(nopython=True)
-def calculate_shadowing(ray_origin, ray_direction, shape_model_vertices, facet_indices):
-    '''
-    This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to rays_triangles_intersections which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
+def eliminate_obstructed_facets(positions, shape_model_vertices, potentially_visible_facet_indices):
+    unobstructed_facets = []
     
-    It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not.
-    '''
-
-    # Ensure triangles_vertices is an array of shape (m, 3, 3)
-    triangles_vertices = shape_model_vertices[facet_indices]
-
-    # Call the intersection function
-    intersections, t_values = rays_triangles_intersection(
-        ray_origin,
-        ray_direction,
-        triangles_vertices
-    )
-
-    # Check for any intersection
-    if intersections.any():
-        return 0  # The facet is in shadow
+    for i, subject_position in tqdm(enumerate(positions), desc="Eliminating obstructed facets"):
+        if len(potentially_visible_facet_indices[i]) == 0:
+            unobstructed_facets.append(np.array([], dtype=np.int64))
+            continue
         
-    return 1 # The facet is not in shadow
+        # Create array for ray directions
+        test_positions = positions[potentially_visible_facet_indices[i]]
+        ray_directions = test_positions - subject_position
+        ray_directions /= np.linalg.norm(ray_directions, axis=1)[:, np.newaxis]
+        
+        # Get vertices for potentially visible facets, excluding the test facet itself
+        test_vertices = []
+        for j, test_facet_index in enumerate(potentially_visible_facet_indices[i]):
+            other_facets = [idx for idx in potentially_visible_facet_indices[i] if idx != test_facet_index]
+            test_vertices.append(shape_model_vertices[other_facets])
+        
+        unobstructed = []
+        for j, test_facet_index in enumerate(potentially_visible_facet_indices[i]):
+            if len(test_vertices[j]) == 0:
+                unobstructed.append(test_facet_index)
+                continue
+            
+            # Perform ray-triangle intersection test
+            intersections, t_values = rays_triangles_intersection(
+                subject_position, 
+                ray_directions[j:j+1],  # Single ray direction
+                test_vertices[j]
+            )
+            
+            # If no intersections, the facet is unobstructed
+            if not np.any(intersections):
+                unobstructed.append(test_facet_index)
+        
+        unobstructed_facets.append(np.array(unobstructed, dtype=np.int64))
+    
+    return unobstructed_facets
 
 @jit(nopython=True)
 def rays_triangles_intersection(
@@ -353,6 +346,55 @@ def rays_triangles_intersection(
         all_rays_intersected[i] = intersected
 
     return all_rays_intersected, all_rays_t
+
+def calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas):
+    ''' 
+    This function calculates the secondary radiation coefficients for each visible facet from the subject facet. It calculates the geometric coefficient of secondary radiation from each facet and returns an array of coefficients.
+
+    Limitations: Essentially treats radiation as coming from a point source at the centre of the facet. This is accurate for distant facets, but might cause issues for e.g adjacent facets.
+    NOTE: This needs to be double checked carefully. 
+    '''
+    secondary_radiation_coefficients = np.zeros(len(test_normals))
+    epsilon = 1e-10
+
+    for i in range(len(test_normals)):
+        relative_position = test_positions[i] - subject_position
+        distance = np.linalg.norm(relative_position) + epsilon
+        relative_position_unit = relative_position / distance
+
+        cos_theta_1 = np.dot(relative_position_unit, test_normals[i])
+        cos_theta_2 = np.dot(-relative_position_unit, subject_normal)
+
+        # Calculate view factor
+        view_factor = (cos_theta_1 * cos_theta_2 * test_areas[i]) / (np.pi * distance**2)
+
+        secondary_radiation_coefficients[i] = view_factor
+
+    return secondary_radiation_coefficients
+
+@jit(nopython=True)
+def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vertices, visible_facet_indices):
+    '''
+    This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to rays_triangles_intersections which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
+    
+    It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not.
+    '''
+
+    # Ensure triangles_vertices is an array of shape (m, 3, 3)
+    triangles_vertices = shape_model_vertices[visible_facet_indices]
+
+    # Call the intersection function
+    intersections, t_values = rays_triangles_intersection(
+        subject_positions,
+        sunlight_directions,
+        triangles_vertices
+    )
+
+    # Check for any intersection
+    if intersections.any():
+        return 0  # The facet is in shadow
+        
+    return 1 # The facet is not in shadow
 
 # Calculate rotation matrix for the body's rotation
 @jit(nopython=True)
@@ -699,6 +741,8 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
 def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
+
+    WORKED OUT SECONDARY BUG - ITS DUE TO INCORRECT VISIBLE FACETS CALCULATION. NEEDS TO CONSIDER OBSTRUCTED VIEW. 
     '''
 
     # Shape model name
@@ -722,12 +766,14 @@ def main():
     print(f"Skin depth: {simulation.skin_depth} m")
 
     ################ Modelling ################
-    simulation.include_self_heating = False
+    simulation.include_self_heating = True
 
     ################ PLOTTING ################
-    plot_shadowing = False
+    plot_shadowing = True
     plot_insolation_curve = False
     plot_initial_temp_histogram = False
+    plot_secondary_radiation_coefficients = False
+    plot_secondary_contributions = False
     plot_final_day_temp_distribution = False
     plot_final_day_all_layers_temp_distribution = False
     plot_all_days_all_layers_temp_distribution = True
@@ -739,8 +785,13 @@ def main():
     # Setup the model
     positions = np.array([facet.position for facet in shape_model])
     normals = np.array([facet.normal for facet in shape_model])
+    vertices = np.array([facet.vertices for facet in shape_model])
     
-    visible_indices = calculate_visible_facets(positions, normals)
+    potentially_visible_indices = calculate_visible_facets(positions, normals)
+
+    print(f"Eliminating obstructed facets.\n")
+    visible_indices = eliminate_obstructed_facets(positions, vertices, potentially_visible_indices)
+    
     thermal_data.set_visible_facets(visible_indices)
 
     thermal_data = calculate_insolation(thermal_data, shape_model, simulation)
@@ -805,6 +856,53 @@ def main():
         for _ in range(len(shape_model)):
             numba_coefficients.append(np.array([], dtype=np.float64))
         thermal_data.secondary_radiation_coefficients = numba_coefficients
+
+    if plot_secondary_radiation_coefficients:
+        selected_facet = 1454  # Change this to the index of the facet you're interested in
+        
+        # Get the indices and coefficients of contributing facets
+        contributing_indices = thermal_data.visible_facets[selected_facet]
+        contributing_coeffs = thermal_data.secondary_radiation_coefficients[selected_facet]
+        
+        # Create an array of zeros for all facets
+        contribution_data = np.zeros(len(shape_model))
+        
+        # Set the coefficients for the contributing facets
+        contribution_data[contributing_indices] = 1 #contributing_coeffs
+
+        contribution_data[selected_facet] = 0.5
+
+        # Print contributing facets and their coefficients
+        print(f"\nContributing facets for facet {selected_facet}:")
+        for index, coeff in zip(contributing_indices, contributing_coeffs):
+            print(f"Facet {index}: coefficient = {coeff:.6f}")
+        print(f"Total number of contributing facets: {len(contributing_indices)}")
+        
+        print(f"Preparing visualization of contributing facets for facet {selected_facet}.")
+        animate_model(path_to_shape_model_file, contribution_data[:, np.newaxis], 
+                    simulation.rotation_axis, simulation.sunlight_direction, 1, 
+                    colour_map='viridis', plot_title=f'Contributing Facets for Facet {selected_facet}', 
+                    axis_label='Coefficient Value', animation_frames=1, 
+                    save_animation=False, save_animation_name=f'contributing_facets_{selected_facet}.png', 
+                    background_colour='black')
+        
+    if plot_secondary_contributions:
+        # Calculate the sum of secondary radiation coefficients for each facet
+        secondary_radiation_sum = np.array([np.sum(coeffs) for coeffs in thermal_data.secondary_radiation_coefficients])
+        
+        # Apply logarithmic scaling
+        # Add a small constant to avoid log(0)
+        epsilon = 1e-10
+        log_secondary_radiation_sum = np.log10(secondary_radiation_sum + epsilon)
+        
+        print("Preparing secondary radiation visualization.")
+        animate_model(path_to_shape_model_file, log_secondary_radiation_sum[:, np.newaxis], 
+                    simulation.rotation_axis, simulation.sunlight_direction, 1, 
+                    colour_map='viridis', plot_title='Secondary Radiation Contribution (Log Scale)', 
+                    axis_label='Log10(Sum of Coefficients)', animation_frames=1, 
+                    save_animation=False, save_animation_name='secondary_radiation_log.png', 
+                    background_colour='black')
+
 
     print(f"Running main simulation loop.\n")
     start_time = time.time()
