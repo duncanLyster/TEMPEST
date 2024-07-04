@@ -387,7 +387,7 @@ def calculate_view_factors(subject_vertices, subject_area, subject_normal,
     - subject_normal, test_normals: np.array of shape (3,) or (n, 3) for normal vectors
     - subdivisions: int, number of subdivisions along each triangle edge (default 3)
 
-    BUG: Sum of viewfactors shouldn't be more than 1 - it is so something is wrong.
+    BUG: Sum of viewfactors shouldn't be more than 1 - it is so something is wrong. NOTE: Try looking for pre-existing view factor calculation libraries/functions - surely this is a common problem.
     '''
     
     def interpolate_points(vertices, subdivisions):
