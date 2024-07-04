@@ -113,7 +113,7 @@ class Facet:
 
     def set_dynamic_arrays(self, length):
         self.visible_facets = np.zeros(length)
-        self.secondary_radiation_coefficients = np.zeros(length)    
+        self.secondary_radiation_view_factors = np.zeros(length)    
 
     @staticmethod
     def calculate_area(vertices):
@@ -126,7 +126,7 @@ class ThermalData:
         self.temperatures = np.zeros((n_facets, timesteps_per_day * max_days, n_layers), dtype=np.float64) # Possibly change to float32 to save memory
         self.insolation = np.zeros((n_facets, timesteps_per_day), dtype=np.float64)
         self.visible_facets = [np.array([], dtype=np.int64) for _ in range(n_facets)]
-        self.secondary_radiation_coefficients = [np.array([], dtype=np.float64) for _ in range(n_facets)]
+        self.secondary_radiation_view_factors = [np.array([], dtype=np.float64) for _ in range(n_facets)]
 
         self.calculate_energy_terms = calculate_energy_terms
 
@@ -140,8 +140,8 @@ class ThermalData:
     def set_visible_facets(self, visible_facets):
         self.visible_facets = [np.array(facets, dtype=np.int64) for facets in visible_facets]
 
-    def set_secondary_radiation_coefficients(self, coefficients):
-        self.secondary_radiation_coefficients = [np.array(coeff, dtype=np.float64) for coeff in coefficients]
+    def set_secondary_radiation_view_factors(self, view_factors):
+        self.secondary_radiation_view_factors = [np.array(view_factor, dtype=np.float64) for view_factor in view_factors]
 
 def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
     ''' 
@@ -347,30 +347,100 @@ def rays_triangles_intersection(
 
     return all_rays_intersected, all_rays_t
 
-def calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas):
-    ''' 
-    This function calculates the secondary radiation coefficients for each visible facet from the subject facet. It calculates the geometric coefficient of secondary radiation from each facet and returns an array of coefficients.
+# def calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas):
+#     ''' 
+#     This function calculates the secondary radiation coefficients for each visible facet from the subject facet. It calculates the geometric coefficient of secondary radiation from each facet and returns an array of coefficients.
 
-    Limitations: Essentially treats radiation as coming from a point source at the centre of the facet. This is accurate for distant facets, but might cause issues for e.g adjacent facets.
-    NOTE: This needs to be double checked carefully. 
+#     Limitations: Essentially treats radiation as coming from a point source at the centre of the facet. This is accurate for distant facets, but might cause issues for e.g adjacent facets.
+#     NOTE: This needs to be double checked carefully. BUG: I think the coefficients are too large. Need to work out what the maximum possible sum of coefficients is (facet inside a box) and compare to that.
+#     NOTE: This currently oversimplifies by assuming large distance from the source. The proper method would be to integrate over the triangle areas of both facets. 
+#     '''
+#     secondary_radiation_coefficients = np.zeros(len(test_normals))
+#     epsilon = 1e-10
+
+#     for i in range(len(test_normals)):
+#         relative_position = test_positions[i] - subject_position
+#         distance = np.linalg.norm(relative_position) + epsilon
+#         relative_position_unit = relative_position / distance
+
+#         cos_theta_1 = np.dot(relative_position_unit, test_normals[i])
+#         cos_theta_2 = np.dot(-relative_position_unit, subject_normal)
+
+#         # Calculate view factor
+#         view_factor = (cos_theta_1 * cos_theta_2 * test_areas[i]) / (np.pi * distance**2)
+
+#         secondary_radiation_coefficients[i] = view_factor
+
+#         print(f"View factor: {view_factor}")
+
+#     return secondary_radiation_coefficients
+
+def calculate_view_factors(subject_vertices, subject_area, subject_normal, 
+                                               test_vertices, test_areas, test_normals, 
+                                               subdivisions):
     '''
-    secondary_radiation_coefficients = np.zeros(len(test_normals))
-    epsilon = 1e-10
+    This function calculates the geometric view factors between a subject facet and a list of test facets. It uses the quadrature method to subdivide each facet into a grid of points and calculates the view factor between each point on the subject facet and each point on the test facets. The view factors are summed and returned as an array.
+    
+    Parameters:
+    - subject_vertices, test_vertices: np.array of shape (3, 3) for triangle vertices
+    - subject_area, test_areas: float or np.array of floats for triangle areas
+    - subject_normal, test_normals: np.array of shape (3,) or (n, 3) for normal vectors
+    - subdivisions: int, number of subdivisions along each triangle edge (default 3)
 
-    for i in range(len(test_normals)):
-        relative_position = test_positions[i] - subject_position
-        distance = np.linalg.norm(relative_position) + epsilon
-        relative_position_unit = relative_position / distance
+    BUG: Sum of viewfactors shouldn't be more than 1 - it is so something is wrong.
+    '''
+    
+    def interpolate_points(vertices, subdivisions):
+        points = []
+        for i in range(subdivisions):
+            for j in range(subdivisions - i):
+                a = i / (subdivisions - 1)
+                b = j / (subdivisions - 1)
+                c = 1 - a - b
+                point = c * vertices[0] + b * vertices[1] + a * vertices[2]
+                points.append(point)
+        return np.array(points)
 
-        cos_theta_1 = np.dot(relative_position_unit, test_normals[i])
-        cos_theta_2 = np.dot(-relative_position_unit, subject_normal)
+    def integrand(p1, p2, subject_normal, test_normal):
+        r = p2 - p1
+        r_mag_sq = np.dot(r, r)
+        if r_mag_sq < 1e-12:  # Avoid division by zero or very small numbers
+            return 0.0
+        r_mag = np.sqrt(r_mag_sq)
+        cos_theta1 = np.dot(r, subject_normal) / r_mag
+        cos_theta2 = -np.dot(r, test_normal) / r_mag
+        if cos_theta1 <= 0 or cos_theta2 <= 0:
+            return 0.0
+        return (cos_theta1 * cos_theta2) / (np.pi * r_mag_sq)
 
-        # Calculate view factor
-        view_factor = (cos_theta_1 * cos_theta_2 * test_areas[i]) / (np.pi * distance**2)
+    def view_factor(subject_points, subject_area, subject_normal, 
+                    test_points, test_area, test_normal):
+        integral = 0.0
+        n_points = len(subject_points)
+        for p1 in subject_points:
+            for p2 in test_points:
+                integral += integrand(p1, p2, subject_normal, test_normal)
+        return (integral * subject_area * test_area) / (n_points ** 2)
 
-        secondary_radiation_coefficients[i] = view_factor
+    subject_points = interpolate_points(subject_vertices, subdivisions)
+    
+    view_factors = []
+    for test_idx in range(len(test_vertices)):
+        test_points = interpolate_points(test_vertices[test_idx], subdivisions)
+        vf = view_factor(subject_points, subject_area, subject_normal,
+                         test_points, test_areas[test_idx], test_normals[test_idx])
+        view_factors.append(vf)
 
-    return secondary_radiation_coefficients
+    total_view_factor = np.sum(view_factors)
+    if total_view_factor > 1:
+        print(f"Warning: Total view factor exceeds 1 for facet. Sum: {total_view_factor}")
+        print(f"Subject facet area: {subject_area}")
+        print(f"Subject facet normal: {subject_normal}")
+        print(f"Number of test facets: {len(test_areas)}")
+        print(f"Max individual view factor: {np.max(view_factors)}")
+        print(f"Min individual view factor: {np.min(view_factors)}")
+
+    return np.array(view_factors)
 
 @jit(nopython=True)
 def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vertices, visible_facet_indices):
@@ -497,8 +567,8 @@ def calculate_initial_temperatures(thermal_data, emissivity, n_jobs=-1):
     return thermal_data
 
 @jit(nopython=True)
-def calculate_secondary_radiation(temperatures, visible_facets, coefficients, self_heating_const):
-    return self_heating_const * np.sum(temperatures[visible_facets]**4 * coefficients)
+def calculate_secondary_radiation(temperatures, visible_facets, view_factors, self_heating_const):
+    return self_heating_const * np.sum(temperatures[visible_facets]**4 * view_factors)
 
 def export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, temperature_array):
     ''' 
@@ -530,7 +600,7 @@ def calculate_energy_terms(temperature, insolation, delta_t, emissivity, beaming
     return energy_terms
 
 @jit(nopython=True)
-def calculate_temperatures(temperature, insolation, visible_facets_list, coefficients_list, 
+def calculate_temperatures(temperature, insolation, visible_facets_list, view_factors_list, 
                            const1, const2, const3, self_heating_const, 
                            timesteps_per_day, n_layers, include_self_heating,
                            start_index, end_index):
@@ -554,12 +624,12 @@ def calculate_temperatures(temperature, insolation, visible_facets_list, coeffic
             secondary_radiation_term = 0.0
             if include_self_heating:
                 visible_facets = visible_facets_list[i]
-                coefficients = coefficients_list[i]
-                for j in range(len(visible_facets)):
+                view_factors = view_factors_list[i]
+                for j in range(len(visible_facets)): # Can this be vectorised?
                     vis_facet = visible_facets[j]
                     temp = current_day_temperature[vis_facet, prev_step, 0] if time_step > 0 else temperature[vis_facet, start_index - 1, 0] if start_index > 0 else current_day_temperature[vis_facet, 0, 0]
-                    coeff = coefficients[j]
-                    secondary_radiation_term += temp**4 * coeff
+                    view_factor = view_factors[j]
+                    secondary_radiation_term += temp**4 * view_factor
                 secondary_radiation_term *= self_heating_const
             
             conducted_heat_term = const3 * (prev_temp_layer1 - prev_temp)
@@ -609,7 +679,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
     const1 = simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
     const2 = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
     const3 = simulation.thermal_diffusivity * simulation.delta_t / simulation.layer_thickness**2
-    self_heating_const = 5.670374419e-8 * simulation.delta_t * simulation.emissivity / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity * np.pi)
+    self_heating_const = 5.670374419e-8 * simulation.delta_t * simulation.emissivity / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity * np.pi) # Is pi needed here?
 
     error_history = []
 
@@ -622,7 +692,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
             thermal_data.temperatures,
             thermal_data.insolation,
             thermal_data.visible_facets,
-            thermal_data.secondary_radiation_coefficients,
+            thermal_data.secondary_radiation_view_factors,
             const1, const2, const3, self_heating_const, 
             simulation.timesteps_per_day, simulation.n_layers,
             simulation.include_self_heating,
@@ -769,11 +839,11 @@ def main():
     simulation.include_self_heating = True
 
     ################ PLOTTING ################
-    plot_shadowing = True
+    plot_shadowing = False
     plot_insolation_curve = False
     plot_initial_temp_histogram = False
-    plot_secondary_radiation_coefficients = False
-    plot_secondary_contributions = False
+    plot_secondary_radiation_view_factors = False
+    plot_secondary_contributions = True
     plot_final_day_temp_distribution = False
     plot_final_day_all_layers_temp_distribution = False
     plot_all_days_all_layers_temp_distribution = True
@@ -829,78 +899,90 @@ def main():
     thermal_data.visible_facets = numba_visible_facets
 
     if simulation.include_self_heating:
-        coefficients = []
-        for i in tqdm(range(len(shape_model)), desc="Calculating secondary radiation coefficients"):
-            subject_normal = shape_model[i].normal
-            subject_position = shape_model[i].position
+        view_factors = []
+        all_view_factors = []
+        for i in tqdm(range(len(shape_model)), desc="Calculating secondary radiation view factors"):
+            # subject_normal = shape_model[i].normal
+            # subject_position = shape_model[i].position
+            # visible_indices = thermal_data.visible_facets[i]
+            # test_normals = np.array([shape_model[j].normal for j in visible_indices])
+            # test_positions = np.array([shape_model[j].position for j in visible_indices])
+            # test_areas = np.array([shape_model[j].area for j in visible_indices])
+            # view_factor = calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas)
+            # if np.any(np.isnan(view_factor)) or np.any(np.isinf(view_factor)):
+            #     print(f"Warning: Invalid coefficient for facet {i}")
+            #     print(f"View factor: {view_factor}")
+            #     print(f"Visible facets: {visible_indices}")
+            # view_factors.append(view_factor)
+
             visible_indices = thermal_data.visible_facets[i]
-            test_normals = np.array([shape_model[j].normal for j in visible_indices])
-            test_positions = np.array([shape_model[j].position for j in visible_indices])
+
+            subject_vertices = shape_model[i].vertices
+            subject_area = shape_model[i].area
+            subject_normal = shape_model[i].normal
+            test_vertices = np.array([shape_model[j].vertices for j in visible_indices])
             test_areas = np.array([shape_model[j].area for j in visible_indices])
-            coeff = calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas)
-            if np.any(np.isnan(coeff)) or np.any(np.isinf(coeff)):
-                print(f"Warning: Invalid coefficient for facet {i}")
-                print(f"Coefficients: {coeff}")
+            test_normals = np.array([shape_model[j].normal for j in visible_indices])
+
+            view_factors = calculate_view_factors(subject_vertices, subject_area, subject_normal, test_vertices, test_areas, test_normals, subdivisions=10) # NOTE: Subdivisions can be increased for more accurate results
+            if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
+                print(f"Warning: Invalid view factor for facet {i}")
+                print(f"View factors: {view_factors}")
                 print(f"Visible facets: {visible_indices}")
-            coefficients.append(coeff)
+            all_view_factors.append(view_factors)
 
-        thermal_data.set_secondary_radiation_coefficients(coefficients)
+        thermal_data.set_secondary_radiation_view_factors(all_view_factors)
 
-        numba_coefficients = List()
-        for coeffs in thermal_data.secondary_radiation_coefficients:
-            numba_coefficients.append(np.array(coeffs, dtype=np.float64))
-        thermal_data.secondary_radiation_coefficients = numba_coefficients
+        numba_view_factors = List()
+        for view_factors in thermal_data.secondary_radiation_view_factors:
+            numba_view_factors.append(np.array(view_factors, dtype=np.float64))
+        thermal_data.secondary_radiation_view_factors = numba_view_factors
     else:
-        # Create an empty Numba List for coefficients when self-heating is not included
-        numba_coefficients = List()
+        # Create an empty Numba List for view factors when self-heating is not included
+        numba_view_factors = List()
         for _ in range(len(shape_model)):
-            numba_coefficients.append(np.array([], dtype=np.float64))
-        thermal_data.secondary_radiation_coefficients = numba_coefficients
+            numba_view_factors.append(np.array([], dtype=np.float64))
+        thermal_data.secondary_radiation_view_factors = numba_view_factors
 
-    if plot_secondary_radiation_coefficients:
+    if plot_secondary_radiation_view_factors:
         selected_facet = 1454  # Change this to the index of the facet you're interested in
         
-        # Get the indices and coefficients of contributing facets
+        # Get the indices and view factors of contributing facets
         contributing_indices = thermal_data.visible_facets[selected_facet]
-        contributing_coeffs = thermal_data.secondary_radiation_coefficients[selected_facet]
+        contributing_view_factors = thermal_data.secondary_radiation_view_factors[selected_facet]
         
         # Create an array of zeros for all facets
         contribution_data = np.zeros(len(shape_model))
         
-        # Set the coefficients for the contributing facets
-        contribution_data[contributing_indices] = 1 #contributing_coeffs
+        # Set the view factors for the contributing facets
+        contribution_data[contributing_indices] = 1
 
         contribution_data[selected_facet] = 0.5
 
-        # Print contributing facets and their coefficients
+        # Print contributing facets and their view factors
         print(f"\nContributing facets for facet {selected_facet}:")
-        for index, coeff in zip(contributing_indices, contributing_coeffs):
-            print(f"Facet {index}: coefficient = {coeff:.6f}")
+        for index, view_factors in zip(contributing_indices, contributing_view_factors):
+            print(f"Facet {index}: view factor = {view_factors:.6f}")
         print(f"Total number of contributing facets: {len(contributing_indices)}")
         
         print(f"Preparing visualization of contributing facets for facet {selected_facet}.")
         animate_model(path_to_shape_model_file, contribution_data[:, np.newaxis], 
                     simulation.rotation_axis, simulation.sunlight_direction, 1, 
                     colour_map='viridis', plot_title=f'Contributing Facets for Facet {selected_facet}', 
-                    axis_label='Coefficient Value', animation_frames=1, 
+                    axis_label='View Factors Value', animation_frames=1, 
                     save_animation=False, save_animation_name=f'contributing_facets_{selected_facet}.png', 
                     background_colour='black')
         
     if plot_secondary_contributions:
-        # Calculate the sum of secondary radiation coefficients for each facet
-        secondary_radiation_sum = np.array([np.sum(coeffs) for coeffs in thermal_data.secondary_radiation_coefficients])
-        
-        # Apply logarithmic scaling
-        # Add a small constant to avoid log(0)
-        epsilon = 1e-10
-        log_secondary_radiation_sum = np.log10(secondary_radiation_sum + epsilon)
-        
+        # Calculate the sum of secondary radiation view factors for each facet
+        secondary_radiation_sum = np.array([np.sum(view_factors) for view_factors in thermal_data.secondary_radiation_view_factors])
+
         print("Preparing secondary radiation visualization.")
-        animate_model(path_to_shape_model_file, log_secondary_radiation_sum[:, np.newaxis], 
+        animate_model(path_to_shape_model_file, secondary_radiation_sum[:, np.newaxis], 
                     simulation.rotation_axis, simulation.sunlight_direction, 1, 
-                    colour_map='viridis', plot_title='Secondary Radiation Contribution (Log Scale)', 
-                    axis_label='Log10(Sum of Coefficients)', animation_frames=1, 
-                    save_animation=False, save_animation_name='secondary_radiation_log.png', 
+                    colour_map='viridis', plot_title='Secondary Radiation Contribution', 
+                    axis_label='Sum of View Factors', animation_frames=1, 
+                    save_animation=False, save_animation_name='secondary_radiation.png', 
                     background_colour='black')
 
 
