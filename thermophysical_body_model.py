@@ -12,39 +12,28 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 
 Full documentation can be found at: https://github.com/duncanLyster/comet_nucleus_model
 
-CURRENT TASK:
-Modify so model can be run by an external script. 
-Setup so it can be passed input parameters and run as a function. (if run locally these should be taken in from the JSON file still)
-
-NEXT STEPS (scientifically important):
+NEXT STEPS:
 1) Speed up the model by using numba or other optimisation techniques throughout.
-2) Parameter sensitivity analysis
+2) Implement roughness/beaming effects (important to do soon)
 3) Find ways to make the model more robust
     a) Calculate n_layers and layer thickness based on thermal inertia (?) - these shouldn't be input by the user
     b) Look into ML/optimisation of finite difference method to avoid instability
     c) Look into gradient descent optimisation technique
 4) Write a performance report for the model
 5) Remove all NOTE and TODO comments from the code
-6) Work out why model not converging since adding deep temp
-7) Consider scattering of light from facets (as opposed to just re-radiation)
-8) Add parallelisation to the model
-9) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
-10) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
-11) BUG: Secondary radiation crashing for rubber duck test shape model
-
-OPTIONAL NEXT STEPS (fun):
-- Implement sublimation energy loss
-- Ensure colour scale is consistent across frames
-- Run very high resolution models
-- Build in mesh converstion for binary .STL and .OBJ files
-- Create web interface for ease of use?
-- Integrate with JPL Horizons ephemeris to get real-time insolation data
-- Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
-- Add filter visualisations to thermal model
+6) Consider scattering of light from facets (as opposed to just re-radiation)
+7) Add parallelisation to the model
+8) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
+9) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
+10) BUG: Secondary radiation crashing for rubber duck test shape model. Try plotting visible facets and coefficients for each facet to debug. 
+11) BUG: John Spencer's model parameters crash it at 1 AU - Suspect something to do with timestep calculation. 
+12) Add option to implement sublimation energy loss
+13) Build in mesh converstion for binary .STL and .OBJ files
+14) Create web interface for ease of use?
+15) Integrate with JPL Horizons ephemeris to get real-time insolation data
+16) Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
+17) Add filter visualisations to thermal model
     - Simulate retrievals for temperature based on instrument
-- Ongoing verification against J. Spencer's thermprojrs - currrently good agreement but there are small systematic differences. 
-- Implement roughness/beaming effects (important to do soon)
-- Implement scattering of incident light effects
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -55,7 +44,7 @@ Started: 15 Feb 2024
 
 Author: Duncan Lyster
 '''
-from memory_profiler import profile
+
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -63,15 +52,22 @@ import time
 import sys
 import json
 from animate_model import animate_model
-from numba import jit, types
+from numba import jit, njit, float64, int64, boolean
+from numba.typed import List
 from joblib import Parallel, delayed
 from stl import mesh
 from tqdm import tqdm
 from typing import Tuple
 from scipy.interpolate import interp1d
 
+# Imports for testing 
+from memory_profiler import profile
+import cProfile
+import pstats
+
 class Simulation:
-    def __init__(self, config_path):
+    def __init__(self, config_path, calculate_energy_terms):
+        self.calculate_energy_terms = calculate_energy_terms
         self.load_configuration(config_path)
     
     def load_configuration(self, config_path):
@@ -96,8 +92,8 @@ class Simulation:
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
         
         # Calculation method flags
-        self.include_self_heating = False 
-
+        self.include_self_heating = False # Default to not include self-heating
+ 
         # Print out the configuration
         print(f"Configuration loaded from {config_path}")
         for key, value in config.items():
@@ -109,25 +105,15 @@ class Simulation:
         self.rotation_axis = np.array([np.cos(ra_radians) * np.cos(dec_radians), np.sin(ra_radians) * np.cos(dec_radians), np.sin(dec_radians)])
 
 class Facet:
-    def __init__(self, normal, vertices, timesteps_per_day, max_days, n_layers):
+    def __init__(self, normal, vertices, timesteps_per_day, max_days, n_layers, calculate_energy_terms):
         self.normal = normal
         self.vertices = vertices
         self.area = self.calculate_area(vertices)
         self.position = np.mean(vertices, axis=0)
-        self.insolation = np.zeros(timesteps_per_day)
-        # Initialize without knowing the shape model length
-        self.visible_facets = None
-        self.secondary_radiation_coefficients = None
-        self.temperature = np.float32(np.zeros((timesteps_per_day * (max_days + 1), n_layers))) # Can I change this to just keep temps for the last day? Could keep option to save all temps for debugging later on if needed
-        # self.unphysical_energy_loss = np.zeros(timesteps_per_day * (max_days + 1))
-        # self.insolation_energy = np.zeros(timesteps_per_day * (max_days + 1))
-        # self.re_emitted_energy = np.zeros(timesteps_per_day * (max_days + 1))
-        # self.surface_energy_change = np.zeros(timesteps_per_day * (max_days + 1))
-        # self.conducted_energy = np.zeros(timesteps_per_day * (max_days + 1))
 
     def set_dynamic_arrays(self, length):
         self.visible_facets = np.zeros(length)
-        self.secondary_radiation_coefficients = np.zeros(length)    
+        self.secondary_radiation_view_factors = np.zeros(length)    
 
     @staticmethod
     def calculate_area(vertices):
@@ -135,8 +121,29 @@ class Facet:
         v0, v1, v2 = vertices
         return np.linalg.norm(np.cross(v1-v0, v2-v0)) / 2
 
-# Define any necessary functions
-def read_shape_model(filename, timesteps_per_day, n_layers, max_days):
+class ThermalData:
+    def __init__(self, n_facets, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
+        self.temperatures = np.zeros((n_facets, timesteps_per_day * max_days, n_layers), dtype=np.float64) # Possibly change to float32 to save memory
+        self.insolation = np.zeros((n_facets, timesteps_per_day), dtype=np.float64)
+        self.visible_facets = [np.array([], dtype=np.int64) for _ in range(n_facets)]
+        self.secondary_radiation_view_factors = [np.array([], dtype=np.float64) for _ in range(n_facets)]
+
+        self.calculate_energy_terms = calculate_energy_terms
+
+        if calculate_energy_terms:
+            self.insolation_energy = np.zeros((n_facets, timesteps_per_day * max_days))
+            self.re_emitted_energy = np.zeros((n_facets, timesteps_per_day * max_days))
+            self.surface_energy_change = np.zeros((n_facets, timesteps_per_day * max_days))
+            self.conducted_energy = np.zeros((n_facets, timesteps_per_day * max_days))
+            self.unphysical_energy_loss = np.zeros((n_facets, timesteps_per_day * max_days))
+            
+    def set_visible_facets(self, visible_facets):
+        self.visible_facets = [np.array(facets, dtype=np.int64) for facets in visible_facets]
+
+    def set_secondary_radiation_view_factors(self, view_factors):
+        self.secondary_radiation_view_factors = [np.array(view_factor, dtype=np.float64) for view_factor in view_factors]
+
+def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
     ''' 
     This function reads in the shape model of the body from a .stl file and return an array of facets, each with its own area, position, and normal vector.
 
@@ -169,7 +176,7 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days):
             vertex1 = np.array([float(v) for v in lines[i+2].strip().split()[1:]])
             vertex2 = np.array([float(v) for v in lines[i+3].strip().split()[1:]])
             vertex3 = np.array([float(v) for v in lines[i+4].strip().split()[1:]])
-            facet = Facet(normal, [vertex1, vertex2, vertex3], timesteps_per_day, max_days, n_layers)
+            facet = Facet(normal, [vertex1, vertex2, vertex3], timesteps_per_day, max_days, n_layers, calculate_energy_terms)
             shape_model.append(facet)
 
     for facet in shape_model:
@@ -177,87 +184,76 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days):
     
     return shape_model
 
+# @jit(nopython=True)
 def calculate_visible_facets(positions, normals):
     ''' 
     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It returns the indices of the visible facets.
     
     NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Additionally, for very complicated shapes, facets may be identified as visible when there are structures in the way.
     '''
-    visible_indices =[[] for _ in range(len(positions))]
+    potentially_visible_indices =[[] for _ in range(len(positions))]
+
+    epsilon = 1e-10
     
     for i in range(len((positions))):
         # Compute the relative positions of all facets from the current subject facet, this results in a vector from the subject facet to every other facet
         relative_positions =  positions[i] - positions
 
         # The dot product between the relative positions and the normals of the subject facet tells us if the facet is above the horizon
-        above_horizon = relative_positions @ normals[i] < 0
+        above_horizon = relative_positions @ normals[i] < epsilon
         
         # Thr dot product between the relative positions and the normals of the subject facet tells us if the facet is facing towards the subject facet
-        facing_towards = np.einsum('ij,ij->i', -relative_positions, normals) < 0 
+        facing_towards = np.einsum('ij,ij->i', -relative_positions, normals) < epsilon
     
         # Combine the two conditions to determine if the facet is visible
-        visible = above_horizon & facing_towards
+        potentially_visible = above_horizon & facing_towards
     
-        # Ensure that the facet does not consider itself as visible
-        visible[i] = False
+        potentially_visible[i] = False # Exclude self
         
         # Write the indices of the visible facets to the subject facet
-        visible_indices[i] = np.where(visible)[0]
+        potentially_visible_indices[i] = np.where(potentially_visible)[0]
 
-    return visible_indices
+    return potentially_visible_indices
 
-def calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas):
-    ''' 
-    This function calculates the secondary radiation coefficients for each visible facet from the subject facet. It calculates the geometric coefficient of secondary radiation from each facet and returns an array of coefficients.
-
-    Limitations: Essentially treats radiation as coming from a point source at the centre of the facet. This is accurate for distant facets, but might cause issues for e.g adjacent facets.
-    NOTE: This needs to be double checked carefully. 
-    '''
-    secondary_radiation_coefficients = np.zeros(len(test_normals))
-
-    for i in range(len(test_normals)):
-        relative_position = test_positions[i] - subject_position
-        distance = np.linalg.norm(relative_position)
-        relative_position_unit = relative_position / distance
-
-        cos_theta_1 = np.dot(relative_position_unit, test_normals[i])
-        cos_theta_2 = np.dot(-relative_position_unit, subject_normal)
-
-        # Ensure cosines are non-negative (no radiation transfer if angle > 90 degrees)
-        cos_theta_1 = max(0, cos_theta_1)
-        cos_theta_2 = max(0, cos_theta_2)
-
-        # Calculate view factor
-        view_factor = (cos_theta_1 * cos_theta_2 * test_areas[i]) / (np.pi * distance**2)
-
-        secondary_radiation_coefficients[i] = view_factor
-
-    return secondary_radiation_coefficients
-
-
-@jit(nopython=True)
-def calculate_shadowing(ray_origin, ray_direction, shape_model_vertices, facet_indices):
-    '''
-    This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to rays_triangles_intersections which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
+def eliminate_obstructed_facets(positions, shape_model_vertices, potentially_visible_facet_indices):
+    unobstructed_facets = []
     
-    It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not.
-    '''
-
-    # Ensure triangles_vertices is an array of shape (m, 3, 3)
-    triangles_vertices = shape_model_vertices[facet_indices]
-
-    # Call the intersection function
-    intersections, t_values = rays_triangles_intersection(
-        ray_origin,
-        ray_direction,
-        triangles_vertices
-    )
-
-    # Check for any intersection
-    if intersections.any():
-        return 0  # The facet is in shadow
+    for i, subject_position in tqdm(enumerate(positions), desc="Eliminating obstructed facets"):
+        if len(potentially_visible_facet_indices[i]) == 0:
+            unobstructed_facets.append(np.array([], dtype=np.int64))
+            continue
         
-    return 1 # The facet is not in shadow
+        # Create array for ray directions
+        test_positions = positions[potentially_visible_facet_indices[i]]
+        ray_directions = test_positions - subject_position
+        ray_directions /= np.linalg.norm(ray_directions, axis=1)[:, np.newaxis]
+        
+        # Get vertices for potentially visible facets, excluding the test facet itself
+        test_vertices = []
+        for j, test_facet_index in enumerate(potentially_visible_facet_indices[i]):
+            other_facets = [idx for idx in potentially_visible_facet_indices[i] if idx != test_facet_index]
+            test_vertices.append(shape_model_vertices[other_facets])
+        
+        unobstructed = []
+        for j, test_facet_index in enumerate(potentially_visible_facet_indices[i]):
+            if len(test_vertices[j]) == 0:
+                unobstructed.append(test_facet_index)
+                continue
+            
+            # Perform ray-triangle intersection test
+            intersections, t_values = rays_triangles_intersection(
+                subject_position, 
+                ray_directions[j:j+1],  # Single ray direction
+                test_vertices[j]
+            )
+            
+            # If no intersections, the facet is unobstructed
+            if not np.any(intersections):
+                unobstructed.append(test_facet_index)
+        
+        unobstructed_facets.append(np.array(unobstructed, dtype=np.int64))
+    
+    return unobstructed_facets
 
 @jit(nopython=True)
 def rays_triangles_intersection(
@@ -351,6 +347,125 @@ def rays_triangles_intersection(
 
     return all_rays_intersected, all_rays_t
 
+# def calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas):
+#     ''' 
+#     This function calculates the secondary radiation coefficients for each visible facet from the subject facet. It calculates the geometric coefficient of secondary radiation from each facet and returns an array of coefficients.
+
+#     Limitations: Essentially treats radiation as coming from a point source at the centre of the facet. This is accurate for distant facets, but might cause issues for e.g adjacent facets.
+#     NOTE: This needs to be double checked carefully. BUG: I think the coefficients are too large. Need to work out what the maximum possible sum of coefficients is (facet inside a box) and compare to that.
+#     NOTE: This currently oversimplifies by assuming large distance from the source. The proper method would be to integrate over the triangle areas of both facets. 
+#     '''
+#     secondary_radiation_coefficients = np.zeros(len(test_normals))
+#     epsilon = 1e-10
+
+#     for i in range(len(test_normals)):
+#         relative_position = test_positions[i] - subject_position
+#         distance = np.linalg.norm(relative_position) + epsilon
+#         relative_position_unit = relative_position / distance
+
+#         cos_theta_1 = np.dot(relative_position_unit, test_normals[i])
+#         cos_theta_2 = np.dot(-relative_position_unit, subject_normal)
+
+#         # Calculate view factor
+#         view_factor = (cos_theta_1 * cos_theta_2 * test_areas[i]) / (np.pi * distance**2)
+
+#         secondary_radiation_coefficients[i] = view_factor
+
+#         print(f"View factor: {view_factor}")
+
+#     return secondary_radiation_coefficients
+
+def calculate_view_factors(subject_vertices, subject_area, subject_normal, 
+                                               test_vertices, test_areas, test_normals, 
+                                               subdivisions):
+    '''
+    This function calculates the geometric view factors between a subject facet and a list of test facets. It uses the quadrature method to subdivide each facet into a grid of points and calculates the view factor between each point on the subject facet and each point on the test facets. The view factors are summed and returned as an array.
+    
+    Parameters:
+    - subject_vertices, test_vertices: np.array of shape (3, 3) for triangle vertices
+    - subject_area, test_areas: float or np.array of floats for triangle areas
+    - subject_normal, test_normals: np.array of shape (3,) or (n, 3) for normal vectors
+    - subdivisions: int, number of subdivisions along each triangle edge (default 3)
+
+    BUG: Sum of viewfactors shouldn't be more than 1 - it is so something is wrong. NOTE: Try looking for pre-existing view factor calculation libraries/functions - surely this is a common problem.
+    '''
+    
+    def interpolate_points(vertices, subdivisions):
+        points = []
+        for i in range(subdivisions):
+            for j in range(subdivisions - i):
+                a = i / (subdivisions - 1)
+                b = j / (subdivisions - 1)
+                c = 1 - a - b
+                point = c * vertices[0] + b * vertices[1] + a * vertices[2]
+                points.append(point)
+        return np.array(points)
+
+    def integrand(p1, p2, subject_normal, test_normal):
+        r = p2 - p1
+        r_mag_sq = np.dot(r, r)
+        if r_mag_sq < 1e-12:  # Avoid division by zero or very small numbers
+            return 0.0
+        r_mag = np.sqrt(r_mag_sq)
+        cos_theta1 = np.dot(r, subject_normal) / r_mag
+        cos_theta2 = -np.dot(r, test_normal) / r_mag
+        if cos_theta1 <= 0 or cos_theta2 <= 0:
+            return 0.0
+        return (cos_theta1 * cos_theta2) / (np.pi * r_mag_sq)
+
+    def view_factor(subject_points, subject_area, subject_normal, 
+                    test_points, test_area, test_normal):
+        integral = 0.0
+        n_points = len(subject_points)
+        for p1 in subject_points:
+            for p2 in test_points:
+                integral += integrand(p1, p2, subject_normal, test_normal)
+        return (integral * subject_area * test_area) / (n_points ** 2)
+
+    subject_points = interpolate_points(subject_vertices, subdivisions)
+    
+    view_factors = []
+    for test_idx in range(len(test_vertices)):
+        test_points = interpolate_points(test_vertices[test_idx], subdivisions)
+        vf = view_factor(subject_points, subject_area, subject_normal,
+                         test_points, test_areas[test_idx], test_normals[test_idx])
+        view_factors.append(vf)
+
+    total_view_factor = np.sum(view_factors)
+    if total_view_factor > 1:
+        print(f"Warning: Total view factor exceeds 1 for facet. Sum: {total_view_factor}")
+        print(f"Subject facet area: {subject_area}")
+        print(f"Subject facet normal: {subject_normal}")
+        print(f"Number of test facets: {len(test_areas)}")
+        print(f"Max individual view factor: {np.max(view_factors)}")
+        print(f"Min individual view factor: {np.min(view_factors)}")
+
+    return np.array(view_factors)
+
+@jit(nopython=True)
+def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vertices, visible_facet_indices):
+    '''
+    This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to rays_triangles_intersections which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
+    
+    It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not.
+    '''
+
+    # Ensure triangles_vertices is an array of shape (m, 3, 3)
+    triangles_vertices = shape_model_vertices[visible_facet_indices]
+
+    # Call the intersection function
+    intersections, t_values = rays_triangles_intersection(
+        subject_positions,
+        sunlight_directions,
+        triangles_vertices
+    )
+
+    # Check for any intersection
+    if intersections.any():
+        return 0  # The facet is in shadow
+        
+    return 1 # The facet is not in shadow
+
 # Calculate rotation matrix for the body's rotation
 @jit(nopython=True)
 def calculate_rotation_matrix(axis, theta):
@@ -365,7 +480,7 @@ def calculate_rotation_matrix(axis, theta):
                         [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
 
-def calculate_insolation(shape_model, simulation):
+def calculate_insolation(thermal_data, shape_model, simulation):
     ''' 
     This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
 
@@ -406,19 +521,18 @@ def calculate_insolation(shape_model, simulation):
                 illumination_factor = 1  # Default to no shadowing
 
                 if len(facet.visible_facets) != 0:
-                    illumination_factor = calculate_shadowing(np.array(facet.position), np.array([rotated_sunlight_directions[t]]), shape_model_vertices, facet.visible_facets)
+                    illumination_factor = calculate_shadowing(np.array(facet.position), np.array([rotated_sunlight_directions[t]]), shape_model_vertices, thermal_data.visible_facets[i])
                 
                 # Calculate insolation
                 insolation = simulation.solar_luminosity * (1 - simulation.albedo) * illumination_factor * cos_zenith_angle / (4 * np.pi * simulation.solar_distance_m**2)
             else:
                 insolation = 0
             
-            insolation_array[i][t] = insolation
-            facet.insolation[t] = insolation
+            thermal_data.insolation[i, t] = insolation
 
-    return shape_model, insolation_array
+    return thermal_data
 
-def calculate_initial_temperatures(shape_model, n_layers, emissivity, n_jobs=-1):
+def calculate_initial_temperatures(thermal_data, emissivity, n_jobs=-1):
     ''' 
     This function calculates the initial temperature of each facet and sub-surface layer of the body based on the insolation curve for that facet. It writes the initial temperatures to the data cube.
     '''
@@ -436,37 +550,25 @@ def calculate_initial_temperatures(shape_model, n_layers, emissivity, n_jobs=-1)
         return calculated_temp
 
     # Parallel processing of facets
-    results = Parallel(n_jobs=n_jobs)(delayed(process_facet)(facet.insolation, emissivity, sigma) for facet in shape_model)
+    results = Parallel(n_jobs=n_jobs)(delayed(process_facet)(thermal_data.insolation[i], emissivity, sigma) 
+                                      for i in range(thermal_data.temperatures.shape[0])
+    )
 
-    print(f"Initial temperatures calculated for {len(shape_model)} facets.")
+    print(f"Initial temperatures calculated for {thermal_data.temperatures.shape[0]} facets.")
 
     # Update the original shape_model with the results NOTE: This step is causing the crash for large shape models. 
     # Print size of array about to be allocated
 
-    for facet, temperature in tqdm(zip(shape_model, results), total=len(shape_model), desc='Saving temps'):
-        facet.temperature[:] = temperature
+    for i, temperature in tqdm(enumerate(results), total=len(results), desc='Saving temps'):
+        thermal_data.temperatures[i, :, :] = temperature
 
     print("Initial temperatures saved for all facets.")
 
-    return shape_model
+    return thermal_data
 
-def calculate_secondary_radiation_term(shape_model, facet, time_step):
-    ''' 
-    This function calculates the secondary radiation received by the facet in question from all visible facets. It calculates the geometric coefficient of secondary radiation from each facet and writes the index and coefficient to the data cube.
-
-    Issues:
-    - Doesn't account for shadowing of secondary raditation by a third facet (e.g. if three facets are in a line, the third will not be shadowed by the second from radiation emitted by the first).
-    
-    NOTE: I will need to calculate the secondary radiation coefficients for each facet before this function can be completed.
-    '''
-
-    # Calculate the secondary radiation term
-    secondary_radiation_term = 0
-
-    for i, visible_facet in enumerate(facet.visible_facets):
-        secondary_radiation_term += shape_model[visible_facet].temperature[time_step][0]**4 * facet.secondary_radiation_coefficients[i]
-
-    return secondary_radiation_term
+@jit(nopython=True)
+def calculate_secondary_radiation(temperatures, visible_facets, view_factors, self_heating_const):
+    return self_heating_const * np.sum(temperatures[visible_facets]**4 * view_factors)
 
 def export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, temperature_array):
     ''' 
@@ -483,203 +585,255 @@ def export_results(shape_model_name, path_to_setup_file, path_to_shape_model_fil
     # Plot the temperature distribution for the final timestep and save it to the folder
     temp_output_file_path = f"outputs/{folder_name}/"
 
-def thermophysical_body_model(shape_model, simulation, path_to_shape_model_file):
+@jit(nopython=True)
+def calculate_energy_terms(temperature, insolation, delta_t, emissivity, beaming_factor,
+                           density, specific_heat_capacity, layer_thickness, thermal_conductivity,
+                           timesteps_per_day, n_layers):
+    energy_terms = np.zeros((len(temperature), timesteps_per_day, 5))
+    for i in range(len(temperature)):
+        for time_step in range(timesteps_per_day):
+            energy_terms[i, time_step, 0] = insolation[i, time_step] * delta_t
+            energy_terms[i, time_step, 1] = -emissivity * beaming_factor * 5.670374419e-8 * (temperature[i, time_step, 0]**4) * delta_t
+            energy_terms[i, time_step, 2] = -density * specific_heat_capacity * layer_thickness * (temperature[i, (time_step + 1) % timesteps_per_day, 0] - temperature[i, time_step, 0])
+            energy_terms[i, time_step, 3] = thermal_conductivity * delta_t * (temperature[i, time_step, 1] - temperature[i, time_step, 0]) / layer_thickness
+            energy_terms[i, time_step, 4] = energy_terms[i, time_step, 0] + energy_terms[i, time_step, 1] + energy_terms[i, time_step, 2] + energy_terms[i, time_step, 3]
+    return energy_terms
+
+@jit(nopython=True)
+def calculate_temperatures(temperature, insolation, visible_facets_list, view_factors_list, 
+                           const1, const2, const3, self_heating_const, 
+                           timesteps_per_day, n_layers, include_self_heating,
+                           start_index, end_index):
+    
+    current_day_temperature = temperature[:, start_index:end_index, :].copy()
+    day_length = end_index - start_index
+    
+    for time_step in range(day_length):
+        prev_step = time_step - 1 if time_step > 0 else -1
+        for i in range(len(current_day_temperature)):
+            if time_step == 0:
+                prev_temp = temperature[i, start_index - 1, 0] if start_index > 0 else current_day_temperature[i, 0, 0]
+                prev_temp_layer1 = temperature[i, start_index - 1, 1] if start_index > 0 else current_day_temperature[i, 0, 1]
+            else:
+                prev_temp = current_day_temperature[i, prev_step, 0]
+                prev_temp_layer1 = current_day_temperature[i, prev_step, 1]
+
+            insolation_term = insolation[i, time_step] * const1
+            re_emitted_radiation_term = -const2 * (prev_temp**4)
+            
+            secondary_radiation_term = 0.0
+            if include_self_heating:
+                visible_facets = visible_facets_list[i]
+                view_factors = view_factors_list[i]
+                for j in range(len(visible_facets)): # Can this be vectorised?
+                    vis_facet = visible_facets[j]
+                    temp = current_day_temperature[vis_facet, prev_step, 0] if time_step > 0 else temperature[vis_facet, start_index - 1, 0] if start_index > 0 else current_day_temperature[vis_facet, 0, 0]
+                    view_factor = view_factors[j]
+                    secondary_radiation_term += temp**4 * view_factor
+                secondary_radiation_term *= self_heating_const
+            
+            conducted_heat_term = const3 * (prev_temp_layer1 - prev_temp)
+            
+            new_temp = (prev_temp + 
+                        insolation_term + 
+                        re_emitted_radiation_term + 
+                        conducted_heat_term + 
+                        secondary_radiation_term)
+
+            # NOTE: Error message doesn't work with numba - needs to be raised outside of the function
+            if np.isnan(new_temp) or np.isinf(new_temp) or new_temp < 0:
+                raise ValueError(f"Invalid temperature calculated for facet {i} at time step {start_index + time_step}, temperature: {new_temp} K.")
+            
+            current_day_temperature[i, time_step, 0] = new_temp
+            
+            # Update subsurface temperatures, excluding the deepest layer
+            for layer in range(1, n_layers - 1):
+                if time_step == 0:
+                    prev_layer = temperature[i, start_index - 1, layer] if start_index > 0 else current_day_temperature[i, 0, layer]
+                    prev_layer_plus = temperature[i, start_index - 1, layer + 1] if start_index > 0 else current_day_temperature[i, 0, layer + 1]
+                    prev_layer_minus = temperature[i, start_index - 1, layer - 1] if start_index > 0 else current_day_temperature[i, 0, layer - 1]
+                else:
+                    prev_layer = current_day_temperature[i, prev_step, layer]
+                    prev_layer_plus = current_day_temperature[i, prev_step, layer + 1]
+                    prev_layer_minus = current_day_temperature[i, prev_step, layer - 1]
+
+                current_day_temperature[i, time_step, layer] = (
+                    prev_layer + 
+                    const3 * (prev_layer_plus - 
+                              2 * prev_layer + 
+                              prev_layer_minus)
+                )
+    
+    return current_day_temperature
+
+def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_shape_model_file):
     ''' 
-    This is the main calculation function for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges.
+    This is the main calculation function for the thermophysical body model. It calls the necessary functions to read in the shape model, set material and model properties, calculate 
+    insolation and temperature arrays, and iterate until the model converges.
     '''
 
-    mean_temperature_error = simulation.convergence_target + 1 # Set to convergence target to start the loop
+    mean_temperature_error = simulation.convergence_target + 1
     day = 0 
     temperature_error = 0
 
     const1 = simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
     const2 = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
     const3 = simulation.thermal_diffusivity * simulation.delta_t / simulation.layer_thickness**2
-    self_heating_const = 5.67e-8 * simulation.delta_t * simulation.emissivity / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity * np.pi)
+    self_heating_const = 5.670374419e-8 * simulation.delta_t * simulation.emissivity / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity * np.pi) # Is pi needed here?
 
-    # Proceed to iterate the model until it converges as long as the maximum number of days has not been reached, ensuring the minimum number of days is observed
+    error_history = []
+
     while day < simulation.max_days and (day < simulation.min_days or mean_temperature_error > simulation.convergence_target):
-        # Include tqdm for progress bar
-        for time_step in tqdm(range(simulation.timesteps_per_day), desc=f"Day {day + 1}"):
-            for facet in shape_model:
+        current_day_start = day * simulation.timesteps_per_day
+        current_day_end = (day + 1) * simulation.timesteps_per_day
+        next_day_start = current_day_end
+                        
+        current_day_temperature = calculate_temperatures(
+            thermal_data.temperatures,
+            thermal_data.insolation,
+            thermal_data.visible_facets,
+            thermal_data.secondary_radiation_view_factors,
+            const1, const2, const3, self_heating_const, 
+            simulation.timesteps_per_day, simulation.n_layers,
+            simulation.include_self_heating,
+            current_day_start, current_day_end
+        )
+
+        thermal_data.temperatures[:, current_day_start:current_day_end, :] = current_day_temperature
+
+        if simulation.calculate_energy_terms:
+            energy_terms = calculate_energy_terms(
+                current_day_temperature, 
+                thermal_data.insolation, 
+                simulation.delta_t, 
+                simulation.emissivity,
+                simulation.beaming_factor, 
+                simulation.density, 
+                simulation.specific_heat_capacity,
+                simulation.layer_thickness, 
+                simulation.thermal_conductivity,
+                simulation.timesteps_per_day, 
+                simulation.n_layers
+            )
+
+        # Check for invalid temperatures
+        for i in range(thermal_data.temperatures.shape[0]):
+            for time_step in range(simulation.timesteps_per_day):
                 current_step = int(time_step + (day * simulation.timesteps_per_day))
-                
-                ############################# Calculate temperature of each layer for each facet #############################
+                if np.isnan(current_day_temperature[i, time_step, 0]) or np.isinf(current_day_temperature[i, time_step, 0]) or current_day_temperature[i, time_step, 0] < 0:
+                    print(f"Ending run at timestep {current_step} due to facet {i} having a temperature of {current_day_temperature[i, time_step, 0]} K.\n Try increasing the number of time steps per day")
 
-                # Calculate insolation term, bearing in mind that the insolation curve is constant for each facet and repeats every rotation period
-                insolation_term = facet.insolation[time_step] * const1
-                #simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
+                    # Plot the energy terms for the facet
+                    if simulation.calculate_energy_terms:
+                        plt.plot(thermal_data.insolation_energy[i, :current_step], label="Insolation energy")
+                        plt.plot(thermal_data.re_emitted_energy[i, :current_step], label="Re-emitted energy")
+                        plt.plot(thermal_data.surface_energy_change[i, :current_step], label="Surface energy change")
+                        plt.plot(thermal_data.conducted_energy[i, :current_step], label="Conducted energy")
+                        plt.plot(thermal_data.unphysical_energy_loss[i, :current_step], label="Unphysical energy loss")
+                        plt.legend()
+                        plt.xlabel('Timestep')
+                        plt.ylabel('Energy (J)')
+                        plt.title(f'Energy terms for facet {i}')
+                        plt.show()
 
-                # Calculate re-emitted radiation term
-                re_emitted_radiation_term = - const2 * (facet.temperature[current_step][0]**4)
-
-                # Calculate secondary radiation term if self-heating is included and facet has visible facets
-                if simulation.include_self_heating and len(facet.visible_facets) != 0:
-                    secondary_radiation_term = self_heating_const * calculate_secondary_radiation_term(shape_model, facet, time_step)
-            
-                else:
-                    secondary_radiation_term = 0
-
-                # Calculate sublimation energy loss term TODO: Implement this
-
-                # Calculate conducted heat term
-                conducted_heat_term = const3 * (facet.temperature[current_step][1] - facet.temperature[current_step][0])
-
-                # Calculate the new temperatures of the subsurface layers, ensuring that the temperature of the deepest layer is fixed at its current value
-                for layer in range(1, simulation.n_layers - 1):
-                    facet.temperature[current_step + 1][layer] = facet.temperature[current_step][layer] + const3 * (facet.temperature[current_step][layer + 1] - 2 * facet.temperature[current_step][layer] + facet.temperature[current_step][layer - 1])
-
-                # Calculate the new temperature of the surface layer
-                facet.temperature[current_step + 1][0] = facet.temperature[current_step][0] + insolation_term + re_emitted_radiation_term + conducted_heat_term + secondary_radiation_term
-
-                # Print the heat terms for the facet
-                # if shape_model.index(facet) == 0:
-                #     print(f"Facet: {shape_model.index(facet)}, Time step: {time_step}, "
-                #         f"Current step temp: {facet.temperature[current_step][0]} K, "
-                #         f"Insolation term: {insolation_term}, "
-                #         f"Re-emitted radiation term: {re_emitted_radiation_term}, "
-                #         f"Conducted heat term: {conducted_heat_term}, "
-                #         f"New temp: {facet.temperature[current_step + 1][0]} K, "
-                #         f"Delta t: {simulation.delta_t}")
-
-                # ############################# Calculate unphysical energy for facet (assuming unit area) #############################
-                # facet.insolation_energy[current_step] = facet.insolation[time_step] * simulation.delta_t
-                # facet.re_emitted_energy[current_step] = -simulation.emissivity * simulation.beaming_factor * 5.670374419e-8 * (facet.temperature[current_step][0]**4) * simulation.delta_t
-                # facet.surface_energy_change[current_step] = simulation.density * simulation.specific_heat_capacity * simulation.layer_thickness * (facet.temperature[current_step + 1][0] - facet.temperature[current_step][0])
-
-                # sub_surface_energy_conducted = 0
-
-                # for layer in range(1, simulation.n_layers - 1):
-                #     sub_surface_energy_conducted += simulation.density * simulation.specific_heat_capacity * simulation.layer_thickness * (facet.temperature[current_step + 1][layer] - facet.temperature[current_step][layer])
-
-                # facet.conducted_energy[current_step] = -sub_surface_energy_conducted
-
-                # facet.unphysical_energy_loss[current_step] = facet.insolation_energy[current_step] + facet.re_emitted_energy[current_step] - facet.surface_energy_change[current_step] + facet.conducted_energy[current_step]
-
-                # ############################# Calculate unphysical energy for facet surface only #############################
-                # facet.insolation_energy[current_step] = facet.insolation[time_step] * simulation.delta_t
-                # facet.re_emitted_energy[current_step] = - simulation.emissivity * simulation.beaming_factor * 5.670374419e-8 * (facet.temperature[current_step][0]**4) * simulation.delta_t
-                # facet.surface_energy_change[current_step] = - simulation.density * simulation.specific_heat_capacity * simulation.layer_thickness * (facet.temperature[current_step + 1][0] - facet.temperature[current_step][0])
-                # facet.conducted_energy[current_step] = simulation.thermal_conductivity * simulation.delta_t * (facet.temperature[current_step][1] - facet.temperature[current_step][0]) / simulation.layer_thickness
-
-                # facet.unphysical_energy_loss[current_step] = facet.insolation_energy[current_step] + facet.re_emitted_energy[current_step] + facet.surface_energy_change[current_step] + facet.conducted_energy[current_step]
-
-                if np.isnan(facet.temperature[current_step][0]) or np.isinf(facet.temperature[current_step][0]) or facet.temperature[current_step][0] < 0:
-                    print(f"Ending run at timestep {current_step} due to facet {shape_model.index(facet)} having a temperature of {facet.temperature[current_step][0]} K.\n Try increasing the number of time steps per day")
-                    
-                    # # Plot the energy terms for the facet
-                    # plt.plot(facet.insolation_energy[:current_step], label="Insolation energy")
-                    # plt.plot(facet.re_emitted_energy[:current_step], label="Re-emitted energy")
-                    # plt.plot(facet.surface_energy_change[:current_step], label="Surface energy change")
-                    # plt.plot(facet.conducted_energy[:current_step], label="Conducted energy")
-                    # plt.plot(facet.unphysical_energy_loss[:current_step], label="Unphysical energy loss")
-                    # plt.legend()
-                    # plt.show()
-
-                    # Plot the insolation curve for the facet including the number
-                    plt.plot(facet.insolation)
+                    # Plot the insolation curve for the facet
+                    plt.plot(thermal_data.insolation[i])
                     plt.xlabel('Number of timesteps')
                     plt.ylabel('Insolation (W/m^2)')
-                    plt.title(f'Insolation curve for facet {shape_model.index(facet)}')
+                    plt.title(f'Insolation curve for facet {i}')
                     plt.show()
 
                     # Plot sub-surface temperatures for the facet
                     for layer in range(1, simulation.n_layers):
-                        plt.plot([facet.temperature[t][layer] for t in range(current_step)])
+                        plt.plot(thermal_data.temperatures[i, :current_step+100, layer])
                     plt.xlabel('Number of timesteps')
                     plt.ylabel('Temperature (K)')
-                    plt.title(f'Sub-surface temperature for facet {shape_model.index(facet)}')
+                    plt.title(f'Sub-surface temperature for facet {i}')
                     plt.legend([f"Layer {layer}" for layer in range(1, simulation.n_layers)])
                     plt.show()
 
-                    # Send shape model to animate_model.py with all facets blue except the problematic one in red
                     # Create an array of 0s for all facets for all time steps in the day
-                    facet_highlight_array = np.zeros((len(shape_model), simulation.timesteps_per_day))
-                    facet_highlight_array[shape_model.index(facet)] = 1
+                    facet_highlight_array = np.zeros((thermal_data.temperatures.shape[0], simulation.timesteps_per_day))
+                    facet_highlight_array[i] = 1
 
-                    animate_model(path_to_shape_model_file, facet_highlight_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Problematicness of facet', axis_label='Problem facet is red', animation_frames=200, save_animation=False, save_animation_name='problematic_facet_animation.gif', background_colour = 'black')
+                    animate_model(path_to_shape_model_file, facet_highlight_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Problematic facet', axis_label='Problem facet is red', animation_frames=200, save_animation=False, save_animation_name='problematic_facet_animation.gif', background_colour = 'black')
 
                     sys.exit()
 
-            # Calculate convergence factor (average temperature error at surface across all facets divided by convergence target)
-            temperature_error = 0
-            
-            for facet in shape_model:
-                    temperature_error += abs(facet.temperature[day * simulation.timesteps_per_day][0] - facet.temperature[(day - 1) * simulation.timesteps_per_day][0])
+        # Calculate convergence factor
+        temperature_error = np.sum(np.abs(current_day_temperature[:, 0, 0] - current_day_temperature[:, -1, 0]))
+        mean_temperature_error = temperature_error / len(shape_model)
 
-        # Calculate the mean temperature of the surface layer for each facet for the last full day
-        mean_surface_temperatures = np.zeros(len(shape_model))
-        for i, facet in enumerate(shape_model):
-            mean_surface_temperatures[i] = np.mean([facet.temperature[day * simulation.timesteps_per_day + t][0] for t in range(simulation.timesteps_per_day)])
-
-        # Set deep temperature for each facet to the average of surface layer temperature of that facet for the last full day for all future timesteps 
-        for i, facet in enumerate(shape_model):
-            for t in range(simulation.timesteps_per_day):
-                facet.temperature[(day + 1) * simulation.timesteps_per_day + t][simulation.n_layers - 1] = mean_surface_temperatures[i]
-
-        mean_temperature_error = temperature_error / (len(shape_model))
-
-        print(f"Day: {day} | Temperature error: {mean_temperature_error} K | Convergence target: {simulation.convergence_target} K")
+        # Ensure propagation of the temperatures to the next day
+        if day < simulation.max_days - 1:
+            # Set the deep layer temperature to the mean surface temperature of all timesteps of the current day
+            mean_surface_temp = np.mean(current_day_temperature[:, :, 0])
+            thermal_data.temperatures[:, next_day_start:next_day_start + simulation.timesteps_per_day, -1] = mean_surface_temp
+    
+        print(f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Convergence target: {simulation.convergence_target} K")
         
+        error_history.append(mean_temperature_error)
         day += 1
 
     # Decrement the day counter
-    day -= 1    
-    
+    day -= 1
+
+    final_day_temperatures = thermal_data.temperatures[:, -simulation.timesteps_per_day:, 0]
+
+    final_timestep_temperatures = thermal_data.temperatures[:, -1, 0]
+    final_day_temperatures_all_layers = thermal_data.temperatures[:, -simulation.timesteps_per_day:, :]
+
     if mean_temperature_error < simulation.convergence_target:
-
-        # Create an array of temperatures at each timestep in final day for the surface layer of each facet
-        final_day_temperatures = np.zeros((len(shape_model), simulation.timesteps_per_day))
-
-        # Fill the array
-        for i, facet in enumerate(shape_model):
-            for t in range(simulation.timesteps_per_day):
-                final_day_temperatures[i][t] = facet.temperature[day * simulation.timesteps_per_day + t][0]
-
-        # Create an array of final timestep temperatures
-        final_timestep_temperatures = np.zeros(len(shape_model))
-        for i, facet in enumerate(shape_model):
-            final_timestep_temperatures[i] = facet.temperature[(day + 1) * simulation.timesteps_per_day][0]
-
-        # Create an array of temperatures at each timestep in final day for all layers of each facet
-        final_day_temperatures_all_layers = np.zeros((len(shape_model), simulation.timesteps_per_day, simulation.n_layers))
-
-        # Fill the array
-        for i, facet in enumerate(shape_model):
-            for t in range(simulation.timesteps_per_day):
-                for layer in range(simulation.n_layers):
-                    final_day_temperatures_all_layers[i][t][layer] = facet.temperature[day * simulation.timesteps_per_day + t][layer]
-
+        print(f"Convergence achieved after {day} days.")
+        if simulation.calculate_energy_terms:
+            for i in range(len(shape_model)):
+                thermal_data.insolation_energy[i] = energy_terms[i, :, 0]
+                thermal_data.re_emitted_energy[i] = energy_terms[i, :, 1]
+                thermal_data.surface_energy_change[i] = energy_terms[i, :, 2]
+                thermal_data.conducted_energy[i] = energy_terms[i, :, 3]
+                thermal_data.unphysical_energy_loss[i] = energy_terms[i, :, 4]
     else:
-        final_timestep_temperatures = None
-        print(f"Maximum days reached without achieving convergence. \n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n Try increasing max_days or decreasing convergence_target.")
+        print(f"Maximum days reached without achieving convergence.")
+        print(f"Final temperature error: {temperature_error / len(shape_model)} K")
+        print("Try increasing max_days or decreasing convergence_target.")
 
-        # Break the loop and return None
-        sys.exit()
+        if simulation.calculate_energy_terms:
+            plt.plot(energy_terms[i, :, 0], label="Insolation energy")
+            plt.plot(energy_terms[i, :, 1], label="Re-emitted energy")
+            plt.plot(energy_terms[i, :, 2], label="Surface energy change")
+            plt.plot(energy_terms[i, :, 3], label="Conducted energy")
+            plt.plot(energy_terms[i, :, 4], label="Unphysical energy loss")
+            plt.legend()
+            plt.show()
 
     return final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day+1, temperature_error
 
 def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
+
+    WORKED OUT SECONDARY BUG - ITS DUE TO INCORRECT VISIBLE FACETS CALCULATION. NEEDS TO CONSIDER OBSTRUCTED VIEW. 
     '''
 
     # Shape model name
-    shape_model_name = "67P_not_to_scale_low_res.stl"
+    shape_model_name = "Rubber_Duck_1500_facets.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
     path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
 
     # Load setup parameters from JSON file
-    simulation = Simulation(path_to_setup_file)
+    simulation = Simulation(path_to_setup_file, calculate_energy_terms=False) #BUG: - numba doesn't work with energy terms being calculated
+    
+    shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
 
-    print(f"Number of timesteps per day: {simulation.timesteps_per_day}\n")
-    print(f"Layer thickness: {simulation.layer_thickness} m\n")
-    print(f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5\n")
-    print(f"Skin depth: {simulation.skin_depth} m\n")
+    thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
 
-    shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days)
+    print(f"\nDerived model parameters:")
+    print(f"Number of timesteps per day: {simulation.timesteps_per_day}")
+    print(f"Layer thickness: {simulation.layer_thickness} m")
+    print(f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5")
+    print(f"Skin depth: {simulation.skin_depth} m")
 
     ################ Modelling ################
     simulation.include_self_heating = False
@@ -688,10 +842,12 @@ def main():
     plot_shadowing = False
     plot_insolation_curve = False
     plot_initial_temp_histogram = False
+    plot_secondary_radiation_view_factors = False
+    plot_secondary_contributions = True
     plot_final_day_temp_distribution = False
     plot_final_day_all_layers_temp_distribution = False
-    plot_all_days_all_layers_temp_distribution = False
-    plot_energy_terms = False
+    plot_all_days_all_layers_temp_distribution = True
+    plot_energy_terms = False # Note: You must set simulation.calculate_energy_terms to True to plot energy terms
     plot_temp_distribution_for_final_day = False
     animate_final_day_temp_distribution = True
     plot_final_day_comparison = False
@@ -699,56 +855,150 @@ def main():
     # Setup the model
     positions = np.array([facet.position for facet in shape_model])
     normals = np.array([facet.normal for facet in shape_model])
-    visible_indices = calculate_visible_facets(positions, normals)
+    vertices = np.array([facet.vertices for facet in shape_model])
+    
+    potentially_visible_indices = calculate_visible_facets(positions, normals)
 
-    for i in tqdm(range(len(shape_model)), desc="Calculating visible facets"):
-        shape_model[i].visible_facets = visible_indices[i]
+    print(f"Eliminating obstructed facets.\n")
+    visible_indices = eliminate_obstructed_facets(positions, vertices, potentially_visible_indices)
+    
+    thermal_data.set_visible_facets(visible_indices)
 
-    shape_model, insolation_array = calculate_insolation(shape_model, simulation)
+    thermal_data = calculate_insolation(thermal_data, shape_model, simulation)
 
     facet_index = 0 # Index of facet to plot
 
     if plot_shadowing:
         print(f"Preparing shadowing visualisation.\n")
-        # animate_shadowing(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day)
 
-        animate_model(path_to_shape_model_file, insolation_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='binary_r', plot_title='Shadowing on the body', axis_label='Insolation (W/m^2)', animation_frames=200, save_animation=False, save_animation_name='shadowing_animation.gif', background_colour = 'black')
+        animate_model(path_to_shape_model_file, thermal_data.insolation, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='binary_r', plot_title='Shadowing on the body', axis_label='Insolation (W/m^2)', animation_frames=200, save_animation=False, save_animation_name='shadowing_animation.gif', background_colour = 'black')
 
     if plot_insolation_curve:
         fig_insolation = plt.figure()
-        plt.plot(shape_model[facet_index].insolation)
+        plt.plot(thermal_data.insolation[facet_index])
         plt.xlabel('Number of timesteps')
         plt.ylabel('Insolation (W/m^2)')
         plt.title('Insolation curve for a single facet for one full rotation of the body')
         fig_insolation.show()
 
     print(f"Calculating initial temperatures.\n")
-    shape_model = calculate_initial_temperatures(shape_model, simulation.n_layers, simulation.emissivity)
+    thermal_data = calculate_initial_temperatures(thermal_data, simulation.emissivity)
 
     if plot_initial_temp_histogram:
         fig_histogram = plt.figure()
-        initial_temperatures = [facet.temperature[0][0] for facet in shape_model]
+        initial_temperatures = [thermal_data.temperatures[i, 0, 0] for i in range(len(shape_model))]
         plt.hist(initial_temperatures, bins=20)
         plt.xlabel('Initial temperature (K)')
         plt.ylabel('Number of facets')
         plt.title('Initial temperature distribution of all facets')
         fig_histogram.show()
 
+    numba_visible_facets = List()
+    for facets in thermal_data.visible_facets:
+        numba_visible_facets.append(np.array(facets, dtype=np.int64))
+    thermal_data.visible_facets = numba_visible_facets
+
     if simulation.include_self_heating:
-        for i in tqdm(range(len(shape_model)), desc="Calculating secondary radiation coefficients"):
+        view_factors = []
+        all_view_factors = []
+        for i in tqdm(range(len(shape_model)), desc="Calculating secondary radiation view factors"):
+            # subject_normal = shape_model[i].normal
+            # subject_position = shape_model[i].position
+            # visible_indices = thermal_data.visible_facets[i]
+            # test_normals = np.array([shape_model[j].normal for j in visible_indices])
+            # test_positions = np.array([shape_model[j].position for j in visible_indices])
+            # test_areas = np.array([shape_model[j].area for j in visible_indices])
+            # view_factor = calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas)
+            # if np.any(np.isnan(view_factor)) or np.any(np.isinf(view_factor)):
+            #     print(f"Warning: Invalid coefficient for facet {i}")
+            #     print(f"View factor: {view_factor}")
+            #     print(f"Visible facets: {visible_indices}")
+            # view_factors.append(view_factor)
+
+            visible_indices = thermal_data.visible_facets[i]
+
+            subject_vertices = shape_model[i].vertices
+            subject_area = shape_model[i].area
             subject_normal = shape_model[i].normal
-            subject_position = shape_model[i].position
-            test_normals = np.array([shape_model[j].normal for j in shape_model[i].visible_facets])
-            test_postions = np.array([shape_model[j].position for j in shape_model[i].visible_facets])
-            test_areas = np.array([shape_model[j].area for j in shape_model[i].visible_facets])
-            shape_model[i].secondary_radiation_coefficients = calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_postions, test_areas)
+            test_vertices = np.array([shape_model[j].vertices for j in visible_indices])
+            test_areas = np.array([shape_model[j].area for j in visible_indices])
+            test_normals = np.array([shape_model[j].normal for j in visible_indices])
+
+            view_factors = calculate_view_factors(subject_vertices, subject_area, subject_normal, test_vertices, test_areas, test_normals, subdivisions=10) # NOTE: Subdivisions can be increased for more accurate results
+            if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
+                print(f"Warning: Invalid view factor for facet {i}")
+                print(f"View factors: {view_factors}")
+                print(f"Visible facets: {visible_indices}")
+            all_view_factors.append(view_factors)
+
+        thermal_data.set_secondary_radiation_view_factors(all_view_factors)
+
+        numba_view_factors = List()
+        for view_factors in thermal_data.secondary_radiation_view_factors:
+            numba_view_factors.append(np.array(view_factors, dtype=np.float64))
+        thermal_data.secondary_radiation_view_factors = numba_view_factors
+    else:
+        # Create an empty Numba List for view factors when self-heating is not included
+        numba_view_factors = List()
+        for _ in range(len(shape_model)):
+            numba_view_factors.append(np.array([], dtype=np.float64))
+        thermal_data.secondary_radiation_view_factors = numba_view_factors
+
+    if plot_secondary_radiation_view_factors:
+        selected_facet = 1454  # Change this to the index of the facet you're interested in
+        
+        # Get the indices and view factors of contributing facets
+        contributing_indices = thermal_data.visible_facets[selected_facet]
+        contributing_view_factors = thermal_data.secondary_radiation_view_factors[selected_facet]
+        
+        # Create an array of zeros for all facets
+        contribution_data = np.zeros(len(shape_model))
+        
+        # Set the view factors for the contributing facets
+        contribution_data[contributing_indices] = 1
+
+        contribution_data[selected_facet] = 0.5
+
+        # Print contributing facets and their view factors
+        print(f"\nContributing facets for facet {selected_facet}:")
+        for index, view_factors in zip(contributing_indices, contributing_view_factors):
+            print(f"Facet {index}: view factor = {view_factors:.6f}")
+        print(f"Total number of contributing facets: {len(contributing_indices)}")
+        
+        print(f"Preparing visualization of contributing facets for facet {selected_facet}.")
+        animate_model(path_to_shape_model_file, contribution_data[:, np.newaxis], 
+                    simulation.rotation_axis, simulation.sunlight_direction, 1, 
+                    colour_map='viridis', plot_title=f'Contributing Facets for Facet {selected_facet}', 
+                    axis_label='View Factors Value', animation_frames=1, 
+                    save_animation=False, save_animation_name=f'contributing_facets_{selected_facet}.png', 
+                    background_colour='black')
+        
+    if plot_secondary_contributions:
+        # Calculate the sum of secondary radiation view factors for each facet
+        secondary_radiation_sum = np.array([np.sum(view_factors) for view_factors in thermal_data.secondary_radiation_view_factors])
+
+        print("Preparing secondary radiation visualization.")
+        animate_model(path_to_shape_model_file, secondary_radiation_sum[:, np.newaxis], 
+                    simulation.rotation_axis, simulation.sunlight_direction, 1, 
+                    colour_map='viridis', plot_title='Secondary Radiation Contribution', 
+                    axis_label='Sum of View Factors', animation_frames=1, 
+                    save_animation=False, save_animation_name='secondary_radiation.png', 
+                    background_colour='black')
+
 
     print(f"Running main simulation loop.\n")
     start_time = time.time()
-    final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error = thermophysical_body_model(shape_model, simulation, path_to_shape_model_file)
+    final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error = thermophysical_body_model(thermal_data, shape_model, simulation, path_to_shape_model_file)
     end_time = time.time()
     execution_time = end_time - start_time
-    print(f"Convergence target achieved after {day} days.\n\nFinal temperature error: {temperature_error / (len(shape_model))} K\n")
+
+    if final_timestep_temperatures is not None:
+        print(f"Convergence target achieved after {day} days.")
+        print(f"Final temperature error: {temperature_error / len(shape_model)} K")
+    else:
+        print(f"Model did not converge after {day} days.")
+        print(f"Final temperature error: {temperature_error / len(shape_model)} K")
+
     print(f"Execution time: {execution_time} seconds")
 
     if plot_final_day_temp_distribution:
@@ -769,7 +1019,7 @@ def main():
 
     if plot_all_days_all_layers_temp_distribution:
         fig_all_days_all_layers_temp_dist = plt.figure()
-        plt.plot(shape_model[facet_index].temperature[:(day) * simulation.timesteps_per_day, :])
+        plt.plot(thermal_data.temperatures[facet_index, :, :])
         plt.xlabel('Timestep')
         plt.ylabel('Temperature (K)')
         plt.title('Temperature distribution for all layers in facet for the full run')
@@ -790,7 +1040,7 @@ def main():
 
     if plot_temp_distribution_for_final_day:
         fig_final_day_temps = plt.figure()
-        plt.plot(shape_model[facet_index].temperature[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day])
+        plt.plot(thermal_data.temperatures[facet_index, (day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day, 0])
         plt.xlabel('Timestep')
         plt.ylabel('Temperature (K)')
         plt.title('Temperature distribution for all layers in facet for the full run')
@@ -837,4 +1087,9 @@ def main():
 
 # Call the main program to start execution
 if __name__ == "__main__":
-    main()
+    cProfile.run('main()', 'output.prof')
+    
+    # Print the profiling results
+    with open('profiling_output.txt', 'w') as f:
+        p = pstats.Stats('output.prof', stream=f)
+        p.sort_stats('cumulative').print_stats()
