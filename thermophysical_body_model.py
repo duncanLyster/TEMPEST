@@ -21,7 +21,7 @@ NEXT STEPS:
     c) Look into gradient descent optimisation technique
 4) Write a performance report for the model
 5) Remove all NOTE and TODO comments from the code
-6) Consider scattering of light from facets (as opposed to just re-radiation)
+6) Add light scattering to insolation calculation
 7) Add parallelisation to the model
 8) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
 9) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
@@ -35,6 +35,7 @@ NEXT STEPS:
     - Simulate retrievals for temperature based on instrument
 17) Run setup steps just once for each shape model (e.g. calculate view factors, visible facets, etc.)
 18) GPU acceleration - look into PyCUDA 
+19) Add comparison tool to compare two runs of the model. (Separate script?)
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -731,6 +732,9 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
     # Decrement the day counter
     day -= 1
 
+    # Remove unused days from thermal_data
+    thermal_data.temperatures = thermal_data.temperatures[:, :simulation.timesteps_per_day * (day+1), :]
+
     final_day_temperatures = thermal_data.temperatures[:, -simulation.timesteps_per_day:, 0]
 
     final_timestep_temperatures = thermal_data.temperatures[:, -1, 0]
@@ -764,8 +768,6 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
 def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
-
-    NOTE: Check for energy conservation leading to lack of convergence.
     '''
 
     # Shape model name
@@ -989,7 +991,7 @@ def main():
         plt.title('Temperature distribution for all layers in facet for the full run')
         fig_final_day_temps.show()
 
-    if animate_final_day_temp_distribution: #NOTE: Not animating - final_day_temperatures is not what is expected
+    if animate_final_day_temp_distribution:
         print(f"Preparing temperature animation.\n")
 
         animate_model(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Temperature distribution on the body', axis_label='Temperature (K)', animation_frames=200, save_animation=False, save_animation_name='temperature_animation.gif', background_colour = 'black')
