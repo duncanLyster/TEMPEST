@@ -25,16 +25,16 @@ NEXT STEPS:
 7) Add parallelisation to the model
 8) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
 9) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
-10) BUG: Secondary radiation crashing for rubber duck test shape model. Try plotting visible facets and coefficients for each facet to debug. 
-11) BUG: John Spencer's model parameters crash it at 1 AU - Suspect something to do with timestep calculation. 
-12) Add option to implement sublimation energy loss
-13) Build in mesh converstion for binary .STL and .OBJ files
-14) Create web interface for ease of use?
-15) Integrate with JPL Horizons ephemeris to get real-time insolation data
-16) Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
-17) Add filter visualisations to thermal model
+10) BUG: John Spencer's model parameters crash it at 1 AU - Suspect something to do with timestep calculation. 
+11) Add option to implement sublimation energy loss
+12) Build in mesh converstion for binary .STL and .OBJ files
+13) Create web interface for ease of use?
+14) Integrate with JPL Horizons ephemeris to get real-time insolation data
+15) Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
+16) Add filter visualisations to thermal model
     - Simulate retrievals for temperature based on instrument
-18) Run setup steps just once for each shape model (e.g. calculate view factors, visible facets, etc.)
+17) Run setup steps just once for each shape model (e.g. calculate view factors, visible facets, etc.)
+18) GPU acceleration - look into PyCUDA 
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -516,9 +516,7 @@ def calculate_initial_temperatures(thermal_data, emissivity, n_jobs=-1):
 
     print(f"Initial temperatures calculated for {thermal_data.temperatures.shape[0]} facets.")
 
-    # Update the original shape_model with the results NOTE: This step is causing the crash for large shape models. 
-    # Print size of array about to be allocated
-
+    # Update the original shape_model with the results
     for i, temperature in tqdm(enumerate(results), total=len(results), desc='Saving temps'):
         thermal_data.temperatures[i, :, :] = temperature
 
@@ -633,6 +631,9 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
 
     error_history = []
 
+    # Set comparison temperatures to the initial temperatures of the first timestep (day 0, timestep 0)
+    comparison_temps = thermal_data.temperatures[:, 0, 0].copy()
+
     while day < simulation.max_days and (day < simulation.min_days or mean_temperature_error > simulation.convergence_target):
         current_day_start = day * simulation.timesteps_per_day
         current_day_end = (day + 1) * simulation.timesteps_per_day
@@ -711,7 +712,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
                     sys.exit()
 
         # Calculate convergence factor
-        temperature_error = np.sum(np.abs(current_day_temperature[:, 0, 0] - current_day_temperature[:, -1, 0]))
+        temperature_error = np.sum(np.abs(current_day_temperature[:, 0, 0] - comparison_temps)) # 
         mean_temperature_error = temperature_error / len(shape_model)
 
         # Ensure propagation of the temperatures to the next day
@@ -721,6 +722,8 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
             thermal_data.temperatures[:, next_day_start:next_day_start + simulation.timesteps_per_day, -1] = mean_surface_temp
     
         print(f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Convergence target: {simulation.convergence_target} K")
+
+        comparison_temps = current_day_temperature[:, 0, 0].copy()
         
         error_history.append(mean_temperature_error)
         day += 1
@@ -762,11 +765,11 @@ def main():
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
 
-    WORKED OUT SECONDARY BUG - ITS DUE TO INCORRECT VISIBLE FACETS CALCULATION. NEEDS TO CONSIDER OBSTRUCTED VIEW. 
+    NOTE: Check for energy conservation leading to lack of convergence.
     '''
 
     # Shape model name
-    shape_model_name = "Rubber_Duck_1500_facets.stl"
+    shape_model_name = "67P_not_to_scale_low_res.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
@@ -784,6 +787,8 @@ def main():
     print(f"Layer thickness: {simulation.layer_thickness} m")
     print(f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5")
     print(f"Skin depth: {simulation.skin_depth} m")
+
+    print(f"\n Number of facets: {len(shape_model)}")
 
     ################ Modelling ################
     simulation.include_self_heating = True
@@ -984,9 +989,8 @@ def main():
         plt.title('Temperature distribution for all layers in facet for the full run')
         fig_final_day_temps.show()
 
-    if animate_final_day_temp_distribution:
+    if animate_final_day_temp_distribution: #NOTE: Not animating - final_day_temperatures is not what is expected
         print(f"Preparing temperature animation.\n")
-        #animate_temperature_distribution(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.rotation_period_s, simulation.solar_distance_au, simulation.sunlight_direction, simulation.timesteps_per_day, simulation.delta_t)
 
         animate_model(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Temperature distribution on the body', axis_label='Temperature (K)', animation_frames=200, save_animation=False, save_animation_name='temperature_animation.gif', background_colour = 'black')
 
@@ -1019,7 +1023,6 @@ def main():
         plt.show()
 
         np.savetxt("final_day.csv", np.column_stack((x_original, final_day_temperatures[facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
-
 
     print(f"Model run complete.\n")
 
