@@ -34,6 +34,7 @@ NEXT STEPS:
 16) Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
 17) Add filter visualisations to thermal model
     - Simulate retrievals for temperature based on instrument
+18) Run setup steps just once for each shape model (e.g. calculate view factors, visible facets, etc.)
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -189,7 +190,7 @@ def calculate_visible_facets(positions, normals):
     ''' 
     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It returns the indices of the visible facets.
     
-    NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Additionally, for very complicated shapes, facets may be identified as visible when there are structures in the way.
+    NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Could add subdivision option to the model for better partial shadowing, but probably best to just use higher facet count models.
     '''
     potentially_visible_indices =[[] for _ in range(len(positions))]
 
@@ -347,100 +348,59 @@ def rays_triangles_intersection(
 
     return all_rays_intersected, all_rays_t
 
-# def calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas):
-#     ''' 
-#     This function calculates the secondary radiation coefficients for each visible facet from the subject facet. It calculates the geometric coefficient of secondary radiation from each facet and returns an array of coefficients.
+@jit(nopython=True)
+def normalize_vector(v):
+    """Normalize a vector."""
+    norm = np.sqrt(np.sum(v**2))
+    return v / norm if norm != 0 else v
 
-#     Limitations: Essentially treats radiation as coming from a point source at the centre of the facet. This is accurate for distant facets, but might cause issues for e.g adjacent facets.
-#     NOTE: This needs to be double checked carefully. BUG: I think the coefficients are too large. Need to work out what the maximum possible sum of coefficients is (facet inside a box) and compare to that.
-#     NOTE: This currently oversimplifies by assuming large distance from the source. The proper method would be to integrate over the triangle areas of both facets. 
-#     '''
-#     secondary_radiation_coefficients = np.zeros(len(test_normals))
-#     epsilon = 1e-10
+@jit(nopython=True)
+def random_points_in_triangle(v0, v1, v2, n):
+    r1 = np.sqrt(np.random.rand(n))
+    r2 = np.random.rand(n)
+    return (1 - r1)[:, np.newaxis] * v0 + (r1 * (1 - r2))[:, np.newaxis] * v1 + (r1 * r2)[:, np.newaxis] * v2
 
-#     for i in range(len(test_normals)):
-#         relative_position = test_positions[i] - subject_position
-#         distance = np.linalg.norm(relative_position) + epsilon
-#         relative_position_unit = relative_position / distance
-
-#         cos_theta_1 = np.dot(relative_position_unit, test_normals[i])
-#         cos_theta_2 = np.dot(-relative_position_unit, subject_normal)
-
-#         # Calculate view factor
-#         view_factor = (cos_theta_1 * cos_theta_2 * test_areas[i]) / (np.pi * distance**2)
-
-#         secondary_radiation_coefficients[i] = view_factor
-
-#         print(f"View factor: {view_factor}")
-
-#     return secondary_radiation_coefficients
-
-def calculate_view_factors(subject_vertices, subject_area, subject_normal, 
-                                               test_vertices, test_areas, test_normals, 
-                                               subdivisions):
+@jit(nopython=True)
+def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays):
     '''
-    This function calculates the geometric view factors between a subject facet and a list of test facets. It uses the quadrature method to subdivide each facet into a grid of points and calculates the view factor between each point on the subject facet and each point on the test facets. The view factors are summed and returned as an array.
-    
-    Parameters:
-    - subject_vertices, test_vertices: np.array of shape (3, 3) for triangle vertices
-    - subject_area, test_areas: float or np.array of floats for triangle areas
-    - subject_normal, test_normals: np.array of shape (3,) or (n, 3) for normal vectors
-    - subdivisions: int, number of subdivisions along each triangle edge (default 3)
-
-    BUG: Sum of viewfactors shouldn't be more than 1 - it is so something is wrong. NOTE: Try looking for pre-existing view factor calculation libraries/functions - surely this is a common problem.
+    Calculate view factors between subject and test vertices. The view factors are calculated by firing rays from the subject vertices to the test vertices and checking if the rays intersect with the test vertices. The view factor is calculated as the number of rays that intersect with the test vertices divided by the total number of rays fired from the subject vertices.
     '''
+
+    ray_sources = random_points_in_triangle(subject_vertices[0], subject_vertices[1], subject_vertices[2], n_rays)
     
-    def interpolate_points(vertices, subdivisions):
-        points = []
-        for i in range(subdivisions):
-            for j in range(subdivisions - i):
-                a = i / (subdivisions - 1)
-                b = j / (subdivisions - 1)
-                c = 1 - a - b
-                point = c * vertices[0] + b * vertices[1] + a * vertices[2]
-                points.append(point)
-        return np.array(points)
-
-    def integrand(p1, p2, subject_normal, test_normal):
-        r = p2 - p1
-        r_mag_sq = np.dot(r, r)
-        if r_mag_sq < 1e-12:  # Avoid division by zero or very small numbers
-            return 0.0
-        r_mag = np.sqrt(r_mag_sq)
-        cos_theta1 = np.dot(r, subject_normal) / r_mag
-        cos_theta2 = -np.dot(r, test_normal) / r_mag
-        if cos_theta1 <= 0 or cos_theta2 <= 0:
-            return 0.0
-        return (cos_theta1 * cos_theta2) / (np.pi * r_mag_sq)
-
-    def view_factor(subject_points, subject_area, subject_normal, 
-                    test_points, test_area, test_normal):
-        integral = 0.0
-        n_points = len(subject_points)
-        for p1 in subject_points:
-            for p2 in test_points:
-                integral += integrand(p1, p2, subject_normal, test_normal)
-        return (integral * subject_area * test_area) / (n_points ** 2)
-
-    subject_points = interpolate_points(subject_vertices, subdivisions)
+    ray_directions = np.random.randn(n_rays, 3)
+    for i in range(n_rays):
+        ray_directions[i] = normalize_vector(ray_directions[i])
     
-    view_factors = []
-    for test_idx in range(len(test_vertices)):
-        test_points = interpolate_points(test_vertices[test_idx], subdivisions)
-        vf = view_factor(subject_points, subject_area, subject_normal,
-                         test_points, test_areas[test_idx], test_normals[test_idx])
-        view_factors.append(vf)
-
-    total_view_factor = np.sum(view_factors)
-    if total_view_factor > 1:
-        print(f"Warning: Total view factor exceeds 1 for facet. Sum: {total_view_factor}")
-        print(f"Subject facet area: {subject_area}")
-        print(f"Subject facet normal: {subject_normal}")
-        print(f"Number of test facets: {len(test_areas)}")
-        print(f"Max individual view factor: {np.max(view_factors)}")
-        print(f"Min individual view factor: {np.min(view_factors)}")
-
-    return np.array(view_factors)
+    valid_directions = np.zeros(n_rays, dtype=np.bool_)
+    for i in range(n_rays):
+        valid_directions[i] = np.dot(ray_directions[i], subject_normal) > 0
+    
+    valid_count = np.sum(valid_directions)
+    while valid_count < n_rays:
+        additional_rays_needed = n_rays - valid_count
+        additional_ray_directions = np.random.randn(additional_rays_needed, 3)
+        for i in range(additional_rays_needed):
+            additional_ray_directions[i] = normalize_vector(additional_ray_directions[i])
+        
+        for i in range(additional_rays_needed):
+            if np.dot(additional_ray_directions[i], subject_normal) > 0:
+                ray_directions[valid_count] = additional_ray_directions[i]
+                valid_count += 1
+                if valid_count == n_rays:
+                    break
+    
+    intersections = np.zeros((n_rays, len(test_vertices)), dtype=np.bool_)
+    for i in range(n_rays):
+        ray_origin = ray_sources[i]
+        ray_dir = ray_directions[i]
+        intersect, _ = rays_triangles_intersection(ray_origin, ray_dir.reshape(1, 3), test_vertices)
+        intersections[i] = intersect[0]
+    
+    view_factors = np.sum(intersections, axis=0).astype(np.float64) / n_rays * subject_area / test_areas
+    view_factors = view_factors * (test_areas / subject_area)
+    
+    return view_factors
 
 @jit(nopython=True)
 def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vertices, visible_facet_indices):
@@ -622,15 +582,9 @@ def calculate_temperatures(temperature, insolation, visible_facets_list, view_fa
             re_emitted_radiation_term = -const2 * (prev_temp**4)
             
             secondary_radiation_term = 0.0
+  
             if include_self_heating:
-                visible_facets = visible_facets_list[i]
-                view_factors = view_factors_list[i]
-                for j in range(len(visible_facets)): # Can this be vectorised?
-                    vis_facet = visible_facets[j]
-                    temp = current_day_temperature[vis_facet, prev_step, 0] if time_step > 0 else temperature[vis_facet, start_index - 1, 0] if start_index > 0 else current_day_temperature[vis_facet, 0, 0]
-                    view_factor = view_factors[j]
-                    secondary_radiation_term += temp**4 * view_factor
-                secondary_radiation_term *= self_heating_const
+                secondary_radiation_term = calculate_secondary_radiation(current_day_temperature[:, prev_step, 0], visible_facets_list[i], view_factors_list[i], self_heating_const)
             
             conducted_heat_term = const3 * (prev_temp_layer1 - prev_temp)
             
@@ -640,10 +594,6 @@ def calculate_temperatures(temperature, insolation, visible_facets_list, view_fa
                         conducted_heat_term + 
                         secondary_radiation_term)
 
-            # NOTE: Error message doesn't work with numba - needs to be raised outside of the function
-            if np.isnan(new_temp) or np.isinf(new_temp) or new_temp < 0:
-                raise ValueError(f"Invalid temperature calculated for facet {i} at time step {start_index + time_step}, temperature: {new_temp} K.")
-            
             current_day_temperature[i, time_step, 0] = new_temp
             
             # Update subsurface temperatures, excluding the deepest layer
@@ -836,14 +786,14 @@ def main():
     print(f"Skin depth: {simulation.skin_depth} m")
 
     ################ Modelling ################
-    simulation.include_self_heating = False
+    simulation.include_self_heating = True
 
     ################ PLOTTING ################
     plot_shadowing = False
     plot_insolation_curve = False
     plot_initial_temp_histogram = False
     plot_secondary_radiation_view_factors = False
-    plot_secondary_contributions = True
+    plot_secondary_contributions = False
     plot_final_day_temp_distribution = False
     plot_final_day_all_layers_temp_distribution = False
     plot_all_days_all_layers_temp_distribution = True
@@ -902,29 +852,17 @@ def main():
         view_factors = []
         all_view_factors = []
         for i in tqdm(range(len(shape_model)), desc="Calculating secondary radiation view factors"):
-            # subject_normal = shape_model[i].normal
-            # subject_position = shape_model[i].position
-            # visible_indices = thermal_data.visible_facets[i]
-            # test_normals = np.array([shape_model[j].normal for j in visible_indices])
-            # test_positions = np.array([shape_model[j].position for j in visible_indices])
-            # test_areas = np.array([shape_model[j].area for j in visible_indices])
-            # view_factor = calculate_secondary_radiation_coefficients(subject_normal, subject_position, test_normals, test_positions, test_areas)
-            # if np.any(np.isnan(view_factor)) or np.any(np.isinf(view_factor)):
-            #     print(f"Warning: Invalid coefficient for facet {i}")
-            #     print(f"View factor: {view_factor}")
-            #     print(f"Visible facets: {visible_indices}")
-            # view_factors.append(view_factor)
-
             visible_indices = thermal_data.visible_facets[i]
 
             subject_vertices = shape_model[i].vertices
             subject_area = shape_model[i].area
             subject_normal = shape_model[i].normal
-            test_vertices = np.array([shape_model[j].vertices for j in visible_indices])
+            test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
             test_areas = np.array([shape_model[j].area for j in visible_indices])
             test_normals = np.array([shape_model[j].normal for j in visible_indices])
 
-            view_factors = calculate_view_factors(subject_vertices, subject_area, subject_normal, test_vertices, test_areas, test_normals, subdivisions=10) # NOTE: Subdivisions can be increased for more accurate results
+            view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays = 10000) # NOTE: n_rays can be increased for more accurate results
+
             if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
                 print(f"Warning: Invalid view factor for facet {i}")
                 print(f"View factors: {view_factors}")
