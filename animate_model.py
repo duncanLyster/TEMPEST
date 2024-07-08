@@ -96,6 +96,16 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         print(f"Failed to load shape model: {e}")
         return
     
+    # Check if the plotted variable array is the correct shape
+    if shape_mesh.vectors.shape[0] != plotted_variable_array.shape[0]:
+        print("The plotted variable array must have the same number of rows as the number of cells in the shape model.")
+        return
+    
+    # Ensure all points in the plotted variable array are not identical
+    if np.all(plotted_variable_array == plotted_variable_array[0]):
+        print("All points in the plotted variable array are identical. Please check the data.")
+        return
+       
     vertices = shape_mesh.points.reshape(-1, 3)
     faces = [[3, 3*i, 3*i+1, 3*i+2] for i in range(shape_mesh.vectors.shape[0])]
 
