@@ -69,6 +69,14 @@ def round_up_to_nearest(x, base):
 def round_down_to_nearest(x, base):
     return base * math.floor(x / base)
 
+def clear_selected_cells(state):
+    state.selected_cells = []
+    if state.fig is not None:
+        plt.close(state.fig)
+        state.fig = None
+        state.ax = None
+    print("Selected cells cleared.")
+
 def rotation_matrix(axis, theta):
     axis = [a / math.sqrt(sum(a**2 for a in axis)) for a in axis]
     a = math.cos(theta / 2.0)
@@ -130,6 +138,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.add_key_event('Down', lambda: move_down(plotter, state))
     plotter.add_key_event('Left', lambda: move_left(plotter, state))
     plotter.add_key_event('Right', lambda: move_right(plotter, state))
+    plotter.add_key_event('c', lambda: clear_selected_cells(state))
     plotter.iren.initialize()
 
     # update_camera_position(plotter, state)
@@ -179,6 +188,9 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         else:
             state.selected_cells.append(cell_id)
 
+        if not state.selected_cells:
+            return  # Don't plot if there are no selected cells
+
         if state.fig is None or state.ax is None:
             plt.ion()
             state.fig, state.ax = plt.subplots()
@@ -196,7 +208,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         state.ax.legend()
         state.fig.canvas.draw()
         state.fig.canvas.flush_events()
-
+        
     def on_pick(state, picked_mesh):
         if picked_mesh is not None:
             cell_id = picked_mesh['vtkOriginalCellIds'][0]
@@ -251,6 +263,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.scalar_bar.SetUseCustomLabels(True)
 
     plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
+    plotter.add_text("Press spacebar to pause, right click to select a facet, 'c' to clear selected facets.", position='lower_edge', font_size=10, color=text_color)
     plotter.background_color = background_colour
 
     # Calculate the sampling interval
