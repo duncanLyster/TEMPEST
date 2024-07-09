@@ -7,8 +7,8 @@ TODO:
 3) Fix BUG - camera movement is jumpy when using arrow keys.
 4) Sort out colour scale bar values - should be more sensibly spaced.
 5) Fix BUG - segmentation fault the second time this script is run.
-6) Put a vertical line on the plot to show the current time.
-7) Press 'C' to clear the selected cells.
+6) Press 'C' to clear the selected cells.
+7) Get 'time line' to move along with the animation when unpaused. 
 
 NOTE: This is currently very slow when called from the main script for large shape models.
 '''
@@ -20,7 +20,6 @@ import time
 import math
 import matplotlib.pyplot as plt
 import gc
-import weakref
 import numpy as np  
 
 class AnimationState:
@@ -32,9 +31,15 @@ class AnimationState:
         self.camera_radius = None
         self.selected_cells = []
         self.fig, self.ax = None, None
+        self.pause_time = None
+        self.time_line = None
 
 def on_press(state):
     state.is_paused = not state.is_paused
+    if state.is_paused:
+        state.pause_time = state.current_frame / state.timesteps_per_day
+    else:
+        state.pause_time = None
 
 def update_camera_position(plotter, state):
     # Convert spherical coordinates to Cartesian coordinates
@@ -92,6 +97,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                   save_animation, save_animation_name, background_colour):
 
     state = AnimationState()
+    state.timesteps_per_day = timesteps_per_day
     plotter = None
 
     # Start timer
@@ -131,7 +137,6 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     state.camera_radius = max_dimension * 5
 
     # Create a Plotter object
-   
     plotter = pv.Plotter()
     plotter.add_key_event('space', lambda: on_press(state))
     plotter.add_key_event('Up', lambda: move_up(plotter, state))
@@ -140,8 +145,6 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.add_key_event('Right', lambda: move_right(plotter, state))
     plotter.add_key_event('c', lambda: clear_selected_cells(state))
     plotter.iren.initialize()
-
-    # update_camera_position(plotter, state)
 
     # Axis
     cylinder_start = [0, 0, 0]
@@ -157,25 +160,28 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     plotter.add_mesh(sunlight_arrow, color='yellow')
 
-    # Add the text to the window
-    plotter.add_text("Press spacebar to pause, right click to select a facet.", position='lower_edge', font_size=10, color=text_color)
-
     def update(caller, event, state):
         if not state.is_paused:
-            state.current_frame = (state.current_frame + sampling_interval) % timesteps_per_day
+            state.current_frame = (state.current_frame + 1) % state.timesteps_per_day
 
             if state.current_frame >= num_frames:
                 state.current_frame = 0
 
-            theta = (2 * math.pi / timesteps_per_day) * state.current_frame
+            theta = (2 * math.pi / state.timesteps_per_day) * state.current_frame
             rot_mat = rotation_matrix(rotation_axis, theta)
             try:
                 rotated_vertices = np.dot(vertices, np.array(rot_mat).T)
                 pv_mesh.points = rotated_vertices
-                pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame % timesteps_per_day].copy()
+                pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame % state.timesteps_per_day].copy()
             except Exception as e:
                 print(f"Error updating mesh vertices: {e}")
                 return
+
+            # Update time line on plot
+            if state.fig is not None and state.ax is not None and state.time_line is not None:
+                state.time_line.set_xdata(state.current_frame / state.timesteps_per_day)
+                state.fig.canvas.draw()
+                state.fig.canvas.flush_events()
 
             plotter.render()
 
@@ -205,6 +211,12 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         state.ax.set_xlabel('Local time (days)')
         state.ax.set_ylabel(axis_label)
         state.ax.set_title(f'Diurnal variation of {axis_label} of selected Cells')
+
+        if state.time_line is None:
+            state.time_line = state.ax.axvline(x=state.current_frame / state.timesteps_per_day, color='r', linestyle='--', label='Current Time')
+        else:
+            state.time_line.set_xdata(state.current_frame / state.timesteps_per_day)
+
         state.ax.legend()
         state.fig.canvas.draw()
         state.fig.canvas.flush_events()
