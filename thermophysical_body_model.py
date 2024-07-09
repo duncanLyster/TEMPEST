@@ -819,7 +819,7 @@ def main():
     simulation.include_self_heating = True
     simulation.include_scattering = True # TODO: Investigate dependence on number of scatters (particularly for most shaded facets)
 
-    ################ PLOTTING ################
+    ################ PLOTTING ################ BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
     plot_shadowing = True
     plot_insolation_curve = False
     plot_initial_temp_histogram = False
