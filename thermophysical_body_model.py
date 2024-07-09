@@ -95,6 +95,7 @@ class Simulation:
         
         # Calculation method flags
         self.include_self_heating = False # Default to not include self-heating
+        self.include_scattering = False # Default to not include light scattering
  
         # Print out the configuration
         print(f"Configuration loaded from {config_path}")
@@ -441,6 +442,25 @@ def calculate_rotation_matrix(axis, theta):
                         [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
 
+def apply_scattering(thermal_data, shape_model, simulation, num_iterations=5):
+    for iteration in range(num_iterations):
+        scattered_light = np.zeros_like(thermal_data.insolation)
+
+        for i, facet in enumerate(shape_model):
+            for t in range(simulation.timesteps_per_day):
+                insolation = thermal_data.insolation[i, t]
+                
+                if insolation > 0:
+                    visible_facets = thermal_data.visible_facets[i]
+                    view_factors = thermal_data.secondary_radiation_view_factors[i]
+                    
+                    for vf_index, vf in zip(visible_facets, view_factors):
+                        scattered_light[vf_index, t] += insolation * vf * simulation.albedo / np.pi
+
+        thermal_data.insolation += scattered_light
+    
+    return thermal_data
+
 def calculate_insolation(thermal_data, shape_model, simulation):
     ''' 
     This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
@@ -490,6 +510,9 @@ def calculate_insolation(thermal_data, shape_model, simulation):
                 insolation = 0
             
             thermal_data.insolation[i, t] = insolation
+
+    if simulation.include_scattering:
+        thermal_data = apply_scattering(thermal_data, shape_model, simulation)
 
     return thermal_data
 
@@ -628,7 +651,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
     const1 = simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
     const2 = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
     const3 = simulation.thermal_diffusivity * simulation.delta_t / simulation.layer_thickness**2
-    self_heating_const = 5.670374419e-8 * simulation.delta_t * simulation.emissivity / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity * np.pi) # Is pi needed here?
+    self_heating_const = 5.670374419e-8 * simulation.delta_t * simulation.emissivity / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity * np.pi)
 
     error_history = []
 
@@ -794,19 +817,20 @@ def main():
 
     ################ Modelling ################
     simulation.include_self_heating = True
+    simulation.include_scattering = True # TODO: Investigate dependence on number of scatters (particularly for most shaded facets)
 
     ################ PLOTTING ################
-    plot_shadowing = False
+    plot_shadowing = True
     plot_insolation_curve = False
     plot_initial_temp_histogram = False
     plot_secondary_radiation_view_factors = False
     plot_secondary_contributions = False
     plot_final_day_temp_distribution = False
     plot_final_day_all_layers_temp_distribution = False
-    plot_all_days_all_layers_temp_distribution = True
+    plot_all_days_all_layers_temp_distribution = False
     plot_energy_terms = False # Note: You must set simulation.calculate_energy_terms to True to plot energy terms
     plot_temp_distribution_for_final_day = False
-    animate_final_day_temp_distribution = True
+    animate_final_day_temp_distribution = False
     plot_final_day_comparison = False
 
     # Setup the model
@@ -820,6 +844,40 @@ def main():
     visible_indices = eliminate_obstructed_facets(positions, vertices, potentially_visible_indices)
     
     thermal_data.set_visible_facets(visible_indices)
+
+    if simulation.include_self_heating or simulation.include_scattering:
+        view_factors = []
+        all_view_factors = []
+        for i in tqdm(range(len(shape_model)), desc="Calculating secondary radiation view factors"):
+            visible_indices = thermal_data.visible_facets[i]
+
+            subject_vertices = shape_model[i].vertices
+            subject_area = shape_model[i].area
+            subject_normal = shape_model[i].normal
+            test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
+            test_areas = np.array([shape_model[j].area for j in visible_indices])
+            test_normals = np.array([shape_model[j].normal for j in visible_indices])
+
+            view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays = 10000) # NOTE: n_rays can be increased for more accurate results
+
+            if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
+                print(f"Warning: Invalid view factor for facet {i}")
+                print(f"View factors: {view_factors}")
+                print(f"Visible facets: {visible_indices}")
+            all_view_factors.append(view_factors)
+
+        thermal_data.set_secondary_radiation_view_factors(all_view_factors)
+
+        numba_view_factors = List()
+        for view_factors in thermal_data.secondary_radiation_view_factors:
+            numba_view_factors.append(np.array(view_factors, dtype=np.float64))
+        thermal_data.secondary_radiation_view_factors = numba_view_factors
+    else:
+        # Create an empty Numba List for view factors when self-heating is not included
+        numba_view_factors = List()
+        for _ in range(len(shape_model)):
+            numba_view_factors.append(np.array([], dtype=np.float64))
+        thermal_data.secondary_radiation_view_factors = numba_view_factors
 
     thermal_data = calculate_insolation(thermal_data, shape_model, simulation)
 
@@ -854,40 +912,6 @@ def main():
     for facets in thermal_data.visible_facets:
         numba_visible_facets.append(np.array(facets, dtype=np.int64))
     thermal_data.visible_facets = numba_visible_facets
-
-    if simulation.include_self_heating:
-        view_factors = []
-        all_view_factors = []
-        for i in tqdm(range(len(shape_model)), desc="Calculating secondary radiation view factors"):
-            visible_indices = thermal_data.visible_facets[i]
-
-            subject_vertices = shape_model[i].vertices
-            subject_area = shape_model[i].area
-            subject_normal = shape_model[i].normal
-            test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
-            test_areas = np.array([shape_model[j].area for j in visible_indices])
-            test_normals = np.array([shape_model[j].normal for j in visible_indices])
-
-            view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays = 10000) # NOTE: n_rays can be increased for more accurate results
-
-            if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
-                print(f"Warning: Invalid view factor for facet {i}")
-                print(f"View factors: {view_factors}")
-                print(f"Visible facets: {visible_indices}")
-            all_view_factors.append(view_factors)
-
-        thermal_data.set_secondary_radiation_view_factors(all_view_factors)
-
-        numba_view_factors = List()
-        for view_factors in thermal_data.secondary_radiation_view_factors:
-            numba_view_factors.append(np.array(view_factors, dtype=np.float64))
-        thermal_data.secondary_radiation_view_factors = numba_view_factors
-    else:
-        # Create an empty Numba List for view factors when self-heating is not included
-        numba_view_factors = List()
-        for _ in range(len(shape_model)):
-            numba_view_factors.append(np.array([], dtype=np.float64))
-        thermal_data.secondary_radiation_view_factors = numba_view_factors
 
     if plot_secondary_radiation_view_factors:
         selected_facet = 1454  # Change this to the index of the facet you're interested in
@@ -929,7 +953,6 @@ def main():
                     axis_label='Sum of View Factors', animation_frames=1, 
                     save_animation=False, save_animation_name='secondary_radiation.png', 
                     background_colour='black')
-
 
     print(f"Running main simulation loop.\n")
     start_time = time.time()
