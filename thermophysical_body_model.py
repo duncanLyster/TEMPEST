@@ -47,6 +47,7 @@ Started: 15 Feb 2024
 Author: Duncan Lyster
 '''
 
+import hashlib
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -61,11 +62,6 @@ from stl import mesh
 from tqdm import tqdm
 from typing import Tuple
 from scipy.interpolate import interp1d
-
-# Imports for testing 
-from memory_profiler import profile
-import cProfile
-import pstats
 
 class Simulation:
     def __init__(self, config_path, calculate_energy_terms):
@@ -109,8 +105,8 @@ class Simulation:
 
 class Facet:
     def __init__(self, normal, vertices, timesteps_per_day, max_days, n_layers, calculate_energy_terms):
-        self.normal = normal
-        self.vertices = vertices
+        self.normal = np.array(normal)
+        self.vertices = np.array(vertices)
         self.area = self.calculate_area(vertices)
         self.position = np.mean(vertices, axis=0)
 
@@ -187,75 +183,76 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_
     
     return shape_model
 
-# @jit(nopython=True)
+@jit(nopython=True)
 def calculate_visible_facets(positions, normals):
     ''' 
     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It returns the indices of the visible facets.
     
     NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Could add subdivision option to the model for better partial shadowing, but probably best to just use higher facet count models.
     '''
-    potentially_visible_indices =[[] for _ in range(len(positions))]
+    n_facets = len(positions)
+    potentially_visible_indices = [np.empty(0, dtype=np.int64) for _ in range(n_facets)]
 
     epsilon = 1e-10
     
-    for i in range(len((positions))):
-        # Compute the relative positions of all facets from the current subject facet, this results in a vector from the subject facet to every other facet
-        relative_positions =  positions[i] - positions
+    for i in range(n_facets):
+        # Compute the relative positions of all facets from the current subject facet
+        relative_positions = positions[i] - positions
 
-        # The dot product between the relative positions and the normals of the subject facet tells us if the facet is above the horizon
-        above_horizon = relative_positions @ normals[i] < epsilon
+        # Check if the facet is above the horizon
+        above_horizon = np.sum(relative_positions * normals[i], axis=1) < epsilon
         
-        # Thr dot product between the relative positions and the normals of the subject facet tells us if the facet is facing towards the subject facet
-        facing_towards = np.einsum('ij,ij->i', -relative_positions, normals) < epsilon
+        # Check if the facet is facing towards the subject facet
+        facing_towards = np.sum(-relative_positions * normals, axis=1) < epsilon
     
         # Combine the two conditions to determine if the facet is visible
         potentially_visible = above_horizon & facing_towards
     
-        potentially_visible[i] = False # Exclude self
+        potentially_visible[i] = False  # Exclude self
         
-        # Write the indices of the visible facets to the subject facet
-        potentially_visible_indices[i] = np.where(potentially_visible)[0]
+        # Get the indices of the visible facets
+        visible_indices = np.where(potentially_visible)[0]
+        potentially_visible_indices[i] = visible_indices
 
     return potentially_visible_indices
 
+@jit(nopython=True)
 def eliminate_obstructed_facets(positions, shape_model_vertices, potentially_visible_facet_indices):
-    unobstructed_facets = []
-    
-    for i, subject_position in tqdm(enumerate(positions), desc="Eliminating obstructed facets"):
-        if len(potentially_visible_facet_indices[i]) == 0:
-            unobstructed_facets.append(np.array([], dtype=np.int64))
+    n_facets = len(positions)
+    unobstructed_facets = [np.empty(0, dtype=np.int64) for _ in range(n_facets)]
+
+    for i in range(n_facets):
+        potential_indices = potentially_visible_facet_indices[i]
+        if len(potential_indices) == 0:
             continue
-        
-        # Create array for ray directions
-        test_positions = positions[potentially_visible_facet_indices[i]]
+
+        subject_position = positions[i]
+        test_positions = positions[potential_indices]
         ray_directions = test_positions - subject_position
-        ray_directions /= np.linalg.norm(ray_directions, axis=1)[:, np.newaxis]
-        
-        # Get vertices for potentially visible facets, excluding the test facet itself
-        test_vertices = []
-        for j, test_facet_index in enumerate(potentially_visible_facet_indices[i]):
-            other_facets = [idx for idx in potentially_visible_facet_indices[i] if idx != test_facet_index]
-            test_vertices.append(shape_model_vertices[other_facets])
-        
+        ray_directions = normalize_vectors(ray_directions)
+
         unobstructed = []
-        for j, test_facet_index in enumerate(potentially_visible_facet_indices[i]):
-            if len(test_vertices[j]) == 0:
+        for j, test_facet_index in enumerate(potential_indices):
+            other_indices = potential_indices[potential_indices != test_facet_index]
+            test_vertices = shape_model_vertices[other_indices]
+
+            if len(test_vertices) == 0:
                 unobstructed.append(test_facet_index)
                 continue
-            
+
             # Perform ray-triangle intersection test
-            intersections, t_values = rays_triangles_intersection(
-                subject_position, 
+            intersections, _ = rays_triangles_intersection(
+                subject_position,
                 ray_directions[j:j+1],  # Single ray direction
-                test_vertices[j]
+                test_vertices
             )
-            
+
             # If no intersections, the facet is unobstructed
             if not np.any(intersections):
                 unobstructed.append(test_facet_index)
-        
-        unobstructed_facets.append(np.array(unobstructed, dtype=np.int64))
-    
+
+        unobstructed_facets[i] = np.array(unobstructed, dtype=np.int64)
+
     return unobstructed_facets
 
 @jit(nopython=True)
@@ -357,6 +354,12 @@ def normalize_vector(v):
     return v / norm if norm != 0 else v
 
 @jit(nopython=True)
+def normalize_vectors(vectors):
+    """Normalize an array of vectors."""
+    norms = np.sqrt(np.sum(vectors**2, axis=1))
+    return vectors / norms[:, np.newaxis]
+
+@jit(nopython=True)
 def random_points_in_triangle(v0, v1, v2, n):
     r1 = np.sqrt(np.random.rand(n))
     r2 = np.random.rand(n)
@@ -403,6 +406,87 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     view_factors = view_factors * (test_areas / subject_area)
     
     return view_factors
+
+def calculate_shape_model_view_factors(shape_model, thermal_data, n_rays=10000):
+    all_view_factors = []
+    
+    shape_model_hash = get_shape_model_hash(shape_model)
+    view_factors_filename = get_view_factors_filename(shape_model_hash)
+
+    if os.path.exists(view_factors_filename):
+        with np.load(view_factors_filename, allow_pickle=True) as data:
+            print("Loading existing view factors...")
+            all_view_factors = list(data['view_factors'])
+    else:
+        print("No existing view factors found.")
+        all_view_factors = []
+    
+    if not all_view_factors:
+        print("Calculating new view factors...")
+        for i in tqdm(range(len(shape_model)), desc="Calculating secondary radiation view factors"):
+            visible_indices = thermal_data.visible_facets[i]
+
+            subject_vertices = shape_model[i].vertices
+            subject_area = shape_model[i].area
+            subject_normal = shape_model[i].normal
+            test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
+            test_areas = np.array([shape_model[j].area for j in visible_indices])
+
+            view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays)
+
+            if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
+                print(f"Warning: Invalid view factor for facet {i}")
+                print(f"View factors: {view_factors}")
+                print(f"Visible facets: {visible_indices}")
+            all_view_factors.append(view_factors)
+
+        # Save the calculated view factors
+        os.makedirs("view_factors", exist_ok=True)
+        np.savez_compressed(view_factors_filename, view_factors=np.array(all_view_factors, dtype=object))
+
+    return all_view_factors
+
+def get_shape_model_hash(shape_model):
+    # Create a hash based on the shape model data
+    model_data = []
+    for facet in shape_model:
+        # Flatten the vertices and concatenate with normal and area
+        facet_data = np.concatenate([facet.vertices.flatten(), facet.normal, [facet.area]])
+        model_data.append(facet_data)
+    
+    # Convert to a 2D numpy array
+    model_data_array = np.array(model_data)
+    
+    # Create a hash of the array
+    return hashlib.sha256(model_data_array.tobytes()).hexdigest()
+
+def get_view_factors_filename(shape_model_hash):
+    return f"view_factors/view_factors_{shape_model_hash}.npz"
+
+def calculate_and_cache_visible_facets(shape_model, positions, normals, vertices):
+    shape_model_hash = get_shape_model_hash(shape_model)
+    visible_facets_filename = get_visible_facets_filename(shape_model_hash)
+
+    if os.path.exists(visible_facets_filename):
+        print("Loading existing visible facets...")
+        with np.load(visible_facets_filename, allow_pickle=True) as data:
+            visible_indices = data['visible_indices']
+        # Convert back to list of numpy arrays
+        visible_indices = [np.array(indices) for indices in visible_indices]
+    else:
+        print("Calculating visible facets...")
+        potentially_visible_indices = calculate_visible_facets(positions, normals)
+        print("Eliminating obstructed facets...")
+        visible_indices = eliminate_obstructed_facets(positions, vertices, potentially_visible_indices)
+        
+        # Save the calculated visible facets
+        os.makedirs(os.path.dirname(visible_facets_filename), exist_ok=True)
+        np.savez_compressed(visible_facets_filename, visible_indices=np.array(visible_indices, dtype=object))
+
+    return visible_indices
+
+def get_visible_facets_filename(shape_model_hash):
+    return f"visible_facets/visible_facets_{shape_model_hash}.npz"
 
 @jit(nopython=True)
 def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vertices, visible_facet_indices):
@@ -820,7 +904,7 @@ def main():
     simulation.include_scattering = True # TODO: Investigate dependence on number of scatters (particularly for most shaded facets)
 
     ################ PLOTTING ################ BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
-    plot_shadowing = True
+    plot_shadowing = False
     plot_insolation_curve = False
     plot_initial_temp_histogram = False
     plot_secondary_radiation_view_factors = False
@@ -830,7 +914,7 @@ def main():
     plot_all_days_all_layers_temp_distribution = False
     plot_energy_terms = False # Note: You must set simulation.calculate_energy_terms to True to plot energy terms
     plot_temp_distribution_for_final_day = False
-    animate_final_day_temp_distribution = False
+    animate_final_day_temp_distribution = True
     plot_final_day_comparison = False
 
     # Setup the model
@@ -838,34 +922,13 @@ def main():
     normals = np.array([facet.normal for facet in shape_model])
     vertices = np.array([facet.vertices for facet in shape_model])
     
-    potentially_visible_indices = calculate_visible_facets(positions, normals)
-
-    print(f"Eliminating obstructed facets.\n")
-    visible_indices = eliminate_obstructed_facets(positions, vertices, potentially_visible_indices)
-    
+    visible_indices = calculate_and_cache_visible_facets(shape_model, positions, normals, vertices)
+        
     thermal_data.set_visible_facets(visible_indices)
 
     if simulation.include_self_heating or simulation.include_scattering:
-        view_factors = []
-        all_view_factors = []
-        for i in tqdm(range(len(shape_model)), desc="Calculating secondary radiation view factors"):
-            visible_indices = thermal_data.visible_facets[i]
-
-            subject_vertices = shape_model[i].vertices
-            subject_area = shape_model[i].area
-            subject_normal = shape_model[i].normal
-            test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
-            test_areas = np.array([shape_model[j].area for j in visible_indices])
-            test_normals = np.array([shape_model[j].normal for j in visible_indices])
-
-            view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays = 10000) # NOTE: n_rays can be increased for more accurate results
-
-            if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
-                print(f"Warning: Invalid view factor for facet {i}")
-                print(f"View factors: {view_factors}")
-                print(f"Visible facets: {visible_indices}")
-            all_view_factors.append(view_factors)
-
+        all_view_factors = calculate_shape_model_view_factors(shape_model, thermal_data, n_rays=10000)
+        
         thermal_data.set_secondary_radiation_view_factors(all_view_factors)
 
         numba_view_factors = List()
@@ -925,7 +988,6 @@ def main():
         
         # Set the view factors for the contributing facets
         contribution_data[contributing_indices] = 1
-
         contribution_data[selected_facet] = 0.5
 
         # Print contributing facets and their view factors
@@ -1053,9 +1115,4 @@ def main():
 
 # Call the main program to start execution
 if __name__ == "__main__":
-    cProfile.run('main()', 'output.prof')
-    
-    # Print the profiling results
-    with open('profiling_output.txt', 'w') as f:
-        p = pstats.Stats('output.prof', stream=f)
-        p.sort_stats('cumulative').print_stats()
+    main()
