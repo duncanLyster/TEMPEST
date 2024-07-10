@@ -34,7 +34,9 @@ class AnimationState:
         self.time_line = None
         self.cell_colors = {}
         self.timesteps_per_day = None
-        self.highlight_actors = {}
+        self.highlighted_cell_ids = []
+        self.highlight_colors = {} 
+        self.cumulative_rotation = 0  # Track cumulative rotation in radians
 
 def on_press(state):
     state.is_paused = not state.is_paused
@@ -84,16 +86,13 @@ def rotation_matrix(axis, theta):
             [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]]
 
 def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variable_array, axis_label):
-    if cell_id in state.selected_cells:
-        # Deselect the cell
-        state.selected_cells.remove(cell_id)
-        
-        # Remove the highlight for this cell
+    if cell_id in state.highlighted_cell_ids:
+        state.highlighted_cell_ids.remove(cell_id)
         if cell_id in state.highlight_actors:
             plotter.remove_actor(state.highlight_actors[cell_id])
             del state.highlight_actors[cell_id]
-
-        # Remove the line from the plot
+        if cell_id in state.highlight_colors:
+            del state.highlight_colors[cell_id]
         if state.fig is not None and cell_id in state.cell_colors:
             line = state.cell_colors.pop(cell_id)
             line.remove()
@@ -102,21 +101,14 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                 state.fig = None
                 state.ax = None
     else:
-        # Select the cell
-        state.selected_cells.append(cell_id)
-        
-        # Create a new mesh for the selected cell
+        state.highlighted_cell_ids.append(cell_id)
+        color = plt.cm.tab10(len(state.highlighted_cell_ids) - 1 % 10)  # Assign color based on current length
+        state.highlight_colors[cell_id] = color[:3]  # Store the color
         cell = pv_mesh.extract_cells([cell_id])
         edges = cell.extract_feature_edges(feature_angle=0, boundary_edges=True, non_manifold_edges=False, manifold_edges=False)
-        
-        # Generate a color for this cell
-        color = plt.cm.tab10(len(state.selected_cells) % 10)
-        
-        # Add the highlight for this cell
         actor = plotter.add_mesh(edges, color=color[:3], line_width=5, render_lines_as_tubes=True, opacity=1)
         state.highlight_actors[cell_id] = actor
 
-        # Plot the cell data
         if state.fig is None or state.ax is None:
             plt.ion()
             state.fig, state.ax = plt.subplots()
@@ -139,27 +131,41 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
 
     plotter.render()
 
-def update(caller, event, state, plotter, pv_mesh, highlight_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
+def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
     if not state.is_paused:
-        state.current_frame = int((state.current_frame + 1) % state.timesteps_per_day)
+        # Calculate the correct frame based on cumulative rotation
+        state.cumulative_rotation += 2 * math.pi / state.timesteps_per_day
+        state.current_frame = int((state.cumulative_rotation / (2 * math.pi)) * state.timesteps_per_day) % state.timesteps_per_day
 
         if state.current_frame >= plotted_variable_array.shape[1]:
             state.current_frame = 0
 
-        theta = (2 * math.pi / state.timesteps_per_day) * state.current_frame
-        rot_mat = rotation_matrix(rotation_axis, theta)
+        # Calculate rotation matrix
+        rot_mat = np.array(rotation_matrix(rotation_axis, state.cumulative_rotation))
+
         try:
-            rotated_vertices = np.dot(vertices, np.array(rot_mat).T)
+            # Apply rotation to mesh
+            rotated_vertices = np.dot(vertices, rot_mat.T)
             pv_mesh.points = rotated_vertices
             
-            # Rotate highlight actors using the same rotation matrix
-            transform = vtk.vtkTransform()
-            transform.RotateWXYZ(theta * 180 / math.pi, rotation_axis[0], rotation_axis[1], rotation_axis[2])
+            # Update cell data
+            pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame]
+            
+            # Remove existing highlight actors
             for actor in state.highlight_actors.values():
-                actor.SetUserTransform(transform)
+                plotter.remove_actor(actor)
+            state.highlight_actors.clear()
+            
+            # Recreate highlight for selected cells using stored colors
+            for cell_id in state.highlighted_cell_ids:
+                cell = pv_mesh.extract_cells([cell_id])
+                edges = cell.extract_feature_edges(feature_angle=0, boundary_edges=True, non_manifold_edges=False, manifold_edges=False)
+                color = state.highlight_colors[cell_id]  # Use the stored color
+                actor = plotter.add_mesh(edges, color=color, line_width=5, render_lines_as_tubes=True, opacity=1)
+                state.highlight_actors[cell_id] = actor
 
         except Exception as e:
-            print(f"Error updating mesh vertices: {e}")
+            print(f"Error updating mesh: {e}")
             print(f"Debug info: current_frame={state.current_frame}, shape of plotted_variable_array={plotted_variable_array.shape}")
             return
 
@@ -171,7 +177,6 @@ def update(caller, event, state, plotter, pv_mesh, highlight_mesh, plotted_varia
             state.fig.canvas.flush_events()
 
     plotter.render()
-
 
 def on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_label):
     if picked_mesh is not None:
@@ -235,7 +240,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], scale=max_dimension * 0.3)
     plotter.add_mesh(sunlight_arrow, color='yellow')
 
-    plotter.iren.add_observer('TimerEvent', lambda caller, event: update(caller, event, state, plotter, pv_mesh, highlight_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
+    plotter.iren.add_observer('TimerEvent', lambda caller, event: update(caller, event, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
     plotter.iren.create_timer(100)
 
     mesh_actor = plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False)
@@ -288,12 +293,11 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     num_frames = len(plotted_variable_array[0])
     sampling_interval = max(1, num_frames // animation_frames)
-    
 
     if save_animation:
         plotter.open_gif(save_animation_name)
         for _ in range(animation_frames):
-            update(None, None, state, plotter, pv_mesh, highlight_mesh, plotted_variable_array, vertices, rotation_axis)
+            update(None, None, state, plotter, pv_mesh, highlight_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
             plotter.write_frame()
         plotter.close()
     else:
@@ -313,7 +317,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         plt.close(state.fig)
     
     pv.close_all()
-    plt.close('all')
+    plt.close
 
     if 'vtk_labels' in locals():
         vtk_labels.RemoveAllObservers()
