@@ -1,14 +1,15 @@
 '''
 Script to animate model quantities on the shape. The model is rotated about a specified axis and the quantity is plotted on the shape. You can move the camera around the shape and pause the animation with the arrow keys and spacebar. Right click on the shape to get the value of the quantity at that point.
 
-TODO:
-1) Leave animation up (or save it in an interactable mode) but allow the main code to continue running.
+Tasks: 
+1) TODO Leave animation up (or save it in an interactable mode) but allow the main code to continue running.
 2) BUG - plot window doesn't close when you hit x.
 3) BUG - camera movement is jumpy when using arrow keys.
-4) Sort out colour scale bar values - should be more sensibly spaced.
-5) Fix BUG - segmentation fault the second time this script is run.
-6) Press 'C' to clear the selected cells.
-7) BUG - Highlighted cells not in the right place as animation progresses. 
+4) TODO Sort out colour scale bar values - should be more sensibly spaced.
+5) BUG - segmentation fault the second time this script is run.
+6) TODO Press 'C' to clear the selected cells (might need to solve segmentation fault before this can be implemented).
+7) BUG - Highlighted cells flicker when many are selected due to repeated re-drawing. 
+8) BUG - Sometimes highlighted cells are not the ones clicked - need to check the cell ID etc. 
 
 NOTE: This is currently very slow when called from the main script for large shape models.
 '''
@@ -118,7 +119,7 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
         line, = state.ax.plot(time_steps, values_over_time, label=f'Cell {cell_id}', color=color[:3])
         state.cell_colors[cell_id] = line
 
-        state.ax.set_xlabel('Local time (days)')
+        state.ax.set_xlabel('Fractional angle of rotation (rotations)')
         state.ax.set_ylabel(axis_label)
         state.ax.set_title(f'Diurnal variation of {axis_label} of selected Cells')
 
