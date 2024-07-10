@@ -10,7 +10,3 @@ debugging/
 verification/
 superseded/
 Bennu_Testing/
-
-# Ignore view factors and visible facets folders
-/view_factors/
-/visible_facets/
