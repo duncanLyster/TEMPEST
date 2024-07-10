@@ -10,3 +10,7 @@ debugging/
 verification/
 superseded/
 Bennu_Testing/
+
+# Data caches
+/view_factors/
+/visible_facets/
