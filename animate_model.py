@@ -46,35 +46,35 @@ def on_press(state):
     else:
         state.pause_time = None
 
-def update_camera_position(plotter, state):
-    x = state.camera_radius * math.sin(state.camera_phi) * math.cos(state.camera_theta)
-    y = state.camera_radius * math.sin(state.camera_phi) * math.sin(state.camera_theta)
-    z = state.camera_radius * math.cos(state.camera_phi)
-    plotter.camera_position = [(x, y, z), (0, 0, 0), (0, 0, 1)]
-    plotter.camera.view_angle = 30
-    plotter.render()
+# def update_camera_position(plotter, state):
+#     x = state.camera_radius * math.sin(state.camera_phi) * math.cos(state.camera_theta)
+#     y = state.camera_radius * math.sin(state.camera_phi) * math.sin(state.camera_theta)
+#     z = state.camera_radius * math.cos(state.camera_phi)
+#     plotter.camera_position = [(x, y, z), (0, 0, 0), (0, 0, 1)]
+#     plotter.camera.view_angle = 30
+#     plotter.render()
 
-def move_up(plotter, state):
-    state.camera_phi -= math.pi / 36
-    update_camera_position(plotter, state)
+# def move_up(plotter, state):
+#     state.camera_phi -= math.pi / 36
+#     update_camera_position(plotter, state)
 
-def move_down(plotter, state):
-    state.camera_phi += math.pi / 36
-    update_camera_position(plotter, state)
+# def move_down(plotter, state):
+#     state.camera_phi += math.pi / 36
+#     update_camera_position(plotter, state)
 
-def move_left(plotter, state):
-    state.camera_theta -= math.pi / 36
-    update_camera_position(plotter, state)
+# def move_left(plotter, state):
+#     state.camera_theta -= math.pi / 36
+#     update_camera_position(plotter, state)
 
-def move_right(plotter, state):
-    state.camera_theta += math.pi / 36
-    update_camera_position(plotter, state)
+# def move_right(plotter, state):
+#     state.camera_theta += math.pi / 36
+#     update_camera_position(plotter, state)
 
-def round_up_to_nearest(x, base):
-    return base * math.ceil(x / base)
+# def round_up_to_nearest(x, base):
+#     return base * math.ceil(x / base)
 
-def round_down_to_nearest(x, base):
-    return base * math.floor(x / base)
+# def round_down_to_nearest(x, base):
+#     return base * math.floor(x / base)
 
 def rotation_matrix(axis, theta):
     axis = [a / math.sqrt(sum(a**2 for a in axis)) for a in axis]
@@ -89,18 +89,11 @@ def rotation_matrix(axis, theta):
 def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variable_array, axis_label):
     if cell_id in state.highlighted_cell_ids:
         state.highlighted_cell_ids.remove(cell_id)
-        if cell_id in state.highlight_actors:
-            plotter.remove_actor(state.highlight_actors[cell_id])
-            del state.highlight_actors[cell_id]
-        if cell_id in state.highlight_colors:
-            del state.highlight_colors[cell_id]
-        if state.fig is not None and cell_id in state.cell_colors:
-            line = state.cell_colors.pop(cell_id)
-            line.remove()
-            if not state.cell_colors:
-                plt.close(state.fig)
-                state.fig = None
-                state.ax = None
+        plotter.remove_actor(state.highlight_actors[cell_id])
+        state.highlight_actors[cell_id]
+        state.highlight_colors[cell_id]
+        line = state.cell_colors.pop(cell_id)
+        line.remove()
     else:
         state.highlighted_cell_ids.append(cell_id)
         color = plt.cm.tab10(len(state.highlighted_cell_ids) - 1 % 10)  # Assign color based on current length
@@ -134,14 +127,12 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
 
 def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
     if not state.is_paused:
-        # Calculate the correct frame based on cumulative rotation
         state.cumulative_rotation += 2 * math.pi / state.timesteps_per_day
         state.current_frame = int((state.cumulative_rotation / (2 * math.pi)) * state.timesteps_per_day) % state.timesteps_per_day
 
         if state.current_frame >= plotted_variable_array.shape[1]:
             state.current_frame = 0
 
-        # Calculate rotation matrix
         rot_mat = np.array(rotation_matrix(rotation_axis, state.cumulative_rotation))
 
         try:
@@ -205,8 +196,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         return
     
     if np.all(plotted_variable_array == plotted_variable_array[0]):
-        print("All points in the plotted variable array are identical. Please check the data.")
-        return
+        print("WARNING: All points in the plotted variable array are identical. Please check the data.")
      
     vertices = shape_mesh.points.reshape(-1, 3)
     faces = [[3, 3*i, 3*i+1, 3*i+2] for i in range(shape_mesh.vectors.shape[0])]
@@ -228,10 +218,10 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter = pv.Plotter()
     plotter.enable_anti_aliasing() 
     plotter.add_key_event('space', lambda: on_press(state))
-    plotter.add_key_event('Up', lambda: move_up(plotter, state))
-    plotter.add_key_event('Down', lambda: move_down(plotter, state))
-    plotter.add_key_event('Left', lambda: move_left(plotter, state))
-    plotter.add_key_event('Right', lambda: move_right(plotter, state))
+    # plotter.add_key_event('Up', lambda: move_up(plotter, state))
+    # plotter.add_key_event('Down', lambda: move_down(plotter, state))
+    # plotter.add_key_event('Left', lambda: move_left(plotter, state))
+    # plotter.add_key_event('Right', lambda: move_right(plotter, state))
     plotter.iren.initialize()
 
     cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
@@ -245,51 +235,61 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.iren.create_timer(100)
 
     mesh_actor = plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False)
+
+
+
+
+    ######################   HIGHLIGHTING STUFF    ###########################
     state.highlight_actor = plotter.add_mesh(highlight_mesh, 
                                              scalars=highlight_mesh.cell_data['color'],
                                              rgb=True, 
                                              render_lines_as_tubes=True, 
                                              line_width=1)  
 
-    plotter.enable_element_picking(callback=lambda picked_mesh: on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_label), mode='cell', show=False, show_message=False)
+    plotter.enable_element_picking(callback=lambda picked_mesh: on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_label), mode='cell', show=True, show_message=False)
+    ######################   HIGHLIGHTING STUFF    ###########################
+
+
+
+
 
     text_color_rgb = (1, 1, 1) if background_colour == 'black' else (0, 0, 0)
 
-    plotter.scalar_bar.GetLabelTextProperty().SetColor(bar_color)
-    plotter.scalar_bar.SetPosition(0.2, 0.05)
-    plotter.scalar_bar.GetLabelTextProperty().SetJustificationToCentered()
+    # plotter.scalar_bar.GetLabelTextProperty().SetColor(bar_color)
+    # plotter.scalar_bar.SetPosition(0.2, 0.05)
+    # plotter.scalar_bar.GetLabelTextProperty().SetJustificationToCentered()
     plotter.scalar_bar.SetTitle(axis_label)
-    plotter.scalar_bar.GetTitleTextProperty().SetColor(text_color_rgb)
+    # plotter.scalar_bar.GetTitleTextProperty().SetColor(text_color_rgb)
 
-    min_val = min(min(row) for row in plotted_variable_array)
-    max_val = max(max(row) for row in plotted_variable_array)
-    range_val = max_val - min_val
+    # min_val = min(min(row) for row in plotted_variable_array)
+    # max_val = max(max(row) for row in plotted_variable_array)
+    # range_val = max_val - min_val
 
-    interval = 10 ** (math.floor(math.log10(range_val)) - 1)
-    rounded_min_val = round_down_to_nearest(min_val, interval)
-    rounded_max_val = round_up_to_nearest(max_val, interval)
+    # interval = 10 ** (math.floor(math.log10(range_val)) - 1)
+    # rounded_min_val = round_down_to_nearest(min_val, interval)
+    # rounded_max_val = round_up_to_nearest(max_val, interval)
 
-    while (rounded_max_val - rounded_min_val) / interval > 10:
-        interval *= 2
-    while (rounded_max_val - rounded_min_val) / interval < 4:
-        interval /= 2
+    # while (rounded_max_val - rounded_min_val) / interval > 10:
+    #     interval *= 2
+    # while (rounded_max_val - rounded_min_val) / interval < 4:
+    #     interval /= 2
 
-    labels = []
-    label = rounded_min_val
-    while label <= rounded_max_val:
-        labels.append(label)
-        label += interval
+    # labels = []
+    # label = rounded_min_val
+    # while label <= rounded_max_val:
+    #     labels.append(label)
+    #     label += interval
 
-    vtk_labels = vtk.vtkDoubleArray()
-    vtk_labels.SetNumberOfValues(len(labels))
-    for i, label in enumerate(labels):
-        vtk_labels.SetValue(i, label)
+    # vtk_labels = vtk.vtkDoubleArray()
+    # vtk_labels.SetNumberOfValues(len(labels))
+    # for i, label in enumerate(labels):
+    #     vtk_labels.SetValue(i, label)
 
-    plotter.scalar_bar.SetCustomLabels(vtk_labels)
-    plotter.scalar_bar.SetUseCustomLabels(True)
+    # plotter.scalar_bar.SetCustomLabels(vtk_labels)
+    # plotter.scalar_bar.SetUseCustomLabels(True)
 
-    plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
-    plotter.add_text("Press spacebar to pause, right click to select a facet.", position='lower_edge', font_size=10, color=text_color)
+    # plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
+    # plotter.add_text("Press spacebar to pause, right click to select a facet.", position='lower_edge', font_size=10, color=text_color)
     plotter.background_color = background_colour
 
     num_frames = len(plotted_variable_array[0])
@@ -297,35 +297,35 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     if save_animation:
         plotter.open_gif(save_animation_name)
-        for _ in range(animation_frames):
-            update(None, None, state, plotter, pv_mesh, highlight_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
-            plotter.write_frame()
-        plotter.close()
+        # for _ in range(animation_frames):
+        #     update(None, None, state, plotter, pv_mesh, highlight_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
+        #     plotter.write_frame()
+        # plotter.close()
     else:
         end_time = time.time()
         print(f'Animation took {end_time - start_time:.2f} seconds to run.')
         plotter.show()
         plotter.close()
 
-    plotter.close()
-    plotter.deep_clean()
+    # plotter.close()
+    # plotter.deep_clean()
 
-    del pv_mesh
-    del shape_mesh
-    del plotter
+    # del pv_mesh
+    # del shape_mesh
+    # del plotter
 
-    if state.fig:
-        plt.close(state.fig)
+    # if state.fig:
+    #     plt.close(state.fig)
     
-    pv.close_all()
-    plt.close
+    # pv.close_all()
+    # plt.close
 
-    if 'vtk_labels' in locals():
-        vtk_labels.RemoveAllObservers()
-        del vtk_labels
+    # if 'vtk_labels' in locals():
+    #     vtk_labels.RemoveAllObservers()
+    #     del vtk_labels
 
-    state.fig = None
-    state.ax = None
-    state.selected_cells = []
+    # state.fig = None
+    # state.ax = None
+    # state.selected_cells = []
 
-    gc.collect()
+    # gc.collect()
