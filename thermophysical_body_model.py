@@ -13,29 +13,29 @@ All calculation figures are in SI units, except where clearly stated otherwise.
 Full documentation can be found at: https://github.com/duncanLyster/comet_nucleus_model
 
 NEXT STEPS:
-1) Speed up the model by using numba or other optimisation techniques throughout.
-2) Implement roughness/beaming effects (important to do soon)
-3) Find ways to make the model more robust
+1) Implement roughness/beaming effects (important to do soon)
+    a) Just apply a function to the shape model (e.g. fractal roughness)
+    b) Parameterise the roughness - e.g. fractal dimension, roughness scale
+2) Find ways to make the model more robust
     a) Calculate n_layers and layer thickness based on thermal inertia (?) - these shouldn't be input by the user
     b) Look into ML/optimisation of finite difference method to avoid instability
     c) Look into gradient descent optimisation technique
-4) Write a performance report for the model
-5) Remove all NOTE and TODO comments from the code
-6) Add light scattering to insolation calculation
-7) Add parallelisation to the model
-8) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
-9) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
-10) BUG: John Spencer's model parameters crash it at 1 AU - Suspect something to do with timestep calculation. 
-11) Add option to implement sublimation energy loss
-12) Build in mesh converstion for binary .STL and .OBJ files
-13) Create web interface for ease of use?
-14) Integrate with JPL Horizons ephemeris to get real-time insolation data
-15) Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
-16) Add filter visualisations to thermal model
+3) Write a performance report for the model
+4) Remove all NOTE and TODO comments from the code
+5) GPU acceleration - look into PyCUDA and PyTorch
+6) Reduce precision etc to save memory and speed up calculations
+7) Reduce RAM usage by only storing the last day of temperatures for each facet - add option to save all temperatures (or larger number of days e.g. 5 days) for debugging (will limit max model size)
+8) Create 'silent mode' flag so that the model can be run without printing to the console from an external script
+9) BUG: John Spencer's model parameters crash it at 1 AU - Suspect something to do with timestep calculation. 
+10) Add option to implement sublimation energy loss
+11) Build in mesh converstion for binary .STL and .OBJ files
+12) Create web interface for ease of use?
+13) Integrate with JPL Horizons ephemeris to get real-time insolation data
+14) Come up with a way of representing output data for many rotation axes and periods for mission planning | Do this and provide recommendations to MIRMIS team
+15) Add filter visualisations to thermal model
     - Simulate retrievals for temperature based on instrument
-17) Run setup steps just once for each shape model (e.g. calculate view factors, visible facets, etc.)
-18) GPU acceleration - look into PyCUDA 
-19) Add comparison tool to compare two runs of the model. (Separate script?)
+16) Run setup steps just once for each shape model (e.g. calculate view factors, visible facets, etc.)
+17) Add comparison tool to compare two runs of the model. (Separate script?)
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -55,6 +55,7 @@ import time
 import sys
 import json
 from animate_model import animate_model
+from animate_model_old import animate_model_old
 from numba import jit, njit, float64, int64, boolean
 from numba.typed import List
 from joblib import Parallel, delayed
@@ -62,6 +63,7 @@ from stl import mesh
 from tqdm import tqdm
 from typing import Tuple
 from scipy.interpolate import interp1d
+from collections import defaultdict
 
 class Simulation:
     def __init__(self, config_path, calculate_energy_terms):
@@ -92,6 +94,7 @@ class Simulation:
         # Calculation method flags
         self.include_self_heating = False # Default to not include self-heating
         self.include_scattering = False # Default to not include light scattering
+        self.apply_roughness = False # Default to not include sublimation
  
         # Print out the configuration
         print(f"Configuration loaded from {config_path}")
@@ -182,6 +185,140 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_
         facet.set_dynamic_arrays(len(shape_model))
     
     return shape_model
+
+def save_shape_model(shape_model, filename):
+    """
+    Save the shape model to an STL file.
+    
+    Parameters:
+    - shape_model: List of Facet objects
+    - filename: String, path to save the STL file
+    """
+    # Create a list to store the vertices and normals
+    vertices = []
+    normals = []
+    
+    # Iterate through all facets in the shape model
+    for facet in shape_model:
+        # Add the vertices of the current facet
+        vertices.extend(facet.vertices)
+        
+        # Add the normal of the current facet (repeated 3 times for each vertex)
+        normals.extend([facet.normal] * 3)
+    
+    # Convert lists to numpy arrays
+    vertices = np.array(vertices)
+    normals = np.array(normals)
+    
+    # Create the mesh
+    facets = vertices.reshape(-1, 3, 3)
+    mesh_data = mesh.Mesh(np.zeros(facets.shape[0], dtype=mesh.Mesh.dtype))
+    
+    # Set the vectors and normals from the data
+    for i, facet in enumerate(facets):
+        for j in range(3):
+            mesh_data.vectors[i][j] = facet[j]
+        mesh_data.normals[i] = normals[i * 3]
+    
+    # Save the mesh to file
+    mesh_data.save(filename)
+    
+    print(f"Shape model saved to {filename}")
+
+
+def apply_roughness(shape_model, simulation, subdivision_level=3, displacement_factor=0.4):
+    """
+    Apply roughness to the shape model using iterative sub-facet division and displacement.
+    
+    Parameters:
+    - shape_model: List of Facet objects
+    - subdivision_level: Number of times to perform the subdivision and adjustment process
+    - displacement_factor: Maximum displacement as a fraction of the triangle's max edge length
+    
+    Returns:
+    - new_shape_model: List of new Facet objects with applied roughness
+
+    NOTE: Adjust so that different factors can be used at different levels of subdivision. 
+    """
+    
+    def get_vertex_id(vertex):
+        return tuple(np.round(vertex, decimals=6))  # Round to avoid float precision issues
+
+    def midpoint_displacement(v1, v2, max_displacement):
+        mid = (v1 + v2) / 2
+        displacement = np.random.uniform(-max_displacement, max_displacement)
+        normal = np.cross(v2 - v1, np.random.randn(3))
+        normal /= np.linalg.norm(normal)
+        return mid + displacement * normal
+
+    def subdivide_triangle(vertices, max_displacement, vertex_dict):
+        v1, v2, v3 = vertices
+        
+        m1_id = get_vertex_id((v1 + v2) / 2)
+        m2_id = get_vertex_id((v2 + v3) / 2)
+        m3_id = get_vertex_id((v3 + v1) / 2)
+        
+        if m1_id in vertex_dict:
+            m1 = vertex_dict[m1_id]
+        else:
+            m1 = midpoint_displacement(v1, v2, max_displacement)
+            vertex_dict[m1_id] = m1
+
+        if m2_id in vertex_dict:
+            m2 = vertex_dict[m2_id]
+        else:
+            m2 = midpoint_displacement(v2, v3, max_displacement)
+            vertex_dict[m2_id] = m2
+
+        if m3_id in vertex_dict:
+            m3 = vertex_dict[m3_id]
+        else:
+            m3 = midpoint_displacement(v3, v1, max_displacement)
+            vertex_dict[m3_id] = m3
+        
+        return [
+            [v1, m1, m3],
+            [m1, v2, m2],
+            [m3, m2, v3],
+            [m1, m2, m3]
+        ]
+    
+    for level in range(subdivision_level):
+        new_shape_model = []
+        vertex_dict = {}  # Reset vertex_dict for each level
+        
+        # First, add all current vertices to the vertex_dict
+        for facet in shape_model:
+            for vertex in facet.vertices:
+                vertex_id = get_vertex_id(vertex)
+                if vertex_id not in vertex_dict:
+                    vertex_dict[vertex_id] = vertex
+
+        for facet in shape_model:
+            # Calculate max edge length
+            edges = [np.linalg.norm(facet.vertices[i] - facet.vertices[(i+1)%3]) for i in range(3)]
+            max_edge_length = max(edges)
+            max_displacement = max_edge_length * displacement_factor * (0.5 ** level)
+            
+            # Use the vertex_dict to get the potentially updated vertices
+            current_vertices = [vertex_dict[get_vertex_id(v)] for v in facet.vertices]
+            
+            subdivided = subdivide_triangle(current_vertices, max_displacement, vertex_dict)
+            
+            for sub_vertices in subdivided:
+                # Calculate sub-facet properties
+                sub_normal = np.cross(sub_vertices[1] - sub_vertices[0], sub_vertices[2] - sub_vertices[0])
+                sub_normal /= np.linalg.norm(sub_normal)
+                sub_position = np.mean(sub_vertices, axis=0)
+                
+                # Create new Facet object
+                new_facet = Facet(sub_normal, sub_vertices, simulation.timesteps_per_day, simulation.max_days, simulation.n_layers, simulation.calculate_energy_terms)
+                new_shape_model.append(new_facet)
+        
+        # Update shape_model for the next iteration
+        shape_model = new_shape_model
+    
+    return new_shape_model
 
 @jit(nopython=True)
 def calculate_visible_facets(positions, normals):
@@ -878,7 +1015,7 @@ def main():
     '''
 
     # Shape model name
-    shape_model_name = "67P_not_to_scale_low_res.stl"
+    shape_model_name = "Bennu_not_to_scale_98_facets.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
@@ -902,6 +1039,7 @@ def main():
     ################ Modelling ################
     simulation.include_self_heating = True
     simulation.include_scattering = True # TODO: Investigate dependence on number of scatters (particularly for most shaded facets)
+    simulation.apply_roughness = True
 
     ################ PLOTTING ################ BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
     plot_shadowing = False
@@ -916,6 +1054,30 @@ def main():
     plot_temp_distribution_for_final_day = False
     animate_final_day_temp_distribution = True
     plot_final_day_comparison = False
+
+    # Apply roughness to the shape model
+    if simulation.apply_roughness:
+        print(f"Applying roughness to shape model. Original size: {len(shape_model)} facets.")
+        shape_model = apply_roughness(shape_model, simulation)
+        print(f"Roughness applied to shape model. New size: {len(shape_model)} facets.")
+        # Save the shape model with roughness applied with a new filename
+        path_to_shape_model_file = f"shape_models/{shape_model_name[:-4]}_roughness_applied.stl"
+        # Save it to a new file
+        save_shape_model(shape_model, path_to_shape_model_file)
+
+        # Visualise shape model with roughness
+        animate_model(path_to_shape_model_file, 
+              np.ones((len(shape_model), 1)),  # Make this a 2D array
+              simulation.rotation_axis, 
+              simulation.sunlight_direction, 
+              1, 
+              colour_map='viridis', 
+              plot_title='Roughness applied to shape model', 
+              axis_label='Roughness Value', 
+              animation_frames=1, 
+              save_animation=False, 
+              save_animation_name='roughness_animation.gif', 
+              background_colour='black')
 
     # Setup the model
     positions = np.array([facet.position for facet in shape_model])
@@ -1079,7 +1241,9 @@ def main():
     if animate_final_day_temp_distribution:
         print(f"Preparing temperature animation.\n")
 
-        animate_model(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Temperature distribution on the body', axis_label='Temperature (K)', animation_frames=200, save_animation=False, save_animation_name='temperature_animation.gif', background_colour = 'black')
+        #animate_model(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Temperature distribution on the body', axis_label='Temperature (K)', animation_frames=200, save_animation=False, save_animation_name='temperature_animation.gif', background_colour = 'black')
+
+        animate_model_old(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Temperature distribution on the body', axis_label='Temperature (K)', animation_frames=200, save_animation=False, save_animation_name='temperature_animation.gif', background_colour = 'black')
 
     if plot_final_day_comparison:
         print(f"Saving final day temperatures for facet to CSV file.\n")
