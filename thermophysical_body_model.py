@@ -56,6 +56,7 @@ import sys
 import json
 from animate_model import animate_model
 from animate_model_old import animate_model_old
+from animate_model_new import animate_model_new
 from numba import jit, njit, float64, int64, boolean
 from numba.typed import List
 from joblib import Parallel, delayed
@@ -545,6 +546,8 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     return view_factors
 
 def calculate_shape_model_view_factors(shape_model, thermal_data, n_rays=10000):
+    #NOTE: This doesn't need to be random - could just use a grid of rays, might be faster. 
+
     all_view_factors = []
     
     shape_model_hash = get_shape_model_hash(shape_model)
@@ -1015,7 +1018,7 @@ def main():
     '''
 
     # Shape model name
-    shape_model_name = "Bennu_not_to_scale_98_facets.stl"
+    shape_model_name = "67P_not_to_scale_1666_facets.stl"
 
     # Get setup file and shape model
     path_to_shape_model_file = f"shape_models/{shape_model_name}"
@@ -1037,12 +1040,12 @@ def main():
     print(f"\n Number of facets: {len(shape_model)}")
 
     ################ Modelling ################
-    simulation.include_self_heating = True
-    simulation.include_scattering = True # TODO: Investigate dependence on number of scatters (particularly for most shaded facets)
-    simulation.apply_roughness = True
+    simulation.include_self_heating = False
+    simulation.include_scattering = False # TODO: Investigate dependence on number of scatters (particularly for most shaded facets)
+    simulation.apply_roughness = False
 
     ################ PLOTTING ################ BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
-    plot_shadowing = False
+    plot_shadowing = True
     plot_insolation_curve = False
     plot_initial_temp_histogram = False
     plot_secondary_radiation_view_factors = False
@@ -1106,12 +1109,12 @@ def main():
 
     thermal_data = calculate_insolation(thermal_data, shape_model, simulation)
 
-    facet_index = 0 # Index of facet to plot
+    facet_index = 1066 # Index of facet to plot
 
     if plot_shadowing:
         print(f"Preparing shadowing visualisation.\n")
 
-        animate_model(path_to_shape_model_file, thermal_data.insolation, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='binary_r', plot_title='Shadowing on the body', axis_label='Insolation (W/m^2)', animation_frames=200, save_animation=False, save_animation_name='shadowing_animation.gif', background_colour = 'black')
+        animate_model_new(path_to_shape_model_file, thermal_data.insolation, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='binary_r', plot_title='Shadowing on the body', axis_label='Insolation (W/m^2)', animation_frames=200, save_animation=False, save_animation_name='shadowing_animation.gif', background_colour = 'black')
 
     if plot_insolation_curve:
         fig_insolation = plt.figure()
