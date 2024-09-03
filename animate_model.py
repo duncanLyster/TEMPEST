@@ -1,40 +1,12 @@
 """
-Animate Model Script - Summary and Next Steps
+Animate Model Script
 
-This script creates an interactive 3D animation of a shape model, allowing users to
-visualize various properties over time (e.g., temperature, illumination). It supports
-features such as pausing, selecting individual facets, and displaying their properties
-over time on a separate graph.
-
-Current State:
-- The basic animation and interaction are working.
-- Pausing, unpausing, and scrubbing through frames are functional.
-- Selecting and deselecting facets work, with corresponding graph updates.
+This script creates an interactive 3D animation of a shape model, allowing the user to visualize various properties over time (e.g., temperature, illumination). It allows the user to pause, select individual facets, and display their properties over time on a separate graph.
 
 Known Issues:
-1. Color Consistency: Highlighted facets are not maintaining their assigned colors
-   consistently, especially after unpausing or selecting multiple facets.
-2. Performance: The animation may become jerky when unpaused, compared to smooth
-   scrubbing with arrow keys. (Might just be rotating faster when unpaused).
-
-Next Steps to Try:
-1. Debug Color Assignment:
-   - Add print statements in the update_highlight_mesh function to track color
-     assignments for each cell.
-   - Verify that colors in state.highlight_colors match what's being applied to the mesh.
-
-2. Investigate Frame Updates:
-   - Compare the update process between arrow key scrubbing and normal playback.
-   - Consider simplifying the update process for normal playback to match the
-     efficiency of arrow key scrubbing.
-
-3. Optimize Highlight Mesh Updates:
-   - Instead of recreating the highlight mesh each frame, explore updating only
-     the changed portions.
-   - Consider using a single mesh with cell data for colors, updating only when
-     selections change.
+1. Color Consistency: Highlighted facets are not maintaining their assigned colors correctly.
+2. Segmentation Fault: The script crashes with a segmentation fault the second time it is called by the model script. 
 """
-
 
 import pyvista as pv
 import vtk
