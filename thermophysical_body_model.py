@@ -55,8 +55,6 @@ import time
 import sys
 import json
 from animate_model import animate_model
-from animate_model_old import animate_model_old
-from animate_model_new import animate_model_new
 from numba import jit, njit, float64, int64, boolean
 from numba.typed import List
 from joblib import Parallel, delayed
@@ -955,7 +953,14 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
                     facet_highlight_array = np.zeros((thermal_data.temperatures.shape[0], simulation.timesteps_per_day))
                     facet_highlight_array[i] = 1
 
-                    animate_model(path_to_shape_model_file, facet_highlight_array, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Problematic facet', axis_label='Problem facet is red', animation_frames=200, save_animation=False, save_animation_name='problematic_facet_animation.gif', background_colour = 'black')
+                    animate_model(path_to_shape_model_file, 
+                                  facet_highlight_array, 
+                                  simulation.rotation_axis, 
+                                  simulation.sunlight_direction, 
+                                  simulation.timesteps_per_day, 
+                                  simulation.solar_distance_au,
+                                  simulation.rotation_period_hours,
+                                  colour_map='coolwarm', plot_title='Problematic facet', axis_label='Problem facet is red', animation_frames=200, save_animation=False, save_animation_name='problematic_facet_animation.gif', background_colour = 'black')
 
                     sys.exit()
 
@@ -1074,6 +1079,8 @@ def main():
               simulation.rotation_axis, 
               simulation.sunlight_direction, 
               1, 
+              simulation.solar_distance_au,
+              simulation.rotation_period_hours,
               colour_map='viridis', 
               plot_title='Roughness applied to shape model', 
               axis_label='Roughness Value', 
@@ -1114,7 +1121,20 @@ def main():
     if plot_shadowing:
         print(f"Preparing shadowing visualisation.\n")
 
-        animate_model_new(path_to_shape_model_file, thermal_data.insolation, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='binary_r', plot_title='Shadowing on the body', axis_label='Insolation (W/m^2)', animation_frames=200, save_animation=False, save_animation_name='shadowing_animation.gif', background_colour = 'black')
+        animate_model(path_to_shape_model_file, 
+                          thermal_data.insolation, 
+                          simulation.rotation_axis, 
+                          simulation.sunlight_direction, 
+                          simulation.timesteps_per_day, 
+                          simulation.solar_distance_au,
+                          simulation.rotation_period_hours,
+                          colour_map='binary_r', 
+                          plot_title='Shadowing on the body', 
+                          axis_label='Insolation (W/m^2)', 
+                          animation_frames=200, 
+                          save_animation=False, 
+                          save_animation_name='shadowing_animation.gif', 
+                          background_colour = 'black')
 
     if plot_insolation_curve:
         fig_insolation = plt.figure()
@@ -1162,11 +1182,19 @@ def main():
         print(f"Total number of contributing facets: {len(contributing_indices)}")
         
         print(f"Preparing visualization of contributing facets for facet {selected_facet}.")
-        animate_model(path_to_shape_model_file, contribution_data[:, np.newaxis], 
-                    simulation.rotation_axis, simulation.sunlight_direction, 1, 
-                    colour_map='viridis', plot_title=f'Contributing Facets for Facet {selected_facet}', 
-                    axis_label='View Factors Value', animation_frames=1, 
-                    save_animation=False, save_animation_name=f'contributing_facets_{selected_facet}.png', 
+        animate_model(path_to_shape_model_file, 
+                      contribution_data[:, np.newaxis], 
+                    simulation.rotation_axis, 
+                    simulation.sunlight_direction, 
+                    1,               
+                    simulation.solar_distance_au,              
+                    simulation.rotation_period_hours,
+                    colour_map='viridis', 
+                    plot_title=f'Contributing Facets for Facet {selected_facet}', 
+                    axis_label='View Factors Value', 
+                    animation_frames=1, 
+                    save_animation=False, 
+                    save_animation_name=f'contributing_facets_{selected_facet}.png', 
                     background_colour='black')
         
     if plot_secondary_contributions:
@@ -1174,11 +1202,19 @@ def main():
         secondary_radiation_sum = np.array([np.sum(view_factors) for view_factors in thermal_data.secondary_radiation_view_factors])
 
         print("Preparing secondary radiation visualization.")
-        animate_model(path_to_shape_model_file, secondary_radiation_sum[:, np.newaxis], 
-                    simulation.rotation_axis, simulation.sunlight_direction, 1, 
-                    colour_map='viridis', plot_title='Secondary Radiation Contribution', 
-                    axis_label='Sum of View Factors', animation_frames=1, 
-                    save_animation=False, save_animation_name='secondary_radiation.png', 
+        animate_model(path_to_shape_model_file, 
+                    secondary_radiation_sum[:, np.newaxis], 
+                    simulation.rotation_axis, 
+                    simulation.sunlight_direction, 
+                    1,               
+                    simulation.solar_distance_au,              
+                    simulation.rotation_period_hours,
+                    colour_map='viridis', 
+                    plot_title='Secondary Radiation Contribution', 
+                    axis_label='Sum of View Factors', 
+                    animation_frames=1, 
+                    save_animation=False, 
+                    save_animation_name='secondary_radiation.png', 
                     background_colour='black')
 
     print(f"Running main simulation loop.\n")
@@ -1244,9 +1280,20 @@ def main():
     if animate_final_day_temp_distribution:
         print(f"Preparing temperature animation.\n")
 
-        #animate_model(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Temperature distribution on the body', axis_label='Temperature (K)', animation_frames=200, save_animation=False, save_animation_name='temperature_animation.gif', background_colour = 'black')
-
-        animate_model_old(path_to_shape_model_file, final_day_temperatures, simulation.rotation_axis, simulation.sunlight_direction, simulation.timesteps_per_day, colour_map='coolwarm', plot_title='Temperature distribution on the body', axis_label='Temperature (K)', animation_frames=200, save_animation=False, save_animation_name='temperature_animation.gif', background_colour = 'black')
+        animate_model(path_to_shape_model_file, 
+                      final_day_temperatures, 
+                      simulation.rotation_axis, 
+                      simulation.sunlight_direction, 
+                      simulation.timesteps_per_day,
+                      simulation.solar_distance_au,              
+                      simulation.rotation_period_hours,              
+                      colour_map='coolwarm', 
+                      plot_title='Temperature distribution on the body', 
+                      axis_label='Temperature (K)', 
+                      animation_frames=200, 
+                      save_animation=False, 
+                      save_animation_name='temperature_animation.gif', 
+                      background_colour = 'black')
 
     if plot_final_day_comparison:
         print(f"Saving final day temperatures for facet to CSV file.\n")
