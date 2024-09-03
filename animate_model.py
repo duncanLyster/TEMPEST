@@ -42,7 +42,7 @@ class AnimationState:
 def get_next_color(state):
     color = state.color_cycle[state.color_index % len(state.color_cycle)]
     state.color_index += 1
-    return color[:3] 
+    return color[:3]
 
 def on_press(state):
     state.is_paused = not state.is_paused
@@ -110,7 +110,8 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
             line = state.cell_colors.pop(cell_id)
             line.remove()
         if cell_id in state.highlight_colors:
-            del state.highlight_colors[cell_id]
+            color = state.highlight_colors.pop(cell_id)
+            state.color_index = (state.color_index - 1) % len(state.color_cycle)  # Return the color to the pool
     else:
         # Add the cell if it's not highlighted
         state.highlighted_cell_ids.append(cell_id)
@@ -126,51 +127,52 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
         line, = state.ax.plot(time_steps, values_over_time, label=f'Cell {cell_id}', color=color)
         state.cell_colors[cell_id] = line
 
-        state.ax.set_xlabel('Fractional angle of rotation (rotations)')
-        state.ax.set_ylabel(axis_label)
-        state.ax.set_title(f'Diurnal variation of {axis_label} of selected Cells')
-
-        if state.time_line is None:
-            state.time_line = state.ax.axvline(x=state.current_frame / state.timesteps_per_day, color='r', linestyle='--', label='Current Time')
-
-        state.ax.legend()
-        state.fig.canvas.draw()
-        state.fig.canvas.flush_events()
-
+    # Ensure the graph and highlight mesh are updated
     update_highlight_mesh(state, plotter, pv_mesh)
-    if state.fig:
+    if state.fig is not None:
         state.ax.legend()
         state.fig.canvas.draw()
         state.fig.canvas.flush_events()
+
+def get_next_color(state):
+    color = state.color_cycle[state.color_index]
+    state.color_index = (state.color_index + 1) % len(state.color_cycle)
+    return color[:3]
 
 def update_highlight_mesh(state, plotter, pv_mesh):
+    print(f"Updating highlight mesh. Highlighted cell IDs: {state.highlighted_cell_ids}")
     if state.highlighted_cell_ids:
         highlight_mesh = pv.PolyData()
         cell_colors = []
         for cell_id in state.highlighted_cell_ids:
+            color = state.highlight_colors[cell_id]
+            print(f"Cell {cell_id} color: {color}")
             cell = pv_mesh.extract_cells([cell_id])
             edges = cell.extract_feature_edges(feature_angle=0, boundary_edges=True, non_manifold_edges=False, manifold_edges=False)
             n_edges = edges.n_cells
             highlight_mesh += edges
-            color = state.highlight_colors[cell_id]
             cell_colors.extend([color] * n_edges)
         
-        cell_colors = np.array(cell_colors)  # Convert list to numpy array
+        cell_colors = np.array(cell_colors)
+        print(f"Final cell colors array shape: {cell_colors.shape}")
+        print(f"Sample of cell colors: {cell_colors[:5]}")
 
         if state.highlight_mesh is None:
             state.highlight_mesh = plotter.add_mesh(highlight_mesh, scalars=cell_colors, rgb=True, line_width=5, render_lines_as_tubes=True, opacity=1)
         else:
-            state.highlight_mesh.GetMapper().GetInput().ShallowCopy(highlight_mesh)
-            state.highlight_mesh.GetMapper().GetInput().GetCellData().SetScalars(pv.convert_array(cell_colors))
-            state.highlight_mesh.GetProperty().SetLineWidth(5)
+            # Remove the old highlight mesh
+            plotter.remove_actor(state.highlight_mesh)
+            # Add the new highlight mesh
+            state.highlight_mesh = plotter.add_mesh(highlight_mesh, scalars=cell_colors, rgb=True, line_width=5, render_lines_as_tubes=True, opacity=1)
         
-        # Force update of the mesh colors
-        state.highlight_mesh.GetMapper().Update()
+        print("New highlight mesh added")
     elif state.highlight_mesh is not None:
         plotter.remove_actor(state.highlight_mesh)
         state.highlight_mesh = None
+        print("Highlight mesh removed")
     
     plotter.render()
+    print("Highlight mesh update complete")
 
 def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
     if not state.is_paused:
