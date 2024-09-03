@@ -15,7 +15,7 @@ Known Issues:
 1. Color Consistency: Highlighted facets are not maintaining their assigned colors
    consistently, especially after unpausing or selecting multiple facets.
 2. Performance: The animation may become jerky when unpaused, compared to smooth
-   scrubbing with arrow keys.
+   scrubbing with arrow keys. (Might just be rotating faster when unpaused).
 
 Next Steps to Try:
 1. Debug Color Assignment:
@@ -33,17 +33,6 @@ Next Steps to Try:
      the changed portions.
    - Consider using a single mesh with cell data for colors, updating only when
      selections change.
-
-4. Profile Performance:
-   - Use a profiler to identify any bottlenecks in the update process.
-   - Focus optimization efforts on the most time-consuming parts of the animation loop.
-
-5. Alternative Highlighting Method:
-   - If color issues persist, consider alternative methods for highlighting, such
-     as using distinct mesh objects for highlights with solid colors.
-
-Remember to test each change incrementally and verify that existing functionality
-is not broken by new modifications.
 """
 
 
@@ -63,18 +52,20 @@ class AnimationState:
         self.camera_phi = math.pi / 2
         self.camera_theta = math.pi / 2
         self.camera_radius = None
-        self.selected_cells = []
         self.fig, self.ax = None, None
         self.pause_time = None
         self.time_line = None
-        self.cell_colors = {}
         self.cumulative_rotation = 0
         self.timesteps_per_day = None
         self.highlighted_cell_ids = []
+        self.cell_colors = {}
         self.highlight_colors = {}
         self.highlight_mesh = None
-        self.color_cycle = plt.cm.tab10.colors  # Use matplotlib's color cycle
+        self.color_cycle = plt.cm.tab10.colors
         self.color_index = 0
+        self.initial_camera_position = None
+        self.initial_camera_focal_point = None
+        self.initial_camera_up = None
 
 def get_next_color(state):
     color = state.color_cycle[state.color_index % len(state.color_cycle)]
@@ -99,6 +90,13 @@ def move_backward(state, plotter, pv_mesh, plotted_variable_array, vertices, rot
     state.cumulative_rotation = (state.current_frame / state.timesteps_per_day) * 2 * math.pi
     update(None, None, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
     plotter.render()
+
+def reset_camera(state, plotter):
+    if state.initial_camera_position is not None:
+        plotter.camera.position = state.initial_camera_position
+        plotter.camera.focal_point = state.initial_camera_focal_point
+        plotter.camera.up = state.initial_camera_up
+        plotter.render()
 
 def round_up_to_nearest(x, base):
     return base * math.ceil(x / base)
@@ -242,7 +240,7 @@ def on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_l
         plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variable_array, axis_label)
 
 def animate_model_new(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
-                  timesteps_per_day, colour_map, plot_title, axis_label, animation_frames, 
+                  timesteps_per_day, solar_distance_au, rotation_period_hr, colour_map, plot_title, axis_label, animation_frames, 
                   save_animation, save_animation_name, background_colour):
 
     state = AnimationState()
@@ -282,6 +280,8 @@ def animate_model_new(path_to_shape_model_file, plotted_variable_array, rotation
     plotter.add_key_event('Left', lambda: move_backward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
     plotter.add_key_event('Right', lambda: move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
     plotter.add_key_event('c', lambda: clear_selections(state, plotter))
+    plotter.add_key_event('r', lambda: reset_camera(state, plotter))  # Add the new key event for camera reset
+
 
     cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
     plotter.add_mesh(cylinder, color='green')
@@ -296,6 +296,10 @@ def animate_model_new(path_to_shape_model_file, plotted_variable_array, rotation
 
     text_color_rgb = (1, 1, 1) if background_colour == 'black' else (0, 0, 0)
 
+    state.initial_camera_position = plotter.camera.position
+    state.initial_camera_focal_point = plotter.camera.focal_point
+    state.initial_camera_up = plotter.camera.up
+
     plotter.scalar_bar.GetLabelTextProperty().SetColor(bar_color)
     plotter.scalar_bar.SetPosition(0.2, 0.05)
     plotter.scalar_bar.GetLabelTextProperty().SetJustificationToCentered()
@@ -304,12 +308,28 @@ def animate_model_new(path_to_shape_model_file, plotted_variable_array, rotation
 
     min_val = np.min(plotted_variable_array)
     max_val = np.max(plotted_variable_array)
-    range_val = max_val - min_val
 
-    # Adjust the scaling of the color bar
     num_labels = 5
-    interval = range_val / (num_labels - 1)
-    labels = [min_val + i * interval for i in range(num_labels)]
+
+    def round_to_nice_number(x):
+        if x == 0:
+            return 0
+        exponent = math.floor(math.log10(abs(x)))
+        coeff = x / (10**exponent)
+        if coeff < 1.5:
+            nice_coeff = 1
+        elif coeff < 3:
+            nice_coeff = 2
+        elif coeff < 7:
+            nice_coeff = 5
+        else:
+            nice_coeff = 10
+        return nice_coeff * (10**exponent)
+
+    nice_min_val = round_to_nice_number(min_val)
+    nice_max_val = round_to_nice_number(max_val)
+
+    labels = np.linspace(nice_min_val, nice_max_val, num_labels)
 
     vtk_labels = vtk.vtkDoubleArray()
     vtk_labels.SetNumberOfValues(len(labels))
@@ -320,14 +340,12 @@ def animate_model_new(path_to_shape_model_file, plotted_variable_array, rotation
     plotter.scalar_bar.SetUseCustomLabels(True)
 
     plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
-    plotter.add_text("Press spacebar to pause, right click to select a facet, 'C' to clear selections.", position='lower_edge', font_size=10, color=text_color)
-    plotter.background_color = background_colour
+    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select  facet\n'C' - Clear selections\n'L/R Arrow keys' - Rotate\n'R' - Reset camera", position='upper_left', font_size=10, color=text_color)
 
-    # Add solar distance and rotation period
-    solar_distance = 1.5  # AU (example value)
-    rotation_period = 24  # hours (example value)
-    info_text = f"Solar Distance: {solar_distance} AU\nRotation Period: {rotation_period} hours"
-    plotter.add_text(info_text, position=(0.02, 0.95), font_size=10, color=text_color)
+    info_text = f"Solar Distance: {solar_distance_au} AU\nRotation Period: {rotation_period_hr} hours"
+    plotter.add_text(info_text, position='upper_right', font_size=10, color=text_color)
+
+    plotter.background_color = background_colour
 
     def update_callback(caller, event):
         if not state.is_paused:
@@ -366,7 +384,6 @@ def animate_model_new(path_to_shape_model_file, plotted_variable_array, rotation
 
     state.fig = None
     state.ax = None
-    state.selected_cells = []
 
     gc.collect()
 

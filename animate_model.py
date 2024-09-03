@@ -1,18 +1,41 @@
-'''
-Script to animate model quantities on the shape. The model is rotated about a specified axis and the quantity is plotted on the shape. You can move the camera around the shape and pause the animation with the arrow keys and spacebar. Right click on the shape to get the value of the quantity at that point.
+"""
+Animate Model Script - Summary and Next Steps
 
-Tasks: 
-1) TODO Leave animation up (or save it in an interactable mode) but allow the main code to continue running.
-2) BUG - plot window doesn't close when you hit x.
-3) BUG - camera movement is jumpy when using arrow keys.
-4) TODO Sort out colour scale bar values - should be more sensibly spaced.
-5) BUG - segmentation fault the second time this script is run.
-6) TODO Press 'C' to clear the selected cells (might need to solve segmentation fault before this can be implemented).
-7) BUG - Highlighted cells flicker when many are selected due to repeated re-drawing. 
-8) BUG - Sometimes highlighted cells are not the ones clicked - need to check the cell ID etc. 
+This script creates an interactive 3D animation of a shape model, allowing users to
+visualize various properties over time (e.g., temperature, illumination). It supports
+features such as pausing, selecting individual facets, and displaying their properties
+over time on a separate graph.
 
-NOTE: This is currently very slow when called from the main script for large shape models.
-'''
+Current State:
+- The basic animation and interaction are working.
+- Pausing, unpausing, and scrubbing through frames are functional.
+- Selecting and deselecting facets work, with corresponding graph updates.
+
+Known Issues:
+1. Color Consistency: Highlighted facets are not maintaining their assigned colors
+   consistently, especially after unpausing or selecting multiple facets.
+2. Performance: The animation may become jerky when unpaused, compared to smooth
+   scrubbing with arrow keys. (Might just be rotating faster when unpaused).
+
+Next Steps to Try:
+1. Debug Color Assignment:
+   - Add print statements in the update_highlight_mesh function to track color
+     assignments for each cell.
+   - Verify that colors in state.highlight_colors match what's being applied to the mesh.
+
+2. Investigate Frame Updates:
+   - Compare the update process between arrow key scrubbing and normal playback.
+   - Consider simplifying the update process for normal playback to match the
+     efficiency of arrow key scrubbing.
+
+3. Optimize Highlight Mesh Updates:
+   - Instead of recreating the highlight mesh each frame, explore updating only
+     the changed portions.
+   - Consider using a single mesh with cell data for colors, updating only when
+     selections change.
+"""
+
+
 import pyvista as pv
 import vtk
 from stl import mesh
@@ -29,15 +52,25 @@ class AnimationState:
         self.camera_phi = math.pi / 2
         self.camera_theta = math.pi / 2
         self.camera_radius = None
-        self.selected_cells = []
         self.fig, self.ax = None, None
         self.pause_time = None
         self.time_line = None
-        self.cell_colors = {}
+        self.cumulative_rotation = 0
         self.timesteps_per_day = None
         self.highlighted_cell_ids = []
-        self.highlight_colors = {} 
-        self.cumulative_rotation = 0  # Track cumulative rotation in radians
+        self.cell_colors = {}
+        self.highlight_colors = {}
+        self.highlight_mesh = None
+        self.color_cycle = plt.cm.tab10.colors
+        self.color_index = 0
+        self.initial_camera_position = None
+        self.initial_camera_focal_point = None
+        self.initial_camera_up = None
+
+def get_next_color(state):
+    color = state.color_cycle[state.color_index % len(state.color_cycle)]
+    state.color_index += 1
+    return color[:3] 
 
 def on_press(state):
     state.is_paused = not state.is_paused
@@ -46,29 +79,24 @@ def on_press(state):
     else:
         state.pause_time = None
 
-def update_camera_position(plotter, state):
-    x = state.camera_radius * math.sin(state.camera_phi) * math.cos(state.camera_theta)
-    y = state.camera_radius * math.sin(state.camera_phi) * math.sin(state.camera_theta)
-    z = state.camera_radius * math.cos(state.camera_phi)
-    plotter.camera_position = [(x, y, z), (0, 0, 0), (0, 0, 1)]
-    plotter.camera.view_angle = 30
+def move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
+    state.current_frame = (state.current_frame + 1) % state.timesteps_per_day
+    state.cumulative_rotation = (state.current_frame / state.timesteps_per_day) * 2 * math.pi
+    update(None, None, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
     plotter.render()
 
-def move_up(plotter, state):
-    state.camera_phi -= math.pi / 36
-    update_camera_position(plotter, state)
+def move_backward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
+    state.current_frame = (state.current_frame - 1) % state.timesteps_per_day
+    state.cumulative_rotation = (state.current_frame / state.timesteps_per_day) * 2 * math.pi
+    update(None, None, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
+    plotter.render()
 
-def move_down(plotter, state):
-    state.camera_phi += math.pi / 36
-    update_camera_position(plotter, state)
-
-def move_left(plotter, state):
-    state.camera_theta -= math.pi / 36
-    update_camera_position(plotter, state)
-
-def move_right(plotter, state):
-    state.camera_theta += math.pi / 36
-    update_camera_position(plotter, state)
+def reset_camera(state, plotter):
+    if state.initial_camera_position is not None:
+        plotter.camera.position = state.initial_camera_position
+        plotter.camera.focal_point = state.initial_camera_focal_point
+        plotter.camera.up = state.initial_camera_up
+        plotter.render()
 
 def round_up_to_nearest(x, base):
     return base * math.ceil(x / base)
@@ -86,22 +114,36 @@ def rotation_matrix(axis, theta):
             [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
             [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]]
 
+def clear_selections(state, plotter):
+    state.highlighted_cell_ids.clear()
+    state.highlight_colors.clear()
+    state.color_index = 0  # Reset color index
+    if state.highlight_mesh is not None:
+        plotter.remove_actor(state.highlight_mesh)
+        state.highlight_mesh = None
+    if state.fig is not None:
+        for line in state.cell_colors.values():
+            line.remove()
+        state.cell_colors.clear()
+        state.ax.legend()  # Update the legend
+        state.fig.canvas.draw()
+        state.fig.canvas.flush_events()
+    plotter.render()
+
 def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variable_array, axis_label):
     if cell_id in state.highlighted_cell_ids:
+        # Remove the cell if it's already highlighted
         state.highlighted_cell_ids.remove(cell_id)
-        plotter.remove_actor(state.highlight_actors[cell_id])
-        state.highlight_actors[cell_id]
-        state.highlight_colors[cell_id]
-        line = state.cell_colors.pop(cell_id)
-        line.remove()
+        if cell_id in state.cell_colors:
+            line = state.cell_colors.pop(cell_id)
+            line.remove()
+        if cell_id in state.highlight_colors:
+            del state.highlight_colors[cell_id]
     else:
+        # Add the cell if it's not highlighted
         state.highlighted_cell_ids.append(cell_id)
-        color = plt.cm.tab10(len(state.highlighted_cell_ids) - 1 % 10)  # Assign color based on current length
-        state.highlight_colors[cell_id] = color[:3]  # Store the color
-        cell = pv_mesh.extract_cells([cell_id])
-        edges = cell.extract_feature_edges(feature_angle=0, boundary_edges=True, non_manifold_edges=False, manifold_edges=False)
-        actor = plotter.add_mesh(edges, color=color[:3], line_width=5, render_lines_as_tubes=True, opacity=1)
-        state.highlight_actors[cell_id] = actor
+        color = get_next_color(state)
+        state.highlight_colors[cell_id] = color
 
         if state.fig is None or state.ax is None:
             plt.ion()
@@ -109,7 +151,7 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
 
         values_over_time = plotted_variable_array[cell_id, :]
         time_steps = [i / state.timesteps_per_day for i in range(len(values_over_time))]
-        line, = state.ax.plot(time_steps, values_over_time, label=f'Cell {cell_id}', color=color[:3])
+        line, = state.ax.plot(time_steps, values_over_time, label=f'Cell {cell_id}', color=color)
         state.cell_colors[cell_id] = line
 
         state.ax.set_xlabel('Fractional angle of rotation (rotations)')
@@ -123,50 +165,72 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
         state.fig.canvas.draw()
         state.fig.canvas.flush_events()
 
+    update_highlight_mesh(state, plotter, pv_mesh)
+    if state.fig:
+        state.ax.legend()
+        state.fig.canvas.draw()
+        state.fig.canvas.flush_events()
+
+def update_highlight_mesh(state, plotter, pv_mesh):
+    if state.highlighted_cell_ids:
+        highlight_mesh = pv.PolyData()
+        cell_colors = []
+        for cell_id in state.highlighted_cell_ids:
+            cell = pv_mesh.extract_cells([cell_id])
+            edges = cell.extract_feature_edges(feature_angle=0, boundary_edges=True, non_manifold_edges=False, manifold_edges=False)
+            n_edges = edges.n_cells
+            highlight_mesh += edges
+            color = state.highlight_colors[cell_id]
+            cell_colors.extend([color] * n_edges)
+        
+        cell_colors = np.array(cell_colors)  # Convert list to numpy array
+
+        if state.highlight_mesh is None:
+            state.highlight_mesh = plotter.add_mesh(highlight_mesh, scalars=cell_colors, rgb=True, line_width=5, render_lines_as_tubes=True, opacity=1)
+        else:
+            state.highlight_mesh.GetMapper().GetInput().ShallowCopy(highlight_mesh)
+            state.highlight_mesh.GetMapper().GetInput().GetCellData().SetScalars(pv.convert_array(cell_colors))
+            state.highlight_mesh.GetProperty().SetLineWidth(5)
+        
+        # Force update of the mesh colors
+        state.highlight_mesh.GetMapper().Update()
+    elif state.highlight_mesh is not None:
+        plotter.remove_actor(state.highlight_mesh)
+        state.highlight_mesh = None
+    
     plotter.render()
 
 def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
     if not state.is_paused:
-        state.cumulative_rotation += 2 * math.pi / state.timesteps_per_day
-        state.current_frame = int((state.cumulative_rotation / (2 * math.pi)) * state.timesteps_per_day) % state.timesteps_per_day
+        state.current_frame = (state.current_frame + 1) % state.timesteps_per_day
+        state.cumulative_rotation = (state.current_frame / state.timesteps_per_day) * 2 * math.pi
 
-        if state.current_frame >= plotted_variable_array.shape[1]:
-            state.current_frame = 0
+    rot_mat = np.array(rotation_matrix(rotation_axis, state.cumulative_rotation))
 
-        rot_mat = np.array(rotation_matrix(rotation_axis, state.cumulative_rotation))
+    try:
+        # Apply rotation to mesh
+        rotated_vertices = np.dot(vertices, rot_mat.T)
+        pv_mesh.points = rotated_vertices
+        
+        # Update cell data
+        pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame]
+        
+        # Update highlights only if there are highlighted cells
+        if state.highlighted_cell_ids:
+            update_highlight_mesh(state, plotter, pv_mesh)
 
-        try:
-            # Apply rotation to mesh
-            rotated_vertices = np.dot(vertices, rot_mat.T)
-            pv_mesh.points = rotated_vertices
-            
-            # Update cell data
-            pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame]
-            
-            # Remove existing highlight actors
-            for actor in state.highlight_actors.values():
-                plotter.remove_actor(actor)
-            state.highlight_actors.clear()
-            
-            # Recreate highlight for selected cells using stored colors
-            for cell_id in state.highlighted_cell_ids:
-                cell = pv_mesh.extract_cells([cell_id])
-                edges = cell.extract_feature_edges(feature_angle=0, boundary_edges=True, non_manifold_edges=False, manifold_edges=False)
-                color = state.highlight_colors[cell_id]  # Use the stored color
-                actor = plotter.add_mesh(edges, color=color, line_width=5, render_lines_as_tubes=True, opacity=1)
-                state.highlight_actors[cell_id] = actor
+    except Exception as e:
+        print(f"Error updating mesh: {e}")
+        print(f"Debug info: current_frame={state.current_frame}, shape of plotted_variable_array={plotted_variable_array.shape}")
+        return
 
-        except Exception as e:
-            print(f"Error updating mesh: {e}")
-            print(f"Debug info: current_frame={state.current_frame}, shape of plotted_variable_array={plotted_variable_array.shape}")
-            return
-
-        if state.fig is not None and state.ax is not None:
-            if state.time_line is None:
-                state.time_line = state.ax.axvline(x=state.current_frame / state.timesteps_per_day, color='r', linestyle='--', label='Current Time')
-            state.time_line.set_xdata(state.current_frame / state.timesteps_per_day)
-            state.fig.canvas.draw()
-            state.fig.canvas.flush_events()
+    if state.fig is not None and state.ax is not None:
+        if state.time_line is None:
+            state.time_line = state.ax.axvline(x=state.current_frame / state.timesteps_per_day, color='r', linestyle='--', label='Current Time')
+        else:
+            state.time_line.set_xdata([state.current_frame / state.timesteps_per_day])
+        state.fig.canvas.draw()
+        state.fig.canvas.flush_events()
 
     plotter.render()
 
@@ -176,12 +240,11 @@ def on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_l
         plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variable_array, axis_label)
 
 def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
-                  timesteps_per_day, colour_map, plot_title, axis_label, animation_frames, 
+                  timesteps_per_day, solar_distance_au, rotation_period_hr, colour_map, plot_title, axis_label, animation_frames, 
                   save_animation, save_animation_name, background_colour):
 
     state = AnimationState()
     state.timesteps_per_day = timesteps_per_day
-    state.highlight_actors = {}
 
     start_time = time.time()
 
@@ -204,10 +267,6 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     pv_mesh = pv.PolyData(vertices, faces)
     pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
 
-    highlight_mesh = pv_mesh.extract_all_edges()
-    highlight_mesh.cell_data['selected'] = np.zeros(highlight_mesh.n_cells, dtype=bool)
-    highlight_mesh.cell_data['color'] = np.zeros((highlight_mesh.n_cells, 4))  # RGBA values
-
     text_color = 'white' if background_colour == 'black' else 'black' 
     bar_color = (1, 1, 1) if background_colour == 'black' else (0, 0, 0)
 
@@ -216,13 +275,13 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     state.camera_radius = max_dimension * 5
 
     plotter = pv.Plotter()
-    plotter.enable_anti_aliasing() 
+    plotter.enable_anti_aliasing()
     plotter.add_key_event('space', lambda: on_press(state))
-    plotter.add_key_event('Up', lambda: move_up(plotter, state))
-    plotter.add_key_event('Down', lambda: move_down(plotter, state))
-    plotter.add_key_event('Left', lambda: move_left(plotter, state))
-    plotter.add_key_event('Right', lambda: move_right(plotter, state))
-    plotter.iren.initialize()
+    plotter.add_key_event('Left', lambda: move_backward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
+    plotter.add_key_event('Right', lambda: move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
+    plotter.add_key_event('c', lambda: clear_selections(state, plotter))
+    plotter.add_key_event('r', lambda: reset_camera(state, plotter))  # Add the new key event for camera reset
+
 
     cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
     plotter.add_mesh(cylinder, color='green')
@@ -231,27 +290,15 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], scale=max_dimension * 0.3)
     plotter.add_mesh(sunlight_arrow, color='yellow')
 
-    plotter.iren.add_observer('TimerEvent', lambda caller, event: update(caller, event, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
-    plotter.iren.create_timer(100)
-
-    mesh_actor = plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False)
-
-
-
-
-    ######################   HIGHLIGHTING STUFF    ###########################
-    state.highlight_actor = plotter.add_mesh(highlight_mesh, 
-                                             scalars=highlight_mesh.cell_data['color'],
-                                             rgb=True, 
-                                             render_lines_as_tubes=True, 
-                                             line_width=1)  
+    plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False)
 
     plotter.enable_element_picking(callback=lambda picked_mesh: on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_label), mode='cell', show=False, show_message=False)
-    ######################   HIGHLIGHTING STUFF    ###########################
-
-
 
     text_color_rgb = (1, 1, 1) if background_colour == 'black' else (0, 0, 0)
+
+    state.initial_camera_position = plotter.camera.position
+    state.initial_camera_focal_point = plotter.camera.focal_point
+    state.initial_camera_up = plotter.camera.up
 
     plotter.scalar_bar.GetLabelTextProperty().SetColor(bar_color)
     plotter.scalar_bar.SetPosition(0.2, 0.05)
@@ -259,24 +306,30 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.scalar_bar.SetTitle(axis_label)
     plotter.scalar_bar.GetTitleTextProperty().SetColor(text_color_rgb)
 
-    min_val = min(min(row) for row in plotted_variable_array)
-    max_val = max(max(row) for row in plotted_variable_array)
-    range_val = max_val - min_val
+    min_val = np.min(plotted_variable_array)
+    max_val = np.max(plotted_variable_array)
 
-    interval = 10 ** (math.floor(math.log10(range_val)) - 1)
-    rounded_min_val = round_down_to_nearest(min_val, interval)
-    rounded_max_val = round_up_to_nearest(max_val, interval)
+    num_labels = 5
 
-    while (rounded_max_val - rounded_min_val) / interval > 10:
-        interval *= 2
-    while (rounded_max_val - rounded_min_val) / interval < 4:
-        interval /= 2
+    def round_to_nice_number(x):
+        if x == 0:
+            return 0
+        exponent = math.floor(math.log10(abs(x)))
+        coeff = x / (10**exponent)
+        if coeff < 1.5:
+            nice_coeff = 1
+        elif coeff < 3:
+            nice_coeff = 2
+        elif coeff < 7:
+            nice_coeff = 5
+        else:
+            nice_coeff = 10
+        return nice_coeff * (10**exponent)
 
-    labels = []
-    label = rounded_min_val
-    while label <= rounded_max_val:
-        labels.append(label)
-        label += interval
+    nice_min_val = round_to_nice_number(min_val)
+    nice_max_val = round_to_nice_number(max_val)
+
+    labels = np.linspace(nice_min_val, nice_max_val, num_labels)
 
     vtk_labels = vtk.vtkDoubleArray()
     vtk_labels.SetNumberOfValues(len(labels))
@@ -287,36 +340,43 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.scalar_bar.SetUseCustomLabels(True)
 
     plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
-    plotter.add_text("Press spacebar to pause, right click to select a facet.", position='lower_edge', font_size=10, color=text_color)
+    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select  facet\n'C' - Clear selections\n'L/R Arrow keys' - Rotate\n'R' - Reset camera", position='upper_left', font_size=10, color=text_color)
+
+    info_text = f"Solar Distance: {solar_distance_au} AU\nRotation Period: {rotation_period_hr} hours"
+    plotter.add_text(info_text, position='upper_right', font_size=10, color=text_color)
+
     plotter.background_color = background_colour
 
-    num_frames = len(plotted_variable_array[0])
-    sampling_interval = max(1, num_frames // animation_frames)
+    def update_callback(caller, event):
+        if not state.is_paused:
+            move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
+        plotter.render()
 
     if save_animation:
         plotter.open_gif(save_animation_name)
         for _ in range(animation_frames):
-            update(None, None, state, plotter, pv_mesh, highlight_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
+            update_callback(None, None)
             plotter.write_frame()
         plotter.close()
     else:
         end_time = time.time()
-        print(f'Animation took {end_time - start_time:.2f} seconds to run.')
+        print(f'Animation setup took {end_time - start_time:.2f} seconds.')
+        
+        # Set up the timer for live animation
+        plotter.iren.add_observer('TimerEvent', update_callback)
+        plotter.iren.create_timer(100)  # Creates a repeating timer that triggers every 100 ms
+        
         plotter.show()
-        plotter.close()
 
+    # Clean up
     plotter.close()
     plotter.deep_clean()
-
-    del pv_mesh
-    del shape_mesh
-    del plotter
 
     if state.fig:
         plt.close(state.fig)
     
     pv.close_all()
-    plt.close
+    plt.close('all')
 
     if 'vtk_labels' in locals():
         vtk_labels.RemoveAllObservers()
@@ -324,6 +384,5 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     state.fig = None
     state.ax = None
-    state.selected_cells = []
 
     gc.collect()
