@@ -6,6 +6,7 @@ This script creates an interactive 3D animation of a shape model, allowing the u
 Known Issues:
 1. Color Consistency: Highlighted facets are not maintaining their assigned colors correctly.
 2. Segmentation Fault: The script crashes with a segmentation fault the second time it is called by the model script. 
+3. Graph axes not showing. 
 """
 
 import pyvista as pv
@@ -140,13 +141,11 @@ def get_next_color(state):
     return color[:3]
 
 def update_highlight_mesh(state, plotter, pv_mesh):
-    print(f"Updating highlight mesh. Highlighted cell IDs: {state.highlighted_cell_ids}")
     if state.highlighted_cell_ids:
         highlight_mesh = pv.PolyData()
         cell_colors = []
         for cell_id in state.highlighted_cell_ids:
             color = state.highlight_colors[cell_id]
-            print(f"Cell {cell_id} color: {color}")
             cell = pv_mesh.extract_cells([cell_id])
             edges = cell.extract_feature_edges(feature_angle=0, boundary_edges=True, non_manifold_edges=False, manifold_edges=False)
             n_edges = edges.n_cells
@@ -154,8 +153,7 @@ def update_highlight_mesh(state, plotter, pv_mesh):
             cell_colors.extend([color] * n_edges)
         
         cell_colors = np.array(cell_colors)
-        print(f"Final cell colors array shape: {cell_colors.shape}")
-        print(f"Sample of cell colors: {cell_colors[:5]}")
+        cell_colors = cell_colors[::-1]
 
         if state.highlight_mesh is None:
             state.highlight_mesh = plotter.add_mesh(highlight_mesh, scalars=cell_colors, rgb=True, line_width=5, render_lines_as_tubes=True, opacity=1)
@@ -164,15 +162,11 @@ def update_highlight_mesh(state, plotter, pv_mesh):
             plotter.remove_actor(state.highlight_mesh)
             # Add the new highlight mesh
             state.highlight_mesh = plotter.add_mesh(highlight_mesh, scalars=cell_colors, rgb=True, line_width=5, render_lines_as_tubes=True, opacity=1)
-        
-        print("New highlight mesh added")
     elif state.highlight_mesh is not None:
         plotter.remove_actor(state.highlight_mesh)
         state.highlight_mesh = None
-        print("Highlight mesh removed")
     
     plotter.render()
-    print("Highlight mesh update complete")
 
 def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
     if not state.is_paused:
