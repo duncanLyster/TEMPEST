@@ -4,9 +4,7 @@ Animate Model Script
 This script creates an interactive 3D animation of a shape model, allowing the user to visualize various properties over time (e.g., temperature, illumination). It allows the user to pause, select individual facets, and display their properties over time on a separate graph.
 
 Known Issues:
-1. Color Consistency: Highlighted facets are not maintaining their assigned colors correctly.
-2. Segmentation Fault: The script crashes with a segmentation fault the second time it is called by the model script. 
-3. Graph axes not showing. 
+1. Segmentation Fault: The script crashes with a segmentation fault the second time it is called by the model script. 
 """
 
 import pyvista as pv
@@ -122,6 +120,10 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
         if state.fig is None or state.ax is None:
             plt.ion()
             state.fig, state.ax = plt.subplots()
+
+            state.ax.set_xlabel("Fractional angle of rotation")
+            state.ax.set_ylabel(axis_label)
+            state.ax.set_title(f"{axis_label} Over Time for Selected Facets")
 
         values_over_time = plotted_variable_array[cell_id, :]
         time_steps = [i / state.timesteps_per_day for i in range(len(values_over_time))]
