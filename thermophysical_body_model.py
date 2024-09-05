@@ -1060,7 +1060,7 @@ def main():
     plot_all_days_all_layers_temp_distribution = False
     plot_energy_terms = False # Note: You must set simulation.calculate_energy_terms to True to plot energy terms
     plot_temp_distribution_for_final_day = False
-    animate_final_day_temp_distribution = True
+    animate_final_day_temp_distribution = False
     plot_final_day_comparison = False
 
     # Apply roughness to the shape model
@@ -1288,7 +1288,7 @@ def main():
                       simulation.solar_distance_au,              
                       simulation.rotation_period_hours,              
                       colour_map='coolwarm', 
-                      plot_title='Temperature distribution on the body', 
+                      plot_title='Temperature distribution', 
                       axis_label='Temperature (K)', 
                       animation_frames=200, 
                       save_animation=False, 
