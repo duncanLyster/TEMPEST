@@ -1,19 +1,38 @@
-# Ignore Python bytecode files
+# Ignore virtual environment directories
+venv/
+pyvenv.cfg
+
+# Ignore Python cache directories and compiled files
 __pycache__/
+*.py[cod]
 
-# Output and temporary files
+# Ignore macOS metadata files
+.DS_Store
+
+# Ignore private data and directories
+private/
+
+# Ignore output and temporary files
 outputs/
-*.pyc
+output.txt
+*.log
+*.tmp
 
-# Notebooks and debugging
+# Ignore data directories not meant to be in the repository
+insolation_data/
 debugging/
-verification/
-superseded/
 Bennu_Testing/
+verification/
+visible_facets/
+view_factors/
+superseded/
+pyvista_env/
 
-# Data caches
-/view_factors/
-/visible_facets/
+# Ignore profile outputs and generated files
+profile_output/
+shadowing_animation.gif
 
-# Non-public data
-/private/
+# Ignore any other temporary or backup files
+*.bak
+*.swp
+*.swo
