@@ -36,6 +36,7 @@ NEXT STEPS:
     - Simulate retrievals for temperature based on instrument
 16) Run setup steps just once for each shape model (e.g. calculate view factors, visible facets, etc.)
 17) Add comparison tool to compare two runs of the model. (Separate script?)
+18) Use Monte Carlo method to calculate view factors and shadowing/insolation
 
 EXTENSIONS: 
 Binaries: Complex shading from non-rigid geometry (Could be a paper) 
@@ -54,6 +55,7 @@ import matplotlib.pyplot as plt
 import time
 import sys
 import json
+import pandas as pd
 from animate_model import animate_model
 from numba import jit, njit, float64, int64, boolean
 from numba.typed import List
@@ -92,7 +94,7 @@ class Simulation:
         
         # Calculation method flags
         self.include_self_heating = False # Default to not include self-heating
-        self.include_scattering = False # Default to not include light scattering
+        self.n_scatters = 0 # Default to not include light scattering
         self.apply_roughness = False # Default to not include sublimation
  
         # Print out the configuration
@@ -664,22 +666,34 @@ def calculate_rotation_matrix(axis, theta):
                         [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
 
-def apply_scattering(thermal_data, shape_model, simulation, num_iterations=5):
+def apply_scattering(thermal_data, shape_model, simulation, num_iterations):
+    original_insolation = thermal_data.insolation.copy()
+    total_scattered_light = np.zeros_like(original_insolation)
+    
     for iteration in range(num_iterations):
-        scattered_light = np.zeros_like(thermal_data.insolation)
+        print(f"Scattering iteration {iteration + 1} of {num_iterations}...")
+        
+        if iteration == 0:
+            input_light = original_insolation
+        else:
+            input_light = scattered_light
+        
+        scattered_light = np.zeros_like(original_insolation)
 
         for i, facet in enumerate(shape_model):
             for t in range(simulation.timesteps_per_day):
-                insolation = thermal_data.insolation[i, t]
+                current_light = input_light[i, t]
                 
-                if insolation > 0:
+                if current_light > 0:
                     visible_facets = thermal_data.visible_facets[i]
                     view_factors = thermal_data.secondary_radiation_view_factors[i]
                     
                     for vf_index, vf in zip(visible_facets, view_factors):
-                        scattered_light[vf_index, t] += insolation * vf * simulation.albedo / np.pi
+                        scattered_light[vf_index, t] += current_light * vf * (simulation.albedo) / np.pi
 
-        thermal_data.insolation += scattered_light
+        total_scattered_light += scattered_light
+    
+    thermal_data.insolation = original_insolation + total_scattered_light
     
     return thermal_data
 
@@ -733,8 +747,10 @@ def calculate_insolation(thermal_data, shape_model, simulation):
             
             thermal_data.insolation[i, t] = insolation
 
-    if simulation.include_scattering:
-        thermal_data = apply_scattering(thermal_data, shape_model, simulation)
+    if simulation.n_scatters > 0:
+        print(f"Applying light scattering with {simulation.n_scatters} iterations...")
+        thermal_data = apply_scattering(thermal_data, shape_model, simulation, simulation.n_scatters)
+        print("Light scattering applied.")
 
     return thermal_data
 
@@ -1022,12 +1038,13 @@ def main():
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
     '''
 
-    # Shape model name
-    shape_model_name = "67P_not_to_scale_1666_facets.stl"
-
     # Get setup file and shape model
-    path_to_shape_model_file = f"shape_models/{shape_model_name}"
+
+    path_to_shape_model_file = "shape_models/67P_not_to_scale_1666_facets.stl"
     path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
+
+    # path_to_shape_model_file = "private/Lucy/Dinkinesh/Dinkinesh.stl"
+    # path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
 
     # Load setup parameters from JSON file
     simulation = Simulation(path_to_setup_file, calculate_energy_terms=False) #BUG: - numba doesn't work with energy terms being calculated
@@ -1041,17 +1058,18 @@ def main():
     print(f"Layer thickness: {simulation.layer_thickness} m")
     print(f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5")
     print(f"Skin depth: {simulation.skin_depth} m")
-
     print(f"\n Number of facets: {len(shape_model)}")
 
     ################ Modelling ################
-    simulation.include_self_heating = False
-    simulation.include_scattering = False # TODO: Investigate dependence on number of scatters (particularly for most shaded facets)
+    simulation.include_self_heating = False # TODO: Plots with and without self-heating
+    simulation.n_scatters = 20 # Set to 0 to disable scattering
     simulation.apply_roughness = False
 
     ################ PLOTTING ################ BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
-    plot_shadowing = True
-    plot_insolation_curve = False
+    # facet_index = 1220 # Index of facet to plot
+    facet_index = 845
+    plot_insolation_curve = True
+    plot_shadowing = False
     plot_initial_temp_histogram = False
     plot_secondary_radiation_view_factors = False
     plot_secondary_contributions = False
@@ -1059,8 +1077,6 @@ def main():
     plot_final_day_all_layers_temp_distribution = False
     plot_all_days_all_layers_temp_distribution = False
     plot_energy_terms = False # Note: You must set simulation.calculate_energy_terms to True to plot energy terms
-    plot_temp_distribution_for_final_day = False
-    animate_final_day_temp_distribution = False
     plot_final_day_comparison = False
 
     # Apply roughness to the shape model
@@ -1069,7 +1085,7 @@ def main():
         shape_model = apply_roughness(shape_model, simulation)
         print(f"Roughness applied to shape model. New size: {len(shape_model)} facets.")
         # Save the shape model with roughness applied with a new filename
-        path_to_shape_model_file = f"shape_models/{shape_model_name[:-4]}_roughness_applied.stl"
+        path_to_shape_model_file = f"{path_to_shape_model_file[:-4]}_roughness_applied.stl"
         # Save it to a new file
         save_shape_model(shape_model, path_to_shape_model_file)
 
@@ -1098,7 +1114,7 @@ def main():
         
     thermal_data.set_visible_facets(visible_indices)
 
-    if simulation.include_self_heating or simulation.include_scattering:
+    if simulation.include_self_heating or simulation.n_scatters > 0:
         all_view_factors = calculate_shape_model_view_factors(shape_model, thermal_data, n_rays=10000)
         
         thermal_data.set_secondary_radiation_view_factors(all_view_factors)
@@ -1116,7 +1132,49 @@ def main():
 
     thermal_data = calculate_insolation(thermal_data, shape_model, simulation)
 
-    facet_index = 1066 # Index of facet to plot
+    if plot_insolation_curve:
+        fig_insolation = plt.figure(figsize=(10, 6))
+        print(f"Preparing insolation curve plot.\n")
+        
+        if facet_index >= len(shape_model):
+            print(f"Facet index {facet_index} out of range. Please select a facet index between 0 and {len(shape_model) - 1}.")
+        else:
+            # Get the insolation data for the facet
+            insolation_data = thermal_data.insolation[facet_index]
+            
+            roll_amount = 216
+            # Roll the array to center the peak
+            centered_insolation = np.roll(insolation_data, roll_amount)
+            
+            # Create x-axis in degrees
+            degrees = np.linspace(0, 360, len(insolation_data), endpoint=False)
+            
+            # Create DataFrame for easy CSV export
+            df = pd.DataFrame({
+                'Rotation (degrees)': degrees,
+                'Insolation (W/m^2)': centered_insolation
+            })
+
+            # Export to CSV
+            output_dir = 'insolation_data'
+            os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+            output_csv_path = os.path.join(output_dir, f'facet_{facet_index}.csv')
+            df.to_csv(output_csv_path, index=False)
+            print(f"Insolation data exported to {output_csv_path}")
+            
+            # Plot the centered insolation curve
+            plt.plot(degrees, centered_insolation)
+            plt.xlabel('Rotation of the body (degrees)')
+            plt.ylabel('Insolation (W/m^2)')
+            plt.title(f'Insolation curve for facet {facet_index} over one full rotation of the body')
+            plt.xlim(0, 360)
+            plt.xticks(np.arange(0, 361, 45))  # Set x-axis ticks every 45 degrees
+            
+            print(f"Facet {facet_index} insolation curve plotted with peak centered.")
+            plt.show()
+
+            sys.exit()
+
 
     if plot_shadowing:
         print(f"Preparing shadowing visualisation.\n")
@@ -1135,14 +1193,6 @@ def main():
                           save_animation=False, 
                           save_animation_name='shadowing_animation.gif', 
                           background_colour = 'black')
-
-    if plot_insolation_curve:
-        fig_insolation = plt.figure()
-        plt.plot(thermal_data.insolation[facet_index])
-        plt.xlabel('Number of timesteps')
-        plt.ylabel('Insolation (W/m^2)')
-        plt.title('Insolation curve for a single facet for one full rotation of the body')
-        fig_insolation.show()
 
     print(f"Calculating initial temperatures.\n")
     thermal_data = calculate_initial_temperatures(thermal_data, simulation.emissivity)
@@ -1232,14 +1282,6 @@ def main():
 
     print(f"Execution time: {execution_time} seconds")
 
-    if plot_final_day_temp_distribution:
-        fig_final_temp_dist = plt.figure()
-        plt.plot(final_day_temperatures[facet_index])
-        plt.xlabel('Timestep')
-        plt.ylabel('Temperature (K)')
-        plt.title('Final day temperature distribution for all facets')
-        fig_final_temp_dist.show()
-
     if plot_final_day_all_layers_temp_distribution:
         fig_final_all_layers_temp_dist = plt.figure()
         plt.plot(final_day_temperatures_all_layers[facet_index])
@@ -1269,15 +1311,7 @@ def main():
         plt.title('Energy terms for facet for the final day')
         fig_energy_terms.show()
 
-    if plot_temp_distribution_for_final_day:
-        fig_final_day_temps = plt.figure()
-        plt.plot(thermal_data.temperatures[facet_index, (day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day, 0])
-        plt.xlabel('Timestep')
-        plt.ylabel('Temperature (K)')
-        plt.title('Temperature distribution for all layers in facet for the full run')
-        fig_final_day_temps.show()
-
-    if animate_final_day_temp_distribution:
+    if plot_final_day_temp_distribution:
         print(f"Preparing temperature animation.\n")
 
         animate_model(path_to_shape_model_file, 
