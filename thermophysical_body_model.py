@@ -1062,14 +1062,13 @@ def main():
 
     ################ Modelling ################
     simulation.include_self_heating = False # TODO: Plots with and without self-heating
-    simulation.n_scatters = 20 # Set to 0 to disable scattering
+    simulation.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
     simulation.apply_roughness = False
 
     ################ PLOTTING ################ BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
-    # facet_index = 1220 # Index of facet to plot
-    facet_index = 845
-    plot_insolation_curve = True
-    plot_shadowing = False
+    facet_index = 1220 # Index of facet to plot
+    plot_insolation_curve = False
+    plot_shadowing = True
     plot_initial_temp_histogram = False
     plot_secondary_radiation_view_factors = False
     plot_secondary_contributions = False

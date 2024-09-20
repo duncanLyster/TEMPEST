@@ -211,7 +211,7 @@ def on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_l
 
 def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
                   timesteps_per_day, solar_distance_au, rotation_period_hr, colour_map, plot_title, axis_label, animation_frames, 
-                  save_animation, save_animation_name, background_colour):
+                  save_animation, save_animation_name, background_colour, pre_selected_facets=[1220, 845]):
 
     state = AnimationState()
     state.timesteps_per_day = timesteps_per_day
