@@ -607,6 +607,26 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
 def get_visible_facets_filename(shape_model_hash):
     return f"visible_facets/visible_facets_{shape_model_hash}.npz"
 
+def calculate_black_body_temp(insolation, emissivity, albedo):
+    """
+    Calculate the black body temperature based on insolation and surface properties.
+    
+    Args:
+    insolation (float): Incoming solar radiation in W/m^2
+    emissivity (float): Surface emissivity
+    albedo (float): Surface albedo
+    
+    Returns:
+    float: Black body temperature in Kelvin
+    """
+    stefan_boltzmann = 5.67e-8  # Stefan-Boltzmann constant in W/(m^2·K^4)
+    absorbed_radiation = insolation * (1 - albedo)
+    
+    # Calculate temperature using the Stefan-Boltzmann law
+    temperature = (absorbed_radiation / (emissivity * stefan_boltzmann)) ** 0.25
+    
+    return temperature
+
 @jit(nopython=True)
 def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vertices, visible_facet_indices):
     '''
@@ -716,7 +736,7 @@ def calculate_insolation(thermal_data, shape_model, simulation):
             if cos_zenith_angle > 0:
                 illumination_factor = 1  # Default to no shadowing
 
-                if len(facet.visible_facets) != 0:
+                if len(facet.visible_facets) != 0 and simulation.include_shadowing:
                     illumination_factor = calculate_shadowing(np.array(facet.position), np.array([rotated_sunlight_directions[t]]), shape_model_vertices, thermal_data.visible_facets[i])
                 
                 # Calculate insolation
@@ -963,13 +983,15 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
         temperature_error = np.sum(np.abs(current_day_temperature[:, 0, 0] - comparison_temps)) # 
         mean_temperature_error = temperature_error / len(shape_model)
 
+        max_temperature_error = np.max(np.abs(current_day_temperature[:, 0, 0] - comparison_temps))
+
         # Ensure propagation of the temperatures to the next day
         if day < simulation.max_days - 1:
             # Set the deep layer temperature to the mean surface temperature of all timesteps of the current day
             mean_surface_temp = np.mean(current_day_temperature[:, :, 0])
             thermal_data.temperatures[:, next_day_start:next_day_start + simulation.timesteps_per_day, -1] = mean_surface_temp
     
-        conditional_print(simulation.silent_mode,  f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Convergence target: {simulation.convergence_target} K")
+        conditional_print(simulation.silent_mode,  f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Convergence target: {simulation.convergence_target} K | Max Temp Error: {max_temperature_error:.6f} K")
 
         comparison_temps = current_day_temperature[:, 0, 0].copy()
         
@@ -1012,7 +1034,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
             plt.legend()
             plt.show()
 
-    return final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day+1, temperature_error
+    return final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day+1, temperature_error, max_temperature_error
 
 def main(silent_mode=False):
     ''' 
@@ -1032,14 +1054,16 @@ def main(silent_mode=False):
     thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
 
     ################ MODELLING ################
+    simulation.include_shadowing = False 
+    simulation.n_scatters = 0 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
     simulation.include_self_heating = False # TODO: Plots with and without self-heating
-    simulation.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
     simulation.apply_roughness = False
 
     ################ PLOTTING ################
     facet_index = 1220 # Index of facet to plot
     # facet_index = 845
     plot_insolation_curve = False
+    plot_temperature_curve = True 
     plot_initial_temp_histogram = False
     plot_final_day_all_layers_temp_distribution = False
     plot_all_days_all_layers_temp_distribution = False
@@ -1048,7 +1072,7 @@ def main(silent_mode=False):
 
     ################ ANIMATIONS ################        BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
     animate_roughness_model = False
-    animate_shadowing = True
+    animate_shadowing = False
     animate_secondary_radiation_view_factors = False
     animate_secondary_contributions = False
     animate_final_day_temp_distribution = False
@@ -1250,18 +1274,70 @@ def main(silent_mode=False):
 
     conditional_print(simulation.silent_mode,  f"Running main simulation loop.\n")
     start_time = time.time()
-    final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error = thermophysical_body_model(thermal_data, shape_model, simulation, path_to_shape_model_file)
+    final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error, max_temp_error = thermophysical_body_model(thermal_data, shape_model, simulation, path_to_shape_model_file)
     end_time = time.time()
     execution_time = end_time - start_time
 
     if final_timestep_temperatures is not None:
         conditional_print(simulation.silent_mode,  f"Convergence target achieved after {day} days.")
         conditional_print(simulation.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
+        conditional_print(simulation.silent_mode,  f"Max temperature error for any facet: {max_temp_error} K")
     else:
         conditional_print(simulation.silent_mode,  f"Model did not converge after {day} days.")
         conditional_print(simulation.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
 
     conditional_print(simulation.silent_mode,  f"Execution time: {execution_time} seconds")
+
+    if plot_temperature_curve and not simulation.silent_mode:
+        fig_temperature = plt.figure(figsize=(10, 6))
+        conditional_print(simulation.silent_mode, f"Preparing temperature curve plot.\n")
+        
+        if facet_index >= len(shape_model):
+            conditional_print(simulation.silent_mode, f"Facet index {facet_index} out of range. Please select a facet index between 0 and {len(shape_model) - 1}.")
+        else:
+            # Get the temp data for the facet
+            temperature_data = final_day_temperatures[facet_index]
+            
+            # Calculate black body temperatures
+            insolation_data = thermal_data.insolation[facet_index]
+            black_body_temps = np.array([calculate_black_body_temp(ins, simulation.emissivity, simulation.albedo) for ins in insolation_data])
+            
+            roll_amount = 216
+            # Roll the arrays to center the peak
+            centered_temperature = np.roll(temperature_data, roll_amount)
+            centered_black_body = np.roll(black_body_temps, roll_amount)
+            
+            # Create x-axis in degrees
+            degrees = np.linspace(0, 360, len(temperature_data), endpoint=False)
+            
+            # Create DataFrame for easy CSV export
+            df = pd.DataFrame({
+                'Rotation (degrees)': degrees,
+                'Temperature (K)': centered_temperature,
+                'Black Body Temperature (K)': centered_black_body
+            })
+
+            # Export to CSV
+            output_dir = 'temperature_data'
+            os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+            output_csv_path = os.path.join(output_dir, f'facet_{facet_index}_with_black_body.csv')
+            df.to_csv(output_csv_path, index=False)
+            conditional_print(simulation.silent_mode, f"Temperature data exported to {output_csv_path}")
+            
+            # Plot the centered temperature curves
+            plt.plot(degrees, centered_temperature, label='Model Temperature')
+            plt.plot(degrees, centered_black_body, label='Black Body Temperature', linestyle='--')
+            plt.xlabel('Rotation of the body (degrees)')
+            plt.ylabel('Temperature (K)')
+            plt.title(f'Temperature curves for facet {facet_index} over one full rotation of the body')
+            plt.xlim(0, 360)
+            plt.xticks(np.arange(0, 361, 90))  # Set x-axis ticks every 90 degrees
+            plt.legend()
+            
+            conditional_print(simulation.silent_mode, f"Facet {facet_index} temperature curves plotted with peak centered.")
+            plt.show()
+
+            sys.exit()
 
     if plot_final_day_all_layers_temp_distribution and not simulation.silent_mode:
         fig_final_all_layers_temp_dist = plt.figure()
