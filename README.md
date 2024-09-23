@@ -11,6 +11,16 @@ This Python script simulates diurnal temperature variations of a solar system bo
 - Python 3.x
 - NumPy
 - Matplotlib
+- PyVista
+- VTK
+- Pandas
+- Numba
+- JobLib
+- numpy-stl
+- tqdm
+- scipy
+- seaborn (optional)
+- scikit-learn (optional)
 - STL file of the body shape in ASCII format.
 
 ## Usage
