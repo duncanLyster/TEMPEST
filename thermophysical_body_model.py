@@ -63,6 +63,7 @@ class Simulation:
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
         
         # Calculation method flags
+        self.convergence_method = "mean"  # Default to mean temperature convergence method
         self.include_self_heating = False # Default to not include self-heating
         self.n_scatters = 0 # Default to not include light scattering
         self.apply_roughness = False # Default to not include sublimation
@@ -84,9 +85,9 @@ class Facet:
         self.vertices = np.array(vertices)
         self.area = self.calculate_area(vertices)
         self.position = np.mean(vertices, axis=0)
+        self.visible_facets = []
 
     def set_dynamic_arrays(self, length):
-        self.visible_facets = np.zeros(length)
         self.secondary_radiation_view_factors = np.zeros(length)    
 
     @staticmethod
@@ -140,88 +141,68 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_
     if not os.path.isfile(filename):
         raise FileNotFoundError(f"The file {filename} was not found.")
     
-    # Attempt to read the file and check for ASCII STL format
     try:
+        # Try reading as ASCII first
         with open(filename, 'r') as file:
-            first_line = file.readline().strip()
-            if not first_line.startswith('solid'):
-                raise ValueError("The file is not in ASCII STL format.")
+            lines = file.readlines()
+        
+        shape_model = []
+        for i in range(len(lines)):
+            if lines[i].strip().startswith('facet normal'):
+                normal = np.array([float(n) for n in lines[i].strip().split()[2:]])
+                vertex1 = np.array([float(v) for v in lines[i+2].strip().split()[1:]])
+                vertex2 = np.array([float(v) for v in lines[i+3].strip().split()[1:]])
+                vertex3 = np.array([float(v) for v in lines[i+4].strip().split()[1:]])
+                facet = Facet(normal, [vertex1, vertex2, vertex3], timesteps_per_day, max_days, n_layers, calculate_energy_terms)
+                shape_model.append(facet)
     except UnicodeDecodeError:
-        raise ValueError("The file is not in ASCII STL format or is binary.")
-
-    # Reopen the file for parsing after format check
-    with open(filename, 'r') as file:
-        lines = file.readlines()
-
-    shape_model = []
-    for i in range(len(lines)):
-        if lines[i].strip().startswith('facet normal'):
-            normal = np.array([float(n) for n in lines[i].strip().split()[2:]])
-            vertex1 = np.array([float(v) for v in lines[i+2].strip().split()[1:]])
-            vertex2 = np.array([float(v) for v in lines[i+3].strip().split()[1:]])
-            vertex3 = np.array([float(v) for v in lines[i+4].strip().split()[1:]])
-            facet = Facet(normal, [vertex1, vertex2, vertex3], timesteps_per_day, max_days, n_layers, calculate_energy_terms)
+        # If ASCII reading fails, try binary
+        stl_mesh = mesh.Mesh.from_file(filename)
+        shape_model = []
+        for i in range(len(stl_mesh.vectors)):
+            normal = stl_mesh.normals[i]
+            vertices = stl_mesh.vectors[i]
+            facet = Facet(normal, vertices, timesteps_per_day, max_days, n_layers, calculate_energy_terms)
             shape_model.append(facet)
 
-    for facet in shape_model:
-        facet.set_dynamic_arrays(len(shape_model))
-    
     return shape_model
 
 def save_shape_model(shape_model, filename, simulation):
     """
-    Save the shape model to an STL file.
-    
-    Parameters:
-    - shape_model: List of Facet objects
-    - filename: String, path to save the STL file
+    Save the shape model to an ASCII STL file.
     """
-    # Create a list to store the vertices and normals
-    vertices = []
-    normals = []
+    with open(filename, 'w') as f:
+        f.write("solid model\n")
+        for facet in shape_model:
+            f.write(f"facet normal {' '.join(map(str, facet.normal))}\n")
+            f.write("  outer loop\n")
+            for vertex in facet.vertices:
+                f.write(f"    vertex {' '.join(map(str, vertex))}\n")
+            f.write("  endloop\n")
+            f.write("endfacet\n")
+        f.write("endsolid model\n")
     
-    # Iterate through all facets in the shape model
-    for facet in shape_model:
-        # Add the vertices of the current facet
-        vertices.extend(facet.vertices)
-        
-        # Add the normal of the current facet (repeated 3 times for each vertex)
-        normals.extend([facet.normal] * 3)
-    
-    # Convert lists to numpy arrays
-    vertices = np.array(vertices)
-    normals = np.array(normals)
-    
-    # Create the mesh
-    facets = vertices.reshape(-1, 3, 3)
-    mesh_data = mesh.Mesh(np.zeros(facets.shape[0], dtype=mesh.Mesh.dtype))
-    
-    # Set the vectors and normals from the data
-    for i, facet in enumerate(facets):
-        for j in range(3):
-            mesh_data.vectors[i][j] = facet[j]
-        mesh_data.normals[i] = normals[i * 3]
-    
-    # Save the mesh to file
-    mesh_data.save(filename)
-    
-    conditional_print(simulation.silent_mode,  f"Shape model saved to {filename}")
+    conditional_print(simulation.silent_mode, f"Shape model saved to {filename}")
 
 
-def apply_roughness(shape_model, simulation, subdivision_level=3, displacement_factor=0.4):
+def apply_roughness(shape_model, simulation, subdivision_levels=5, displacement_factors=None):
     """
     Apply roughness to the shape model using iterative sub-facet division and displacement.
     
     Parameters:
     - shape_model: List of Facet objects
-    - subdivision_level: Number of times to perform the subdivision and adjustment process
-    - displacement_factor: Maximum displacement as a fraction of the triangle's max edge length
+    - simulation: Simulation object
+    - subdivision_levels: Number of times to perform the subdivision and adjustment process
+    - displacement_factors: List of displacement factors for each subdivision level
     
     Returns:
     - new_shape_model: List of new Facet objects with applied roughness
-
-    TODO: Adjust so that different factors can be used at different levels of subdivision. 
     """
+    
+    if displacement_factors is None:
+        displacement_factors = [0.2] * subdivision_levels
+    elif len(displacement_factors) != subdivision_levels:
+        raise ValueError(f"The number of displacement factors ({len(displacement_factors)}) must match the number of subdivision levels ({subdivision_levels})")
     
     def get_vertex_id(vertex):
         return tuple(np.round(vertex, decimals=6))  # Round to avoid float precision issues
@@ -265,7 +246,7 @@ def apply_roughness(shape_model, simulation, subdivision_level=3, displacement_f
             [m1, m2, m3]
         ]
     
-    for level in range(subdivision_level):
+    for level in range(subdivision_levels):
         new_shape_model = []
         vertex_dict = {}  # Reset vertex_dict for each level
         
@@ -280,7 +261,7 @@ def apply_roughness(shape_model, simulation, subdivision_level=3, displacement_f
             # Calculate max edge length
             edges = [np.linalg.norm(facet.vertices[i] - facet.vertices[(i+1)%3]) for i in range(3)]
             max_edge_length = max(edges)
-            max_displacement = max_edge_length * displacement_factor * (0.5 ** level)
+            max_displacement = max_edge_length * displacement_factors[level]
             
             # Use the vertex_dict to get the potentially updated vertices
             current_vertices = [vertex_dict[get_vertex_id(v)] for v in facet.vertices]
@@ -620,10 +601,9 @@ def calculate_black_body_temp(insolation, emissivity, albedo):
     float: Black body temperature in Kelvin
     """
     stefan_boltzmann = 5.67e-8  # Stefan-Boltzmann constant in W/(m^2·K^4)
-    absorbed_radiation = insolation * (1 - albedo)
     
     # Calculate temperature using the Stefan-Boltzmann law
-    temperature = (absorbed_radiation / (emissivity * stefan_boltzmann)) ** 0.25
+    temperature = (insolation / (emissivity * stefan_boltzmann)) ** 0.25
     
     return temperature
 
@@ -881,7 +861,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
     insolation and temperature arrays, and iterate until the model converges.
     '''
 
-    mean_temperature_error = simulation.convergence_target + 1
+    convergence_error = simulation.convergence_target + 1
     day = 0 
     temperature_error = 0
 
@@ -895,7 +875,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
     # Set comparison temperatures to the initial temperatures of the first timestep (day 0, timestep 0)
     comparison_temps = thermal_data.temperatures[:, 0, 0].copy()
 
-    while day < simulation.max_days and (day < simulation.min_days or mean_temperature_error > simulation.convergence_target):
+    while day < simulation.max_days and (day < simulation.min_days or convergence_error > simulation.convergence_target):
         current_day_start = day * simulation.timesteps_per_day
         current_day_end = (day + 1) * simulation.timesteps_per_day
         next_day_start = current_day_end
@@ -980,22 +960,23 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
                     sys.exit()
 
         # Calculate convergence factor
-        temperature_error = np.sum(np.abs(current_day_temperature[:, 0, 0] - comparison_temps)) # 
-        mean_temperature_error = temperature_error / len(shape_model)
+        temperature_errors = np.abs(current_day_temperature[:, 0, 0] - comparison_temps)
 
-        max_temperature_error = np.max(np.abs(current_day_temperature[:, 0, 0] - comparison_temps))
+        if simulation.convergence_method == 'mean':
+            convergence_error = np.mean(temperature_errors)
+        elif simulation.convergence_method == 'max':
+            convergence_error = np.max(temperature_errors)
+        else:
+            raise ValueError("Invalid convergence_method. Use 'mean' or 'max'.")
 
-        # Ensure propagation of the temperatures to the next day
-        if day < simulation.max_days - 1:
-            # Set the deep layer temperature to the mean surface temperature of all timesteps of the current day
-            mean_surface_temp = np.mean(current_day_temperature[:, :, 0])
-            thermal_data.temperatures[:, next_day_start:next_day_start + simulation.timesteps_per_day, -1] = mean_surface_temp
-    
-        conditional_print(simulation.silent_mode,  f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Convergence target: {simulation.convergence_target} K | Max Temp Error: {max_temperature_error:.6f} K")
+        max_temperature_error = np.max(temperature_errors)
+        mean_temperature_error = np.mean(temperature_errors) 
+
+        conditional_print(simulation.silent_mode, f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Max Temp Error: {max_temperature_error:.6f} K")
 
         comparison_temps = current_day_temperature[:, 0, 0].copy()
         
-        error_history.append(mean_temperature_error)
+        error_history.append(convergence_error)
         day += 1
 
     # Decrement the day counter
@@ -1009,7 +990,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
     final_timestep_temperatures = thermal_data.temperatures[:, -1, 0]
     final_day_temperatures_all_layers = thermal_data.temperatures[:, -simulation.timesteps_per_day:, :]
 
-    if mean_temperature_error < simulation.convergence_target:
+    if convergence_error < simulation.convergence_target:
         conditional_print(simulation.silent_mode,  f"Convergence achieved after {day} days.")
         if simulation.calculate_energy_terms:
             for i in range(len(shape_model)):
@@ -1020,7 +1001,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
                 thermal_data.unphysical_energy_loss[i] = energy_terms[i, :, 4]
     else:
         conditional_print(simulation.silent_mode,  f"Maximum days reached without achieving convergence.")
-        conditional_print(simulation.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
+        conditional_print(simulation.silent_mode,  f"Final temperature error: {mean_temperature_error} K")
         conditional_print(simulation.silent_mode,  "Try increasing max_days or decreasing convergence_target.")
         if simulation.silent_mode:
             return
@@ -1042,7 +1023,7 @@ def main(silent_mode=False):
     '''
     
     # Get setup file and shape model
-    path_to_shape_model_file = "shape_models/67P_not_to_scale_1666_facets.stl"
+    path_to_shape_model_file = "shape_models/1D_square.stl"
     path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
 
     # path_to_shape_model_file = "private/Lucy/Dinkinesh/Dinkinesh.stl"
@@ -1054,16 +1035,16 @@ def main(silent_mode=False):
     thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
 
     ################ MODELLING ################
-    simulation.include_shadowing = False 
-    simulation.n_scatters = 0 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
-    simulation.include_self_heating = False # TODO: Plots with and without self-heating
-    simulation.apply_roughness = False
+    simulation.convergence_method = 'mean' # 'mean' or 'max'. Mean is recommended for most cases, max is best for investigating permanently shadowed regions.
+    simulation.include_shadowing = True # Recommended to keep this as True for most cases
+    simulation.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
+    simulation.include_self_heating = False
+    simulation.apply_roughness = True
 
     ################ PLOTTING ################
     facet_index = 1220 # Index of facet to plot
-    # facet_index = 845
     plot_insolation_curve = False
-    plot_temperature_curve = True 
+    plot_temperature_curve = False 
     plot_initial_temp_histogram = False
     plot_final_day_all_layers_temp_distribution = False
     plot_all_days_all_layers_temp_distribution = False
@@ -1075,7 +1056,7 @@ def main(silent_mode=False):
     animate_shadowing = False
     animate_secondary_radiation_view_factors = False
     animate_secondary_contributions = False
-    animate_final_day_temp_distribution = False
+    animate_final_day_temp_distribution = True
 
     conditional_print(simulation.silent_mode,  f"\nDerived model parameters:")
     conditional_print(simulation.silent_mode,  f"Number of timesteps per day: {simulation.timesteps_per_day}")
@@ -1087,12 +1068,17 @@ def main(silent_mode=False):
     # Apply roughness to the shape model
     if simulation.apply_roughness:
         conditional_print(simulation.silent_mode,  f"Applying roughness to shape model. Original size: {len(shape_model)} facets.")
-        shape_model = apply_roughness(shape_model, simulation)
+        shape_model = apply_roughness(shape_model, simulation, subdivision_levels=2, displacement_factors=[0.5, 0.1])
         conditional_print(simulation.silent_mode,  f"Roughness applied to shape model. New size: {len(shape_model)} facets.")
         # Save the shape model with roughness applied with a new filename
         path_to_shape_model_file = f"{path_to_shape_model_file[:-4]}_roughness_applied.stl"
         # Save it to a new file
         save_shape_model(shape_model, path_to_shape_model_file, simulation)
+
+        # Read in the new shape model to ensure facets are updated
+        shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
+
+        thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
 
         # Visualise shape model with roughness
         if animate_roughness_model and not simulation.silent_mode: 
@@ -1117,9 +1103,12 @@ def main(silent_mode=False):
     vertices = np.array([facet.vertices for facet in shape_model])
     
     visible_indices = calculate_and_cache_visible_facets(simulation.silent_mode, shape_model, positions, normals, vertices)
-        
+
     thermal_data.set_visible_facets(visible_indices)
 
+    for i, facet in enumerate(shape_model):
+        facet.visible_facets = visible_indices[i]   
+        
     if simulation.include_self_heating or simulation.n_scatters > 0:
         all_view_factors = calculate_shape_model_view_factors(shape_model, thermal_data, simulation, n_rays=10000)
         
@@ -1273,6 +1262,7 @@ def main(silent_mode=False):
                     background_colour='black')
 
     conditional_print(simulation.silent_mode,  f"Running main simulation loop.\n")
+    conditional_print(simulation.silent_mode,  f"Convergence target: {simulation.convergence_target} K with {simulation.convergence_method} convergence method.\n")
     start_time = time.time()
     final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error, max_temp_error = thermophysical_body_model(thermal_data, shape_model, simulation, path_to_shape_model_file)
     end_time = time.time()
@@ -1302,7 +1292,12 @@ def main(silent_mode=False):
             insolation_data = thermal_data.insolation[facet_index]
             black_body_temps = np.array([calculate_black_body_temp(ins, simulation.emissivity, simulation.albedo) for ins in insolation_data])
             
-            roll_amount = 216
+            # Find the index of the maximum black body temperature
+            max_index = np.argmax(black_body_temps)
+            
+            # Calculate the roll amount to center the peak
+            roll_amount = len(black_body_temps) // 2 - max_index
+            
             # Roll the arrays to center the peak
             centered_temperature = np.roll(temperature_data, roll_amount)
             centered_black_body = np.roll(black_body_temps, roll_amount)

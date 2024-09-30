@@ -5,6 +5,9 @@ This script creates an interactive 3D animation of a shape model, allowing the u
 
 Known Issues:
 1. Segmentation Fault: The script crashes with a segmentation fault the second time it is called by the model script. 
+
+TODO: 
+Option to make rotation axis and sun invisible 
 """
 
 import pyvista as pv
