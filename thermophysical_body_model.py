@@ -26,10 +26,11 @@ import sys
 import json
 import pandas as pd
 import datetime
+import warnings
 from animate_model import animate_model
 from numba import jit, njit, float64, int64, boolean
 from numba.typed import List
-from joblib import Parallel, delayed
+from joblib import Parallel, delayed, cpu_count
 from stl import mesh
 from tqdm import tqdm
 from typing import Tuple
@@ -50,6 +51,14 @@ class Config:
         ################ GENERAL ################
         self.silent_mode = False
         self.remote = True
+        self.n_jobs = 4 # Default 
+
+        ################ PERFORMANCE ################
+        # Number of parallel jobs to run
+        # Use -1 to use all available cores (USE WITH CAUTION on shared computing facilities!)
+        # Default to 4 or max available cores, whichever is smaller
+        self.n_jobs = min(4, cpu_count())  
+        self.chunk_size = 100  # Number of facets to process per parallel task
 
         ################ MODELLING ################
         self.convergence_method = 'mean' # 'mean' or 'max'. Mean is recommended for most cases, max is best for investigating permanently shadowed regions.
@@ -79,6 +88,39 @@ class Config:
         self.calculate_energy_terms = False         # NOTE: Numba must be disabled if calculating energy terms - model will run much slower
 
         ################ END OF USER INPUTS ################
+
+    def validate_jobs(self):
+        """
+        Validate the number of jobs requested and issue warnings if necessary.
+        Returns the actual number of jobs to use.
+        """
+        available_cores = cpu_count()
+        
+        if self.n_jobs == -1:
+            warnings.warn(
+                "Using all available cores (-1). This should be used with caution on shared "
+                "computing facilities as it may impact other users. Consider setting a specific "
+                f"number of cores instead. Will use {available_cores} cores.",
+                UserWarning
+            )
+            return available_cores
+            
+        if self.n_jobs > available_cores:
+            warnings.warn(
+                f"Requested {self.n_jobs} cores but only {available_cores} are available. "
+                f"Reducing to {available_cores} cores.",
+                UserWarning
+            )
+            return available_cores
+            
+        if self.n_jobs < 1:
+            warnings.warn(
+                f"Invalid number of jobs ({self.n_jobs}). Must be >= 1. Setting to 1.",
+                UserWarning
+            )
+            return 1
+            
+        return self.n_jobs
 
 class Simulation:
     def __init__(self, config_path):
@@ -365,52 +407,138 @@ def apply_roughness(shape_model, simulation, config, subdivision_levels=5, displ
     
     return new_shape_model
 
-@jit(nopython=True)
-def calculate_visible_facets(positions, normals):
-    ''' 
-    This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It returns the indices of the visible facets.
+# @jit(nopython=True)
+# def calculate_visible_facets(positions, normals):
+#     ''' 
+#     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It returns the indices of the visible facets.
     
-    NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Could add subdivision option to the model for better partial shadowing, but probably best to just use higher facet count models.
+#     NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Could add subdivision option to the model for better partial shadowing, but probably best to just use higher facet count models.
 
-    NOTE: Idea for improvement - instaed of geometrically comparing every facet - do this only for nearby facets, then use tracing of evenly distributed rays to determine shadowing 'globe/sphere' for the rest of the facets.
-    '''
+#     NOTE: Idea for improvement - instaed of geometrically comparing every facet - do this only for nearby facets, then use tracing of evenly distributed rays to determine shadowing 'globe/sphere' for the rest of the facets.
+#     '''
+#     n_facets = len(positions)
+#     potentially_visible_indices = [np.empty(0, dtype=np.int64) for _ in range(n_facets)]
+
+#     epsilon = 1e-10
+    
+#     for i in range(n_facets):
+#         # Compute the relative positions of all facets from the current subject facet
+#         relative_positions = positions[i] - positions
+
+#         # Check if the facet is above the horizon
+#         above_horizon = np.sum(relative_positions * normals[i], axis=1) < epsilon
+        
+#         # Check if the facet is facing towards the subject facet
+#         facing_towards = np.sum(-relative_positions * normals, axis=1) < epsilon
+    
+#         # Combine the two conditions to determine if the facet is visible
+#         potentially_visible = above_horizon & facing_towards
+    
+#         potentially_visible[i] = False  # Exclude self
+        
+#         # Get the indices of the visible facets
+#         visible_indices = np.where(potentially_visible)[0]
+#         potentially_visible_indices[i] = visible_indices
+
+#     return potentially_visible_indices
+
+# @jit(nopython=True)
+# def eliminate_obstructed_facets(positions, shape_model_vertices, potentially_visible_facet_indices):
+#     n_facets = len(positions)
+#     unobstructed_facets = [np.empty(0, dtype=np.int64) for _ in range(n_facets)]
+
+#     for i in range(n_facets):
+#         potential_indices = potentially_visible_facet_indices[i]
+#         if len(potential_indices) == 0:
+#             continue
+
+#         subject_position = positions[i]
+#         test_positions = positions[potential_indices]
+#         ray_directions = test_positions - subject_position
+#         ray_directions = normalize_vectors(ray_directions)
+
+#         unobstructed = []
+#         for j, test_facet_index in enumerate(potential_indices):
+#             other_indices = potential_indices[potential_indices != test_facet_index]
+#             test_vertices = shape_model_vertices[other_indices]
+
+#             if len(test_vertices) == 0:
+#                 unobstructed.append(test_facet_index)
+#                 continue
+
+#             # Perform ray-triangle intersection test
+#             intersections, _ = rays_triangles_intersection(
+#                 subject_position,
+#                 ray_directions[j:j+1],  # Single ray direction
+#                 test_vertices
+#             )
+
+#             # If no intersections, the facet is unobstructed
+#             if not np.any(intersections):
+#                 unobstructed.append(test_facet_index)
+
+#         unobstructed_facets[i] = np.array(unobstructed, dtype=np.int64)
+
+#     return unobstructed_facets
+
+
+@jit(nopython=True)
+def calculate_visible_facets_chunk(positions, normals, start_idx, end_idx):
+    """Calculate visible facets for a chunk of the shape model."""
     n_facets = len(positions)
-    potentially_visible_indices = [np.empty(0, dtype=np.int64) for _ in range(n_facets)]
-
+    chunk_size = end_idx - start_idx
+    potentially_visible_indices = [np.empty(0, dtype=np.int64) for _ in range(chunk_size)]
     epsilon = 1e-10
     
-    for i in range(n_facets):
-        # Compute the relative positions of all facets from the current subject facet
-        relative_positions = positions[i] - positions
-
-        # Check if the facet is above the horizon
-        above_horizon = np.sum(relative_positions * normals[i], axis=1) < epsilon
-        
-        # Check if the facet is facing towards the subject facet
+    for i in range(chunk_size):
+        actual_idx = i + start_idx
+        relative_positions = positions[actual_idx] - positions
+        above_horizon = np.sum(relative_positions * normals[actual_idx], axis=1) < epsilon
         facing_towards = np.sum(-relative_positions * normals, axis=1) < epsilon
-    
-        # Combine the two conditions to determine if the facet is visible
         potentially_visible = above_horizon & facing_towards
-    
-        potentially_visible[i] = False  # Exclude self
-        
-        # Get the indices of the visible facets
+        potentially_visible[actual_idx] = False
         visible_indices = np.where(potentially_visible)[0]
         potentially_visible_indices[i] = visible_indices
-
+        
     return potentially_visible_indices
 
-@jit(nopython=True)
-def eliminate_obstructed_facets(positions, shape_model_vertices, potentially_visible_facet_indices):
+def calculate_visible_facets_parallel(positions, normals, n_jobs, chunk_size):
+    """Parallel wrapper for calculate_visible_facets using joblib."""
     n_facets = len(positions)
-    unobstructed_facets = [np.empty(0, dtype=np.int64) for _ in range(n_facets)]
+    n_chunks = (n_facets + chunk_size - 1) // chunk_size
+    
+    # Create chunks of work
+    chunks = [(i * chunk_size, min((i + 1) * chunk_size, n_facets)) 
+             for i in range(n_chunks)]
+    
+    # Process chunks in parallel using joblib
+    results = Parallel(n_jobs=n_jobs, verbose=1)(
+        delayed(calculate_visible_facets_chunk)(positions, normals, start_idx, end_idx)
+        for start_idx, end_idx in chunks
+    )
+    
+    # Combine results
+    all_visible_indices = []
+    for chunk_result in results:
+        all_visible_indices.extend(chunk_result)
+    
+    return all_visible_indices
 
-    for i in range(n_facets):
-        potential_indices = potentially_visible_facet_indices[i]
+@jit(nopython=True)
+def eliminate_obstructed_facets_chunk(positions, shape_model_vertices, potentially_visible_facet_indices, 
+                                    start_idx, end_idx):
+    """Process a chunk of facets for obstruction elimination."""
+    chunk_size = end_idx - start_idx
+    unobstructed_facets = [np.empty(0, dtype=np.int64) for _ in range(chunk_size)]
+
+    for i in range(chunk_size):
+        actual_idx = i + start_idx
+        potential_indices = potentially_visible_facet_indices[actual_idx]
+        
         if len(potential_indices) == 0:
             continue
 
-        subject_position = positions[i]
+        subject_position = positions[actual_idx]
         test_positions = positions[potential_indices]
         ray_directions = test_positions - subject_position
         ray_directions = normalize_vectors(ray_directions)
@@ -424,20 +552,74 @@ def eliminate_obstructed_facets(positions, shape_model_vertices, potentially_vis
                 unobstructed.append(test_facet_index)
                 continue
 
-            # Perform ray-triangle intersection test
             intersections, _ = rays_triangles_intersection(
                 subject_position,
-                ray_directions[j:j+1],  # Single ray direction
+                ray_directions[j:j+1],
                 test_vertices
             )
 
-            # If no intersections, the facet is unobstructed
             if not np.any(intersections):
                 unobstructed.append(test_facet_index)
 
         unobstructed_facets[i] = np.array(unobstructed, dtype=np.int64)
 
     return unobstructed_facets
+
+def eliminate_obstructed_facets_parallel(positions, shape_model_vertices, potentially_visible_facet_indices,
+                                       n_jobs, chunk_size):
+    """Parallel wrapper for eliminate_obstructed_facets using joblib."""
+    n_facets = len(positions)
+    n_chunks = (n_facets + chunk_size - 1) // chunk_size
+    
+    # Create chunks of work
+    chunks = [(i * chunk_size, min((i + 1) * chunk_size, n_facets)) 
+             for i in range(n_chunks)]
+    
+    # Process chunks in parallel using joblib
+    results = Parallel(n_jobs=n_jobs, verbose=1)(
+        delayed(eliminate_obstructed_facets_chunk)(
+            positions, shape_model_vertices, potentially_visible_facet_indices,
+            start_idx, end_idx
+        )
+        for start_idx, end_idx in chunks
+    )
+    
+    # Combine results
+    all_unobstructed_facets = []
+    for chunk_result in results:
+        all_unobstructed_facets.extend(chunk_result)
+    
+    return all_unobstructed_facets
+
+def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, normals, vertices, config):
+    shape_model_hash = get_shape_model_hash(shape_model)
+    visible_facets_filename = get_visible_facets_filename(shape_model_hash)
+
+    if os.path.exists(visible_facets_filename):
+        conditional_print(silent_mode, "Loading existing visible facets...")
+        with np.load(visible_facets_filename, allow_pickle=True) as data:
+            visible_indices = data['visible_indices']
+        visible_indices = [np.array(indices) for indices in visible_indices]
+    else:
+        # Validate and get actual number of jobs to use
+        actual_n_jobs = config.validate_jobs()
+        conditional_print(silent_mode, f"Calculating visible facets using {actual_n_jobs} parallel jobs...")
+        
+        potentially_visible_indices = calculate_visible_facets_parallel(
+            positions, normals, actual_n_jobs, config.chunk_size
+        )
+        
+        conditional_print(silent_mode, "Eliminating obstructed facets...")
+        visible_indices = eliminate_obstructed_facets_parallel(
+            positions, vertices, potentially_visible_indices,
+            actual_n_jobs, config.chunk_size
+        )
+        
+        os.makedirs(os.path.dirname(visible_facets_filename), exist_ok=True)
+        np.savez_compressed(visible_facets_filename, 
+                          visible_indices=np.array(visible_indices, dtype=object))
+
+    return visible_indices
 
 @jit(nopython=True)
 def rays_triangles_intersection(
@@ -591,43 +773,141 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     
     return view_factors
 
-def calculate_shape_model_view_factors(shape_model, thermal_data, simulation, config, n_rays=10000):
-    all_view_factors = []
+# def calculate_shape_model_view_factors(shape_model, thermal_data, simulation, config, n_rays=10000):
+#     all_view_factors = []
     
+#     shape_model_hash = get_shape_model_hash(shape_model)
+#     view_factors_filename = get_view_factors_filename(shape_model_hash)
+
+#     if os.path.exists(view_factors_filename):
+#         with np.load(view_factors_filename, allow_pickle=True) as data:
+#             conditional_print(config.silent_mode,  "Loading existing view factors...")
+#             all_view_factors = list(data['view_factors'])
+#     else:
+#         conditional_print(config.silent_mode,  "No existing view factors found.")
+#         all_view_factors = []
+    
+#     if not all_view_factors:
+#         conditional_print(simulation, "Calculating new view factors...")
+#         for i in conditional_tqdm(range(len(shape_model)), config.silent_mode, desc="Calculating secondary radiation view factors"):
+#             visible_indices = thermal_data.visible_facets[i]
+
+#             subject_vertices = shape_model[i].vertices
+#             subject_area = shape_model[i].area
+#             subject_normal = shape_model[i].normal
+#             test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
+#             test_areas = np.array([shape_model[j].area for j in visible_indices])
+
+#             view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays)
+
+#             if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
+#                 conditional_print(config.silent_mode,  f"Warning: Invalid view factor for facet {i}")
+#                 conditional_print(config.silent_mode,  f"View factors: {view_factors}")
+#                 conditional_print(config.silent_mode,  f"Visible facets: {visible_indices}")
+#             all_view_factors.append(view_factors)
+
+#         # Save the calculated view factors
+#         os.makedirs("view_factors", exist_ok=True)
+#         np.savez_compressed(view_factors_filename, view_factors=np.array(all_view_factors, dtype=object))
+
+#     return all_view_factors
+
+def process_view_factors_chunk(shape_model, thermal_data, start_idx, end_idx, n_rays):
+    """
+    Process a chunk of facets for view factor calculations.
+    Returns a list of view factors and any warnings generated.
+    """
+    chunk_view_factors = []
+    warnings = []
+    
+    for i in range(start_idx, end_idx):
+        visible_indices = thermal_data.visible_facets[i]
+        
+        subject_vertices = shape_model[i].vertices
+        subject_area = shape_model[i].area
+        subject_normal = shape_model[i].normal
+        test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
+        test_areas = np.array([shape_model[j].area for j in visible_indices])
+
+        view_factors = calculate_view_factors(
+            subject_vertices, subject_normal, subject_area, 
+            test_vertices, test_areas, n_rays
+        )
+
+        if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
+            warnings.append({
+                'facet': i,
+                'view_factors': view_factors.copy(),
+                'visible_facets': visible_indices.copy()
+            })
+            
+        chunk_view_factors.append(view_factors)
+    
+    return chunk_view_factors, warnings
+
+def calculate_shape_model_view_factors_parallel(shape_model, thermal_data, simulation, config, n_rays=10000):
+    """
+    Parallel version of calculate_shape_model_view_factors using joblib.
+    """
     shape_model_hash = get_shape_model_hash(shape_model)
     view_factors_filename = get_view_factors_filename(shape_model_hash)
 
+    # Try to load existing view factors first
     if os.path.exists(view_factors_filename):
         with np.load(view_factors_filename, allow_pickle=True) as data:
-            conditional_print(config.silent_mode,  "Loading existing view factors...")
-            all_view_factors = list(data['view_factors'])
-    else:
-        conditional_print(config.silent_mode,  "No existing view factors found.")
-        all_view_factors = []
+            conditional_print(config.silent_mode, "Loading existing view factors...")
+            return list(data['view_factors'])
+
+    conditional_print(config.silent_mode, "No existing view factors found.")
     
-    if not all_view_factors:
-        conditional_print(simulation, "Calculating new view factors...")
-        for i in conditional_tqdm(range(len(shape_model)), config.silent_mode, desc="Calculating secondary radiation view factors"):
-            visible_indices = thermal_data.visible_facets[i]
-
-            subject_vertices = shape_model[i].vertices
-            subject_area = shape_model[i].area
-            subject_normal = shape_model[i].normal
-            test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
-            test_areas = np.array([shape_model[j].area for j in visible_indices])
-
-            view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays)
-
-            if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
-                conditional_print(config.silent_mode,  f"Warning: Invalid view factor for facet {i}")
-                conditional_print(config.silent_mode,  f"View factors: {view_factors}")
-                conditional_print(config.silent_mode,  f"Visible facets: {visible_indices}")
-            all_view_factors.append(view_factors)
-
-        # Save the calculated view factors
-        os.makedirs("view_factors", exist_ok=True)
-        np.savez_compressed(view_factors_filename, view_factors=np.array(all_view_factors, dtype=object))
-
+    # Validate and get actual number of jobs to use
+    actual_n_jobs = config.validate_jobs()
+    n_facets = len(shape_model)
+    
+    # Calculate chunk size if not specified
+    if config.chunk_size <= 0:
+        # Aim for at least 4 chunks per core
+        config.chunk_size = max(1, n_facets // (actual_n_jobs * 4))
+    
+    # Create chunks
+    n_chunks = (n_facets + config.chunk_size - 1) // config.chunk_size
+    chunks = [(i * config.chunk_size, min((i + 1) * config.chunk_size, n_facets)) 
+             for i in range(n_chunks)]
+    
+    conditional_print(config.silent_mode, 
+                     f"Calculating view factors using {actual_n_jobs} parallel jobs "
+                     f"with {n_chunks} chunks...")
+    
+    # Process chunks in parallel
+    results = Parallel(n_jobs=actual_n_jobs, verbose=1)(
+        delayed(process_view_factors_chunk)(
+            shape_model, thermal_data, start_idx, end_idx, n_rays
+        )
+        for start_idx, end_idx in chunks
+    )
+    
+    # Combine results and collect warnings
+    all_view_factors = []
+    all_warnings = []
+    
+    for chunk_view_factors, chunk_warnings in results:
+        all_view_factors.extend(chunk_view_factors)
+        all_warnings.extend(chunk_warnings)
+    
+    # Report any warnings
+    if all_warnings and not config.silent_mode:
+        conditional_print(config.silent_mode, "\nWarnings during view factor calculation:")
+        for warning in all_warnings:
+            conditional_print(config.silent_mode, 
+                            f"Warning: Invalid view factor for facet {warning['facet']}")
+            conditional_print(config.silent_mode, f"View factors: {warning['view_factors']}")
+            conditional_print(config.silent_mode, f"Visible facets: {warning['visible_facets']}")
+    
+    # Save the calculated view factors
+    os.makedirs("view_factors", exist_ok=True)
+    np.savez_compressed(view_factors_filename, 
+                       view_factors=np.array(all_view_factors, dtype=object))
+    
     return all_view_factors
 
 def get_shape_model_hash(shape_model):
@@ -646,28 +926,6 @@ def get_shape_model_hash(shape_model):
 
 def get_view_factors_filename(shape_model_hash):
     return f"view_factors/view_factors_{shape_model_hash}.npz"
-
-def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, normals, vertices):
-    shape_model_hash = get_shape_model_hash(shape_model)
-    visible_facets_filename = get_visible_facets_filename(shape_model_hash)
-
-    if os.path.exists(visible_facets_filename):
-        conditional_print(silent_mode,  "Loading existing visible facets...")
-        with np.load(visible_facets_filename, allow_pickle=True) as data:
-            visible_indices = data['visible_indices']
-        # Convert back to list of numpy arrays
-        visible_indices = [np.array(indices) for indices in visible_indices]
-    else:
-        conditional_print(silent_mode,  "Calculating visible facets...")
-        potentially_visible_indices = calculate_visible_facets(positions, normals)
-        conditional_print(silent_mode,  "Eliminating obstructed facets...")
-        visible_indices = eliminate_obstructed_facets(positions, vertices, potentially_visible_indices)
-        
-        # Save the calculated visible facets
-        os.makedirs(os.path.dirname(visible_facets_filename), exist_ok=True)
-        np.savez_compressed(visible_facets_filename, visible_indices=np.array(visible_indices, dtype=object))
-
-    return visible_indices
 
 def get_visible_facets_filename(shape_model_hash):
     return f"visible_facets/visible_facets_{shape_model_hash}.npz"
@@ -729,35 +987,114 @@ def calculate_rotation_matrix(axis, theta):
                         [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
 
-def apply_scattering(thermal_data, shape_model, simulation, config):
+# def apply_scattering(thermal_data, shape_model, simulation, config):
+#     original_insolation = thermal_data.insolation.copy()
+#     total_scattered_light = np.zeros_like(original_insolation)
+    
+#     for iteration in range(config.n_scatters):
+#         conditional_print(config.silent_mode,  f"Scattering iteration {iteration + 1} of {config.n_scatters}...")
+        
+#         if iteration == 0:
+#             input_light = original_insolation
+#         else:
+#             input_light = scattered_light
+        
+#         scattered_light = np.zeros_like(original_insolation)
+
+#         for i, facet in enumerate(shape_model):
+#             for t in range(simulation.timesteps_per_day):
+#                 current_light = input_light[i, t]
+                
+#                 if current_light > 0:
+#                     visible_facets = thermal_data.visible_facets[i]
+#                     view_factors = thermal_data.secondary_radiation_view_factors[i]
+                    
+#                     for vf_index, vf in zip(visible_facets, view_factors):
+#                         scattered_light[vf_index, t] += current_light * vf * (simulation.albedo) / np.pi
+
+#         total_scattered_light += scattered_light
+    
+#     thermal_data.insolation = original_insolation + total_scattered_light
+    
+#     return thermal_data
+
+def process_scattering_chunk(start_idx, end_idx, input_light, visible_facets_list, 
+                           view_factors_list, timesteps_per_day, albedo):
+    """
+    Process a chunk of facets for scattering calculation.
+    Only accepts raw numpy arrays and basic Python types.
+    """
+    chunk_scattered_light = np.zeros_like(input_light)
+    
+    for i in range(start_idx, end_idx):
+        visible_facets = visible_facets_list[i]
+        view_factors = view_factors_list[i]
+        
+        for t in range(timesteps_per_day):
+            current_light = input_light[i, t]
+            
+            if current_light > 0:
+                for vf_index, vf in zip(visible_facets, view_factors):
+                    chunk_scattered_light[vf_index, t] += current_light * vf * albedo / np.pi
+                    
+    return chunk_scattered_light
+
+def apply_scattering_parallel(thermal_data, shape_model, simulation, config):
+    """
+    Parallel version of apply_scattering that only passes numpy arrays between processes.
+    """
     original_insolation = thermal_data.insolation.copy()
     total_scattered_light = np.zeros_like(original_insolation)
+    n_facets = len(shape_model)
+    
+    # Convert Numba typed lists to regular Python lists of numpy arrays
+    visible_facets_list = [np.array(x) for x in thermal_data.visible_facets]
+    view_factors_list = [np.array(x) for x in thermal_data.secondary_radiation_view_factors]
+    
+    # Validate and get actual number of jobs to use
+    actual_n_jobs = config.validate_jobs()
+    
+    # Calculate chunk size if not specified
+    if config.chunk_size <= 0:
+        # Aim for at least 4 chunks per core
+        config.chunk_size = max(1, n_facets // (actual_n_jobs * 4))
+    
+    # Create chunks
+    n_chunks = (n_facets + config.chunk_size - 1) // config.chunk_size
+    chunks = [(i * config.chunk_size, min((i + 1) * config.chunk_size, n_facets)) 
+             for i in range(n_chunks)]
     
     for iteration in range(config.n_scatters):
-        conditional_print(config.silent_mode,  f"Scattering iteration {iteration + 1} of {config.n_scatters}...")
+        conditional_print(config.silent_mode, 
+                        f"Scattering iteration {iteration + 1} of {config.n_scatters} "
+                        f"using {actual_n_jobs} parallel jobs...")
         
         if iteration == 0:
             input_light = original_insolation
         else:
             input_light = scattered_light
         
+        # Process chunks in parallel, passing only numpy arrays and basic Python types
+        chunk_results = Parallel(n_jobs=actual_n_jobs, verbose=1)(
+            delayed(process_scattering_chunk)(
+                start_idx, end_idx,
+                input_light,
+                visible_facets_list,
+                view_factors_list,
+                simulation.timesteps_per_day,
+                simulation.albedo
+            )
+            for start_idx, end_idx in chunks
+        )
+        
+        # Combine results from all chunks
         scattered_light = np.zeros_like(original_insolation)
-
-        for i, facet in enumerate(shape_model):
-            for t in range(simulation.timesteps_per_day):
-                current_light = input_light[i, t]
-                
-                if current_light > 0:
-                    visible_facets = thermal_data.visible_facets[i]
-                    view_factors = thermal_data.secondary_radiation_view_factors[i]
-                    
-                    for vf_index, vf in zip(visible_facets, view_factors):
-                        scattered_light[vf_index, t] += current_light * vf * (simulation.albedo) / np.pi
-
+        for chunk_result in chunk_results:
+            scattered_light += chunk_result
+            
         total_scattered_light += scattered_light
     
     thermal_data.insolation = original_insolation + total_scattered_light
-    
     return thermal_data
 
 def calculate_insolation(thermal_data, shape_model, simulation, config):
@@ -812,7 +1149,7 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
 
     if config.n_scatters > 0:
         conditional_print(config.silent_mode,  f"Applying light scattering with {config.n_scatters} iterations...")
-        thermal_data = apply_scattering(thermal_data, shape_model, simulation, config)
+        thermal_data = apply_scattering_parallel(thermal_data, shape_model, simulation, config)
         conditional_print(config.silent_mode,  "Light scattering applied.")
 
     return thermal_data
@@ -1161,7 +1498,7 @@ def main(silent_mode=False):
     normals = np.array([facet.normal for facet in shape_model])
     vertices = np.array([facet.vertices for facet in shape_model])
     
-    visible_indices = calculate_and_cache_visible_facets(config.silent_mode, shape_model, positions, normals, vertices)
+    visible_indices = calculate_and_cache_visible_facets(config.silent_mode, shape_model, positions, normals, vertices, config)
 
     thermal_data.set_visible_facets(visible_indices)
 
@@ -1169,7 +1506,7 @@ def main(silent_mode=False):
         facet.visible_facets = visible_indices[i]   
         
     if config.include_self_heating or config.n_scatters > 0:
-        all_view_factors = calculate_shape_model_view_factors(shape_model, thermal_data, simulation, config, n_rays=10000)
+        all_view_factors = calculate_shape_model_view_factors_parallel(shape_model, thermal_data, simulation, config, n_rays=10000)
         
         thermal_data.set_secondary_radiation_view_factors(all_view_factors)
 
