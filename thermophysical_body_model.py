@@ -25,6 +25,7 @@ import time
 import sys
 import json
 import pandas as pd
+import datetime
 from animate_model import animate_model
 from numba import jit, njit, float64, int64, boolean
 from numba.typed import List
@@ -35,10 +36,52 @@ from typing import Tuple
 from scipy.interpolate import interp1d
 from collections import defaultdict
 
+class Config:
+    def __init__(self):
+        ################ START OF USER INPUTS ################
+        
+        # Get setup file and shape model
+        # self.path_to_shape_model_file = "shape_models/1D_square.stl"
+        # self.path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
+
+        self.path_to_shape_model_file = "private/Lucy/Dinkinesh/Dinkinesh.stl"
+        self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
+
+        ################ GENERAL ################
+        self.silent_mode = False
+        self.remote = True
+
+        ################ MODELLING ################
+        self.convergence_method = 'mean' # 'mean' or 'max'. Mean is recommended for most cases, max is best for investigating permanently shadowed regions.
+        self.include_shadowing = True # Recommended to keep this as True for most cases
+        self.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
+        self.include_self_heating = False
+        self.apply_roughness = False
+
+        ################ PLOTTING ################
+        self.plotted_facet_index = 1220 # Index of facet to plot
+        self.plot_insolation_curve = False
+        self.plot_insolation_curve = False 
+        self.plot_initial_temp_histogram = False
+        self.plot_final_day_all_layers_temp_distribution = False
+        self.plot_final_day_all_layers_temp_distribution = False
+        self.plot_energy_terms = False # NOTE: You must set config.calculate_energy_terms to True to plot energy terms
+        self.plot_final_day_comparison = False
+
+        ################ ANIMATIONS ################        BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
+        self.animate_roughness_model = False
+        self.animate_shadowing = False
+        self.animate_secondary_radiation_view_factors = False
+        self.animate_secondary_contributions = False
+        self.animate_final_day_temp_distribution = True
+
+        ################ DEBUGGING ################
+        self.calculate_energy_terms = False         # NOTE: Numba must be disabled if calculating energy terms - model will run much slower
+
+        ################ END OF USER INPUTS ################
+
 class Simulation:
-    def __init__(self, config_path, calculate_energy_terms, silent_mode=False):
-        self.calculate_energy_terms = calculate_energy_terms
-        self.silent_mode = silent_mode
+    def __init__(self, config_path):
         self.load_configuration(config_path)
     
     def load_configuration(self, config_path):
@@ -61,18 +104,6 @@ class Simulation:
         self.thermal_diffusivity = self.thermal_conductivity / (self.density * self.specific_heat_capacity)
         self.timesteps_per_day = int(round(self.rotation_period_s / (self.layer_thickness**2 / (2 * self.thermal_diffusivity)))) # Courant-Friedrichs-Lewy condition for conduction stability
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
-        
-        # Calculation method flags
-        self.convergence_method = "mean"  # Default to mean temperature convergence method
-        self.include_self_heating = False # Default to not include self-heating
-        self.n_scatters = 0 # Default to not include light scattering
-        self.apply_roughness = False # Default to not include sublimation
- 
-        # Print out the configuration if not in silent mode
-        if not self.silent_mode:
-            print(f"Configuration loaded from {config_path}")
-            for key, value in config.items():
-                print(f"{key}: {value}")
         
         # Compute unit vector from ra and dec
         ra_radians = np.radians(self.ra_degrees)
@@ -167,7 +198,7 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_
 
     return shape_model
 
-def save_shape_model(shape_model, filename, simulation):
+def save_shape_model(shape_model, filename, config):
     """
     Save the shape model to an ASCII STL file.
     """
@@ -182,10 +213,61 @@ def save_shape_model(shape_model, filename, simulation):
             f.write("endfacet\n")
         f.write("endsolid model\n")
     
-    conditional_print(simulation.silent_mode, f"Shape model saved to {filename}")
+    conditional_print(config.silent_mode, f"Shape model saved to {filename}")
+
+def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_array, rotation_axis, 
+                           sunlight_direction, timesteps_per_day, solar_distance_au, rotation_period_hr, 
+                           **kwargs):
+    """
+    Handles animation logic based on whether remote mode is enabled.
+    If remote is False, calls animate_model function directly.
+    If remote is True, saves the arguments into .npz and .json files.
+    """
+    if not remote:
+        # Local mode: call animate_model as usual
+        animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction,
+                     timesteps_per_day, solar_distance_au, rotation_period_hr, **kwargs)
+    else:
+        # Remote mode: create a directory to save the animation parameters
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        output_dir = f"outputs/remote_outputs/animation_outputs_{timestamp}"
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save numpy arrays to NPZ file
+        numpy_arrays = {
+            'plotted_variable_array': plotted_variable_array,
+            'rotation_axis': rotation_axis,
+            'sunlight_direction': sunlight_direction
+        }
+        npz_file = os.path.join(output_dir, 'animation_params.npz')
+        np.savez_compressed(npz_file, **numpy_arrays)
+
+        # Save other parameters to JSON file
+        json_params = {
+            'args': [
+                path_to_shape_model_file,  # First argument is always the shape model file
+                None,  # Placeholder for plotted_variable_array (stored in NPZ)
+            ],
+            'kwargs': {
+                # Required positional arguments stored as kwargs for easier handling
+                'timesteps_per_day': timesteps_per_day,
+                'solar_distance_au': solar_distance_au,
+                'rotation_period_hr': rotation_period_hr,
+                'rotation_axis': None,  # Placeholder for rotation_axis (stored in NPZ)
+                'sunlight_direction': None,  # Placeholder for sunlight_direction (stored in NPZ)
+                # Additional keyword arguments
+                **kwargs
+            }
+        }
+
+        json_file = os.path.join(output_dir, 'animation_params.json')
+        with open(json_file, 'w') as f:
+            json.dump(json_params, f, indent=2)
+
+        print(f"Animation parameters saved in:\nJSON: {json_file}\nNPZ: {npz_file}")
 
 
-def apply_roughness(shape_model, simulation, subdivision_levels=5, displacement_factors=None):
+def apply_roughness(shape_model, simulation, config, subdivision_levels=5, displacement_factors=None):
     """
     Apply roughness to the shape model using iterative sub-facet division and displacement.
     
@@ -275,7 +357,7 @@ def apply_roughness(shape_model, simulation, subdivision_levels=5, displacement_
                 sub_position = np.mean(sub_vertices, axis=0)
                 
                 # Create new Facet object
-                new_facet = Facet(sub_normal, sub_vertices, simulation.timesteps_per_day, simulation.max_days, simulation.n_layers, simulation.calculate_energy_terms)
+                new_facet = Facet(sub_normal, sub_vertices, simulation.timesteps_per_day, simulation.max_days, simulation.n_layers, config.calculate_energy_terms)
                 new_shape_model.append(new_facet)
         
         # Update shape_model for the next iteration
@@ -289,6 +371,8 @@ def calculate_visible_facets(positions, normals):
     This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It returns the indices of the visible facets.
     
     NB: This doesn't account for partial shadowing (e.g. a facet may be only partially covered by the shadow cast by another facet) - more of an issue for low facet count models. Could add subdivision option to the model for better partial shadowing, but probably best to just use higher facet count models.
+
+    NOTE: Idea for improvement - instaed of geometrically comparing every facet - do this only for nearby facets, then use tracing of evenly distributed rays to determine shadowing 'globe/sphere' for the rest of the facets.
     '''
     n_facets = len(positions)
     potentially_visible_indices = [np.empty(0, dtype=np.int64) for _ in range(n_facets)]
@@ -507,7 +591,7 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     
     return view_factors
 
-def calculate_shape_model_view_factors(shape_model, thermal_data, simulation, n_rays=10000):
+def calculate_shape_model_view_factors(shape_model, thermal_data, simulation, config, n_rays=10000):
     all_view_factors = []
     
     shape_model_hash = get_shape_model_hash(shape_model)
@@ -515,15 +599,15 @@ def calculate_shape_model_view_factors(shape_model, thermal_data, simulation, n_
 
     if os.path.exists(view_factors_filename):
         with np.load(view_factors_filename, allow_pickle=True) as data:
-            conditional_print(simulation.silent_mode,  "Loading existing view factors...")
+            conditional_print(config.silent_mode,  "Loading existing view factors...")
             all_view_factors = list(data['view_factors'])
     else:
-        conditional_print(simulation.silent_mode,  "No existing view factors found.")
+        conditional_print(config.silent_mode,  "No existing view factors found.")
         all_view_factors = []
     
     if not all_view_factors:
         conditional_print(simulation, "Calculating new view factors...")
-        for i in conditional_tqdm(range(len(shape_model)), simulation.silent_mode, desc="Calculating secondary radiation view factors"):
+        for i in conditional_tqdm(range(len(shape_model)), config.silent_mode, desc="Calculating secondary radiation view factors"):
             visible_indices = thermal_data.visible_facets[i]
 
             subject_vertices = shape_model[i].vertices
@@ -535,9 +619,9 @@ def calculate_shape_model_view_factors(shape_model, thermal_data, simulation, n_
             view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays)
 
             if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
-                conditional_print(simulation.silent_mode,  f"Warning: Invalid view factor for facet {i}")
-                conditional_print(simulation.silent_mode,  f"View factors: {view_factors}")
-                conditional_print(simulation.silent_mode,  f"Visible facets: {visible_indices}")
+                conditional_print(config.silent_mode,  f"Warning: Invalid view factor for facet {i}")
+                conditional_print(config.silent_mode,  f"View factors: {view_factors}")
+                conditional_print(config.silent_mode,  f"Visible facets: {visible_indices}")
             all_view_factors.append(view_factors)
 
         # Save the calculated view factors
@@ -645,12 +729,12 @@ def calculate_rotation_matrix(axis, theta):
                         [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
 
-def apply_scattering(thermal_data, shape_model, simulation, num_iterations):
+def apply_scattering(thermal_data, shape_model, simulation, config):
     original_insolation = thermal_data.insolation.copy()
     total_scattered_light = np.zeros_like(original_insolation)
     
-    for iteration in range(num_iterations):
-        conditional_print(simulation.silent_mode,  f"Scattering iteration {iteration + 1} of {num_iterations}...")
+    for iteration in range(config.n_scatters):
+        conditional_print(config.silent_mode,  f"Scattering iteration {iteration + 1} of {config.n_scatters}...")
         
         if iteration == 0:
             input_light = original_insolation
@@ -676,7 +760,7 @@ def apply_scattering(thermal_data, shape_model, simulation, num_iterations):
     
     return thermal_data
 
-def calculate_insolation(thermal_data, shape_model, simulation):
+def calculate_insolation(thermal_data, shape_model, simulation, config):
     ''' 
     This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
 
@@ -701,7 +785,7 @@ def calculate_insolation(thermal_data, shape_model, simulation):
 
     shape_model_vertices = np.array([facet.vertices for facet in shape_model])
     
-    for i, facet in enumerate(conditional_tqdm(shape_model, simulation.silent_mode, desc="Calculating insolation")):
+    for i, facet in enumerate(conditional_tqdm(shape_model, config.silent_mode, desc="Calculating insolation")):
         normal = facet.normal
         
         for t in range(simulation.timesteps_per_day):
@@ -716,7 +800,7 @@ def calculate_insolation(thermal_data, shape_model, simulation):
             if cos_zenith_angle > 0:
                 illumination_factor = 1  # Default to no shadowing
 
-                if len(facet.visible_facets) != 0 and simulation.include_shadowing:
+                if len(facet.visible_facets) != 0 and config.include_shadowing:
                     illumination_factor = calculate_shadowing(np.array(facet.position), np.array([rotated_sunlight_directions[t]]), shape_model_vertices, thermal_data.visible_facets[i])
                 
                 # Calculate insolation
@@ -726,10 +810,10 @@ def calculate_insolation(thermal_data, shape_model, simulation):
             
             thermal_data.insolation[i, t] = insolation
 
-    if simulation.n_scatters > 0:
-        conditional_print(simulation.silent_mode,  f"Applying light scattering with {simulation.n_scatters} iterations...")
-        thermal_data = apply_scattering(thermal_data, shape_model, simulation, simulation.n_scatters)
-        conditional_print(simulation.silent_mode,  "Light scattering applied.")
+    if config.n_scatters > 0:
+        conditional_print(config.silent_mode,  f"Applying light scattering with {config.n_scatters} iterations...")
+        thermal_data = apply_scattering(thermal_data, shape_model, simulation, config)
+        conditional_print(config.silent_mode,  "Light scattering applied.")
 
     return thermal_data
 
@@ -769,16 +853,16 @@ def calculate_initial_temperatures(thermal_data, silent_mode, emissivity, n_jobs
 def calculate_secondary_radiation(temperatures, visible_facets, view_factors, self_heating_const):
     return self_heating_const * np.sum(temperatures[visible_facets]**4 * view_factors)
 
-def export_results(shape_model_name, path_to_setup_file, path_to_shape_model_file, temperature_array):
+def export_results(shape_model_name, config, temperature_array):
     ''' 
     This function exports the final results of the model to be used in an instrument simulator. It creates a folder within /outputs with the shape model, model parameters, a plot of the temperature distribution, and final timestep temperatures.
     '''
 
     folder_name = f"{shape_model_name}_{time.strftime('%d-%m-%Y_%H-%M-%S')}" # Create new folder name
     os.makedirs(f"outputs/{folder_name}") # Create folder for results
-    shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file) # Load shape model
-    os.system(f"cp {path_to_shape_model_file} outputs/{folder_name}") # Copy shape model .stl file to folder
-    os.system(f"cp {path_to_setup_file} outputs/{folder_name}") # Copy model parameters .json file to folder
+    shape_mesh = mesh.Mesh.from_file(config.path_to_shape_model_file) # Load shape model
+    os.system(f"cp {config.path_to_shape_model_file} outputs/{folder_name}") # Copy shape model .stl file to folder
+    os.system(f"cp {config.path_to_setup_file} outputs/{folder_name}") # Copy model parameters .json file to folder
     np.savetxt(f"outputs/{folder_name}/temperatures.csv", temperature_array, delimiter=',') # Save the final timestep temperatures to .csv file
 
     # Plot the temperature distribution for the final timestep and save it to the folder
@@ -855,7 +939,7 @@ def calculate_temperatures(temperature, insolation, visible_facets_list, view_fa
     
     return current_day_temperature
 
-def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_shape_model_file):
+def thermophysical_body_model(thermal_data, shape_model, simulation, config):
     ''' 
     This is the main calculation function for the thermophysical body model. It calls the necessary functions to read in the shape model, set material and model properties, calculate 
     insolation and temperature arrays, and iterate until the model converges.
@@ -887,13 +971,13 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
             thermal_data.secondary_radiation_view_factors,
             const1, const2, const3, self_heating_const, 
             simulation.timesteps_per_day, simulation.n_layers,
-            simulation.include_self_heating,
+            config.include_self_heating,
             current_day_start, current_day_end
         )
 
         thermal_data.temperatures[:, current_day_start:current_day_end, :] = current_day_temperature
 
-        if simulation.calculate_energy_terms:
+        if config.calculate_energy_terms:
             energy_terms = calculate_energy_terms(
                 current_day_temperature, 
                 thermal_data.insolation, 
@@ -912,11 +996,11 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
         for i in range(thermal_data.temperatures.shape[0]):
             for time_step in range(simulation.timesteps_per_day):
                 current_step = int(time_step + (day * simulation.timesteps_per_day))
-                if np.isnan(current_day_temperature[i, time_step, 0]) or np.isinf(current_day_temperature[i, time_step, 0]) or current_day_temperature[i, time_step, 0] < 0 and not simulation.silent_mode:
-                    conditional_print(simulation.silent_mode,  f"Ending run at timestep {current_step} due to facet {i} having a temperature of {current_day_temperature[i, time_step, 0]} K.\n Try increasing the number of time steps per day")
+                if np.isnan(current_day_temperature[i, time_step, 0]) or np.isinf(current_day_temperature[i, time_step, 0]) or current_day_temperature[i, time_step, 0] < 0 and not config.silent_mode:
+                    conditional_print(config.silent_mode,  f"Ending run at timestep {current_step} due to facet {i} having a temperature of {current_day_temperature[i, time_step, 0]} K.\n Try increasing the number of time steps per day")
 
                     # Plot the energy terms for the facet
-                    if simulation.calculate_energy_terms:
+                    if config.calculate_energy_terms:
                         plt.plot(thermal_data.insolation_energy[i, :current_step], label="Insolation energy")
                         plt.plot(thermal_data.re_emitted_energy[i, :current_step], label="Re-emitted energy")
                         plt.plot(thermal_data.surface_energy_change[i, :current_step], label="Surface energy change")
@@ -948,7 +1032,8 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
                     facet_highlight_array = np.zeros((thermal_data.temperatures.shape[0], simulation.timesteps_per_day))
                     facet_highlight_array[i] = 1
 
-                    animate_model(path_to_shape_model_file, 
+                    check_remote_and_animate(config.remote, 
+                                  config.path_to_shape_model_file, 
                                   facet_highlight_array, 
                                   simulation.rotation_axis, 
                                   simulation.sunlight_direction, 
@@ -962,9 +1047,9 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
         # Calculate convergence factor
         temperature_errors = np.abs(current_day_temperature[:, 0, 0] - comparison_temps)
 
-        if simulation.convergence_method == 'mean':
+        if config.convergence_method == 'mean':
             convergence_error = np.mean(temperature_errors)
-        elif simulation.convergence_method == 'max':
+        elif config.convergence_method == 'max':
             convergence_error = np.max(temperature_errors)
         else:
             raise ValueError("Invalid convergence_method. Use 'mean' or 'max'.")
@@ -972,7 +1057,7 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
         max_temperature_error = np.max(temperature_errors)
         mean_temperature_error = np.mean(temperature_errors) 
 
-        conditional_print(simulation.silent_mode, f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Max Temp Error: {max_temperature_error:.6f} K")
+        conditional_print(config.silent_mode, f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Max Temp Error: {max_temperature_error:.6f} K")
 
         comparison_temps = current_day_temperature[:, 0, 0].copy()
         
@@ -991,8 +1076,8 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
     final_day_temperatures_all_layers = thermal_data.temperatures[:, -simulation.timesteps_per_day:, :]
 
     if convergence_error < simulation.convergence_target:
-        conditional_print(simulation.silent_mode,  f"Convergence achieved after {day} days.")
-        if simulation.calculate_energy_terms:
+        conditional_print(config.silent_mode,  f"Convergence achieved after {day} days.")
+        if config.calculate_energy_terms:
             for i in range(len(shape_model)):
                 thermal_data.insolation_energy[i] = energy_terms[i, :, 0]
                 thermal_data.re_emitted_energy[i] = energy_terms[i, :, 1]
@@ -1000,13 +1085,13 @@ def thermophysical_body_model(thermal_data, shape_model, simulation, path_to_sha
                 thermal_data.conducted_energy[i] = energy_terms[i, :, 3]
                 thermal_data.unphysical_energy_loss[i] = energy_terms[i, :, 4]
     else:
-        conditional_print(simulation.silent_mode,  f"Maximum days reached without achieving convergence.")
-        conditional_print(simulation.silent_mode,  f"Final temperature error: {mean_temperature_error} K")
-        conditional_print(simulation.silent_mode,  "Try increasing max_days or decreasing convergence_target.")
-        if simulation.silent_mode:
+        conditional_print(config.silent_mode,  f"Maximum days reached without achieving convergence.")
+        conditional_print(config.silent_mode,  f"Final temperature error: {mean_temperature_error} K")
+        conditional_print(config.silent_mode,  "Try increasing max_days or decreasing convergence_target.")
+        if config.silent_mode:
             return
 
-        if simulation.calculate_energy_terms:
+        if config.calculate_energy_terms:
             plt.plot(energy_terms[i, :, 0], label="Insolation energy")
             plt.plot(energy_terms[i, :, 1], label="Re-emitted energy")
             plt.plot(energy_terms[i, :, 2], label="Surface energy change")
@@ -1021,68 +1106,42 @@ def main(silent_mode=False):
     ''' 
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
     '''
-    
-    # Get setup file and shape model
-    path_to_shape_model_file = "shape_models/1D_square.stl"
-    path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
 
-    # path_to_shape_model_file = "private/Lucy/Dinkinesh/Dinkinesh.stl"
-    # path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
+    # Load user configuration
+    config = Config()
 
     # Load setup parameters from JSON file
-    simulation = Simulation(path_to_setup_file, calculate_energy_terms=False, silent_mode=silent_mode) # NOTE: Numba must be disabled if calculating energy terms - model will run much slower
-    shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
-    thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
+    simulation = Simulation(config.path_to_setup_file)
 
-    ################ MODELLING ################
-    simulation.convergence_method = 'mean' # 'mean' or 'max'. Mean is recommended for most cases, max is best for investigating permanently shadowed regions.
-    simulation.include_shadowing = True # Recommended to keep this as True for most cases
-    simulation.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
-    simulation.include_self_heating = False
-    simulation.apply_roughness = True
+    # Setup simulation
+    shape_model = read_shape_model(config.path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
+    thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
 
-    ################ PLOTTING ################
-    facet_index = 1220 # Index of facet to plot
-    plot_insolation_curve = False
-    plot_temperature_curve = False 
-    plot_initial_temp_histogram = False
-    plot_final_day_all_layers_temp_distribution = False
-    plot_all_days_all_layers_temp_distribution = False
-    plot_energy_terms = False # NOTE: You must set simulation.calculate_energy_terms to True to plot energy terms
-    plot_final_day_comparison = False
-
-    ################ ANIMATIONS ################        BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
-    animate_roughness_model = False
-    animate_shadowing = False
-    animate_secondary_radiation_view_factors = False
-    animate_secondary_contributions = False
-    animate_final_day_temp_distribution = True
-
-    conditional_print(simulation.silent_mode,  f"\nDerived model parameters:")
-    conditional_print(simulation.silent_mode,  f"Number of timesteps per day: {simulation.timesteps_per_day}")
-    conditional_print(simulation.silent_mode,  f"Layer thickness: {simulation.layer_thickness} m")
-    conditional_print(simulation.silent_mode,  f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5")
-    conditional_print(simulation.silent_mode,  f"Skin depth: {simulation.skin_depth} m")
-    conditional_print(simulation.silent_mode,  f"\n Number of facets: {len(shape_model)}")
+    conditional_print(config.silent_mode,  f"\nDerived model parameters:")
+    conditional_print(config.silent_mode,  f"Number of timesteps per day: {simulation.timesteps_per_day}")
+    conditional_print(config.silent_mode,  f"Layer thickness: {simulation.layer_thickness} m")
+    conditional_print(config.silent_mode,  f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5")
+    conditional_print(config.silent_mode,  f"Skin depth: {simulation.skin_depth} m")
+    conditional_print(config.silent_mode,  f"\n Number of facets: {len(shape_model)}")
 
     # Apply roughness to the shape model
-    if simulation.apply_roughness:
-        conditional_print(simulation.silent_mode,  f"Applying roughness to shape model. Original size: {len(shape_model)} facets.")
-        shape_model = apply_roughness(shape_model, simulation, subdivision_levels=2, displacement_factors=[0.5, 0.1])
-        conditional_print(simulation.silent_mode,  f"Roughness applied to shape model. New size: {len(shape_model)} facets.")
+    if config.apply_roughness:
+        conditional_print(config.silent_mode,  f"Applying roughness to shape model. Original size: {len(shape_model)} facets.")
+        shape_model = apply_roughness(shape_model, simulation, config, subdivision_levels=2, displacement_factors=[0.5, 0.1])
+        conditional_print(config.silent_mode,  f"Roughness applied to shape model. New size: {len(shape_model)} facets.")
         # Save the shape model with roughness applied with a new filename
-        path_to_shape_model_file = f"{path_to_shape_model_file[:-4]}_roughness_applied.stl"
+        config.path_to_shape_model_file = f"{config.path_to_shape_model_file[:-4]}_roughness_applied.stl"
         # Save it to a new file
-        save_shape_model(shape_model, path_to_shape_model_file, simulation)
+        save_shape_model(shape_model, config.path_to_shape_model_file, config)
 
         # Read in the new shape model to ensure facets are updated
-        shape_model = read_shape_model(path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
+        shape_model = read_shape_model(config.path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
 
-        thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, simulation.calculate_energy_terms)
+        thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
 
         # Visualise shape model with roughness
-        if animate_roughness_model and not simulation.silent_mode: 
-            animate_model(path_to_shape_model_file, 
+        if config.animate_roughness_model: 
+            check_remote_and_animate(config.remote, config.path_to_shape_model_file, 
                 np.ones((len(shape_model), 1)),  # Make this a 2D array
                 simulation.rotation_axis, 
                 simulation.sunlight_direction, 
@@ -1102,15 +1161,15 @@ def main(silent_mode=False):
     normals = np.array([facet.normal for facet in shape_model])
     vertices = np.array([facet.vertices for facet in shape_model])
     
-    visible_indices = calculate_and_cache_visible_facets(simulation.silent_mode, shape_model, positions, normals, vertices)
+    visible_indices = calculate_and_cache_visible_facets(config.silent_mode, shape_model, positions, normals, vertices)
 
     thermal_data.set_visible_facets(visible_indices)
 
     for i, facet in enumerate(shape_model):
         facet.visible_facets = visible_indices[i]   
         
-    if simulation.include_self_heating or simulation.n_scatters > 0:
-        all_view_factors = calculate_shape_model_view_factors(shape_model, thermal_data, simulation, n_rays=10000)
+    if config.include_self_heating or config.n_scatters > 0:
+        all_view_factors = calculate_shape_model_view_factors(shape_model, thermal_data, simulation, config, n_rays=10000)
         
         thermal_data.set_secondary_radiation_view_factors(all_view_factors)
 
@@ -1125,17 +1184,17 @@ def main(silent_mode=False):
             numba_view_factors.append(np.array([], dtype=np.float64))
         thermal_data.secondary_radiation_view_factors = numba_view_factors
 
-    thermal_data = calculate_insolation(thermal_data, shape_model, simulation)
+    thermal_data = calculate_insolation(thermal_data, shape_model, simulation, config)
 
-    if plot_insolation_curve and not simulation.silent_mode:
+    if config.plot_insolation_curve and not config.silent_mode:
         fig_insolation = plt.figure(figsize=(10, 6))
-        conditional_print(simulation.silent_mode,  f"Preparing insolation curve plot.\n")
+        conditional_print(config.silent_mode,  f"Preparing insolation curve plot.\n")
         
-        if facet_index >= len(shape_model):
-            conditional_print(simulation.silent_mode,  f"Facet index {facet_index} out of range. Please select a facet index between 0 and {len(shape_model) - 1}.")
+        if config.plotted_facet_index >= len(shape_model):
+            conditional_print(config.silent_mode,  f"Facet index {config.plotted_facet_index} out of range. Please select a facet index between 0 and {len(shape_model) - 1}.")
         else:
             # Get the insolation data for the facet
-            insolation_data = thermal_data.insolation[facet_index]
+            insolation_data = thermal_data.insolation[config.plotted_facet_index]
             
             roll_amount = 216
             # Roll the array to center the peak
@@ -1153,27 +1212,27 @@ def main(silent_mode=False):
             # Export to CSV
             output_dir = 'insolation_data'
             os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-            output_csv_path = os.path.join(output_dir, f'facet_{facet_index}.csv')
+            output_csv_path = os.path.join(output_dir, f'facet_{config.plotted_facet_index}.csv')
             df.to_csv(output_csv_path, index=False)
-            conditional_print(simulation.silent_mode,  f"Insolation data exported to {output_csv_path}")
+            conditional_print(config.silent_mode,  f"Insolation data exported to {output_csv_path}")
             
             # Plot the centered insolation curve
             plt.plot(degrees, centered_insolation)
             plt.xlabel('Rotation of the body (degrees)')
             plt.ylabel('Insolation (W/m^2)')
-            plt.title(f'Insolation curve for facet {facet_index} over one full rotation of the body')
+            plt.title(f'Insolation curve for facet {config.plotted_facet_index} over one full rotation of the body')
             plt.xlim(0, 360)
             plt.xticks(np.arange(0, 361, 45))  # Set x-axis ticks every 45 degrees
             
-            conditional_print(simulation.silent_mode,  f"Facet {facet_index} insolation curve plotted with peak centered.")
+            conditional_print(config.silent_mode,  f"Facet {config.plotted_facet_index} insolation curve plotted with peak centered.")
             plt.show()
 
             sys.exit()
 
-    if animate_shadowing and not simulation.silent_mode:
-        conditional_print(simulation.silent_mode,  f"Preparing shadowing visualisation.\n")
+    if config.animate_shadowing:
+        conditional_print(config.silent_mode,  f"Preparing shadowing visualisation.\n")
 
-        animate_model(path_to_shape_model_file, 
+        check_remote_and_animate(config.remote, config.path_to_shape_model_file, 
                           thermal_data.insolation, 
                           simulation.rotation_axis, 
                           simulation.sunlight_direction, 
@@ -1188,10 +1247,10 @@ def main(silent_mode=False):
                           save_animation_name='shadowing_animation.gif', 
                           background_colour = 'black')
 
-    conditional_print(simulation.silent_mode,  f"Calculating initial temperatures.\n")
-    thermal_data = calculate_initial_temperatures(thermal_data, simulation.silent_mode, simulation.emissivity)
+    conditional_print(config.silent_mode,  f"Calculating initial temperatures.\n")
+    thermal_data = calculate_initial_temperatures(thermal_data, config.silent_mode, simulation.emissivity)
 
-    if plot_initial_temp_histogram and not simulation.silent_mode:
+    if config.plot_initial_temp_histogram and not config.silent_mode:
         fig_histogram = plt.figure()
         initial_temperatures = [thermal_data.temperatures[i, 0, 0] for i in range(len(shape_model))]
         plt.hist(initial_temperatures, bins=20)
@@ -1205,7 +1264,7 @@ def main(silent_mode=False):
         numba_visible_facets.append(np.array(facets, dtype=np.int64))
     thermal_data.visible_facets = numba_visible_facets
 
-    if animate_secondary_radiation_view_factors and not simulation.silent_mode:
+    if config.animate_secondary_radiation_view_factors:
         selected_facet = 1454  # Change this to the index of the facet you're interested in
         
         # Get the indices and view factors of contributing facets
@@ -1220,13 +1279,13 @@ def main(silent_mode=False):
         contribution_data[selected_facet] = 0.5
 
         # Print contributing facets and their view factors
-        conditional_print(simulation.silent_mode,  f"\nContributing facets for facet {selected_facet}:")
+        conditional_print(config.silent_mode,  f"\nContributing facets for facet {selected_facet}:")
         for index, view_factors in zip(contributing_indices, contributing_view_factors):
-            conditional_print(simulation.silent_mode,  f"Facet {index}: view factor = {view_factors:.6f}")
-        conditional_print(simulation.silent_mode,  f"Total number of contributing facets: {len(contributing_indices)}")
+            conditional_print(config.silent_mode,  f"Facet {index}: view factor = {view_factors:.6f}")
+        conditional_print(config.silent_mode,  f"Total number of contributing facets: {len(contributing_indices)}")
         
-        conditional_print(simulation.silent_mode,  f"Preparing visualization of contributing facets for facet {selected_facet}.")
-        animate_model(path_to_shape_model_file, 
+        conditional_print(config.silent_mode,  f"Preparing visualization of contributing facets for facet {selected_facet}.")
+        check_remote_and_animate(config.remote, config.path_to_shape_model_file, 
                       contribution_data[:, np.newaxis], 
                     simulation.rotation_axis, 
                     simulation.sunlight_direction, 
@@ -1241,12 +1300,12 @@ def main(silent_mode=False):
                     save_animation_name=f'contributing_facets_{selected_facet}.png', 
                     background_colour='black')
         
-    if animate_secondary_contributions and not simulation.silent_mode:
+    if config.animate_secondary_contributions:
         # Calculate the sum of secondary radiation view factors for each facet
         secondary_radiation_sum = np.array([np.sum(view_factors) for view_factors in thermal_data.secondary_radiation_view_factors])
 
-        conditional_print(simulation.silent_mode,  "Preparing secondary radiation visualization.")
-        animate_model(path_to_shape_model_file, 
+        conditional_print(config.silent_mode,  "Preparing secondary radiation visualization.")
+        check_remote_and_animate(config.remote, config.path_to_shape_model_file, 
                     secondary_radiation_sum[:, np.newaxis], 
                     simulation.rotation_axis, 
                     simulation.sunlight_direction, 
@@ -1261,35 +1320,35 @@ def main(silent_mode=False):
                     save_animation_name='secondary_radiation.png', 
                     background_colour='black')
 
-    conditional_print(simulation.silent_mode,  f"Running main simulation loop.\n")
-    conditional_print(simulation.silent_mode,  f"Convergence target: {simulation.convergence_target} K with {simulation.convergence_method} convergence method.\n")
+    conditional_print(config.silent_mode,  f"Running main simulation loop.\n")
+    conditional_print(config.silent_mode,  f"Convergence target: {simulation.convergence_target} K with {config.convergence_method} convergence method.\n")
     start_time = time.time()
-    final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error, max_temp_error = thermophysical_body_model(thermal_data, shape_model, simulation, path_to_shape_model_file)
+    final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error, max_temp_error = thermophysical_body_model(thermal_data, shape_model, simulation, config)
     end_time = time.time()
     execution_time = end_time - start_time
 
     if final_timestep_temperatures is not None:
-        conditional_print(simulation.silent_mode,  f"Convergence target achieved after {day} days.")
-        conditional_print(simulation.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
-        conditional_print(simulation.silent_mode,  f"Max temperature error for any facet: {max_temp_error} K")
+        conditional_print(config.silent_mode,  f"Convergence target achieved after {day} days.")
+        conditional_print(config.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
+        conditional_print(config.silent_mode,  f"Max temperature error for any facet: {max_temp_error} K")
     else:
-        conditional_print(simulation.silent_mode,  f"Model did not converge after {day} days.")
-        conditional_print(simulation.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
+        conditional_print(config.silent_mode,  f"Model did not converge after {day} days.")
+        conditional_print(config.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
 
-    conditional_print(simulation.silent_mode,  f"Execution time: {execution_time} seconds")
+    conditional_print(config.silent_mode,  f"Execution time: {execution_time} seconds")
 
-    if plot_temperature_curve and not simulation.silent_mode:
+    if config.plot_insolation_curve and not config.silent_mode:
         fig_temperature = plt.figure(figsize=(10, 6))
-        conditional_print(simulation.silent_mode, f"Preparing temperature curve plot.\n")
+        conditional_print(config.silent_mode, f"Preparing temperature curve plot.\n")
         
-        if facet_index >= len(shape_model):
-            conditional_print(simulation.silent_mode, f"Facet index {facet_index} out of range. Please select a facet index between 0 and {len(shape_model) - 1}.")
+        if config.plotted_facet_index >= len(shape_model):
+            conditional_print(config.silent_mode, f"Facet index {config.plotted_facet_index} out of range. Please select a facet index between 0 and {len(shape_model) - 1}.")
         else:
             # Get the temp data for the facet
-            temperature_data = final_day_temperatures[facet_index]
+            temperature_data = final_day_temperatures[config.plotted_facet_index]
             
             # Calculate black body temperatures
-            insolation_data = thermal_data.insolation[facet_index]
+            insolation_data = thermal_data.insolation[config.plotted_facet_index]
             black_body_temps = np.array([calculate_black_body_temp(ins, simulation.emissivity, simulation.albedo) for ins in insolation_data])
             
             # Find the index of the maximum black body temperature
@@ -1315,58 +1374,58 @@ def main(silent_mode=False):
             # Export to CSV
             output_dir = 'temperature_data'
             os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
-            output_csv_path = os.path.join(output_dir, f'facet_{facet_index}_with_black_body.csv')
+            output_csv_path = os.path.join(output_dir, f'facet_{config.plotted_facet_index}_with_black_body.csv')
             df.to_csv(output_csv_path, index=False)
-            conditional_print(simulation.silent_mode, f"Temperature data exported to {output_csv_path}")
+            conditional_print(config.silent_mode, f"Temperature data exported to {output_csv_path}")
             
             # Plot the centered temperature curves
             plt.plot(degrees, centered_temperature, label='Model Temperature')
             plt.plot(degrees, centered_black_body, label='Black Body Temperature', linestyle='--')
             plt.xlabel('Rotation of the body (degrees)')
             plt.ylabel('Temperature (K)')
-            plt.title(f'Temperature curves for facet {facet_index} over one full rotation of the body')
+            plt.title(f'Temperature curves for facet {config.plotted_facet_index} over one full rotation of the body')
             plt.xlim(0, 360)
             plt.xticks(np.arange(0, 361, 90))  # Set x-axis ticks every 90 degrees
             plt.legend()
             
-            conditional_print(simulation.silent_mode, f"Facet {facet_index} temperature curves plotted with peak centered.")
+            conditional_print(config.silent_mode, f"Facet {config.plotted_facet_index} temperature curves plotted with peak centered.")
             plt.show()
 
             sys.exit()
 
-    if plot_final_day_all_layers_temp_distribution and not simulation.silent_mode:
+    if config.plot_final_day_all_layers_temp_distribution and not config.silent_mode:
         fig_final_all_layers_temp_dist = plt.figure()
-        plt.plot(final_day_temperatures_all_layers[facet_index])
+        plt.plot(final_day_temperatures_all_layers[config.plotted_facet_index])
         plt.xlabel('Timestep')
         plt.ylabel('Temperature (K)')
         plt.title('Final day temperature distribution for all layers in facet')
         fig_final_all_layers_temp_dist.show()
 
-    if plot_all_days_all_layers_temp_distribution and not simulation.silent_mode:
+    if config.plot_final_day_all_layers_temp_distribution and not config.silent_mode:
         fig_all_days_all_layers_temp_dist = plt.figure()
-        plt.plot(thermal_data.temperatures[facet_index, :, :])
+        plt.plot(thermal_data.temperatures[config.plotted_facet_index, :, :])
         plt.xlabel('Timestep')
         plt.ylabel('Temperature (K)')
         plt.title('Temperature distribution for all layers in facet for the full run')
         fig_all_days_all_layers_temp_dist.show()
 
-    if plot_energy_terms and not simulation.silent_mode:
+    if config.plot_energy_terms and not config.silent_mode:
         fig_energy_terms = plt.figure()
-        plt.plot(shape_model[facet_index].unphysical_energy_loss[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Unphysical energy loss')
-        plt.plot(shape_model[facet_index].insolation_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Insolation energy')
-        plt.plot(shape_model[facet_index].re_emitted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Re-emitted energy')
-        plt.plot(-shape_model[facet_index].surface_energy_change[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Surface energy change')
-        plt.plot(shape_model[facet_index].conducted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Conducted energy')
+        plt.plot(shape_model[config.plotted_facet_index].unphysical_energy_loss[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Unphysical energy loss')
+        plt.plot(shape_model[config.plotted_facet_index].insolation_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Insolation energy')
+        plt.plot(shape_model[config.plotted_facet_index].re_emitted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Re-emitted energy')
+        plt.plot(-shape_model[config.plotted_facet_index].surface_energy_change[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Surface energy change')
+        plt.plot(shape_model[config.plotted_facet_index].conducted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Conducted energy')
         plt.legend()
         plt.xlabel('Timestep')
         plt.ylabel('Energy (J)')
         plt.title('Energy terms for facet for the final day')
         fig_energy_terms.show()
 
-    if animate_final_day_temp_distribution and not simulation.silent_mode:
-        conditional_print(simulation.silent_mode,  f"Preparing temperature animation.\n")
+    if config.animate_final_day_temp_distribution:
+        conditional_print(config.silent_mode,  f"Preparing temperature animation.\n")
 
-        animate_model(path_to_shape_model_file, 
+        check_remote_and_animate(config.remote, config.path_to_shape_model_file, 
                       final_day_temperatures, 
                       simulation.rotation_axis, 
                       simulation.sunlight_direction, 
@@ -1381,15 +1440,15 @@ def main(silent_mode=False):
                       save_animation_name='temperature_animation.gif', 
                       background_colour = 'black')
 
-    if plot_final_day_comparison and not simulation.silent_mode:
-        conditional_print(simulation.silent_mode,  f"Saving final day temperatures for facet to CSV file.\n")
-        np.savetxt("final_day_temperatures.csv", np.column_stack((np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
+    if config.plot_final_day_comparison and not config.silent_mode:
+        conditional_print(config.silent_mode,  f"Saving final day temperatures for facet to CSV file.\n")
+        np.savetxt("final_day_temperatures.csv", np.column_stack((np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[config.plotted_facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
         thermprojrs_data = np.loadtxt("thermprojrs_data.csv", delimiter=',', skiprows=1)
 
         fig_model_comparison = plt.figure()
         plt.plot(thermprojrs_data[:, 0], thermprojrs_data[:, 1], label='Thermprojrs')
-        plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[facet_index], label='This model')
+        plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[config.plotted_facet_index], label='This model')
         plt.xlabel('Rotation angle (rad)')
         plt.ylabel('Temperature (K)')
         plt.title('Final day temperature distribution for facet')
@@ -1397,21 +1456,21 @@ def main(silent_mode=False):
         fig_model_comparison.show()
 
         x_original = np.linspace(0, 2 * np.pi, simulation.timesteps_per_day)
-        x_new = np.linspace(0, 2 * np.pi, thermprojrs_data.shape[facet_index])
+        x_new = np.linspace(0, 2 * np.pi, thermprojrs_data.shape[config.plotted_facet_index])
 
         interp_func = interp1d(x_new, thermprojrs_data[:, 1], kind='linear')
         thermprojrs_interpolated = interp_func(x_original)
 
-        plt.plot(x_original, final_day_temperatures[facet_index] - thermprojrs_interpolated, label='This model')
+        plt.plot(x_original, final_day_temperatures[config.plotted_facet_index] - thermprojrs_interpolated, label='This model')
         plt.xlabel('Rotation angle (rad)')
         plt.ylabel('Temperature difference (K)')
         plt.title('Temperature difference between this model and Thermprojrs for facet')
         plt.legend()
         plt.show()
 
-        np.savetxt("final_day.csv", np.column_stack((x_original, final_day_temperatures[facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
+        np.savetxt("final_day.csv", np.column_stack((x_original, final_day_temperatures[config.plotted_facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
-    conditional_print(simulation.silent_mode,  f"Model run complete.\n")
+    conditional_print(config.silent_mode,  f"Model run complete.\n")
 
 # Call the main program to start execution
 if __name__ == "__main__":
