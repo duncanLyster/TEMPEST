@@ -36,3 +36,4 @@ shadowing_animation.gif
 *.bak
 *.swp
 *.swo
+remote_outputs/
