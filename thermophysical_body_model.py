@@ -484,115 +484,114 @@ def eliminate_obstructed_facets(positions, shape_model_vertices, potentially_vis
 
     return unobstructed_facets
 
-
-# @jit(nopython=True)
-# def calculate_visible_facets_chunk(positions, normals, start_idx, end_idx):
-#     """Calculate visible facets for a chunk of the shape model."""
-#     n_facets = len(positions)
-#     chunk_size = end_idx - start_idx
-#     potentially_visible_indices = [np.empty(0, dtype=np.int64) for _ in range(chunk_size)]
-#     epsilon = 1e-10
+@jit(nopython=True)
+def calculate_visible_facets_chunk(positions, normals, start_idx, end_idx):
+    """Calculate visible facets for a chunk of the shape model."""
+    n_facets = len(positions)
+    chunk_size = end_idx - start_idx
+    potentially_visible_indices = [np.empty(0, dtype=np.int64) for _ in range(chunk_size)]
+    epsilon = 1e-10
     
-#     for i in range(chunk_size):
-#         actual_idx = i + start_idx
-#         relative_positions = positions[actual_idx] - positions
-#         above_horizon = np.sum(relative_positions * normals[actual_idx], axis=1) < epsilon
-#         facing_towards = np.sum(-relative_positions * normals, axis=1) < epsilon
-#         potentially_visible = above_horizon & facing_towards
-#         potentially_visible[actual_idx] = False
-#         visible_indices = np.where(potentially_visible)[0]
-#         potentially_visible_indices[i] = visible_indices
+    for i in range(chunk_size):
+        actual_idx = i + start_idx
+        relative_positions = positions[actual_idx] - positions
+        above_horizon = np.sum(relative_positions * normals[actual_idx], axis=1) < epsilon
+        facing_towards = np.sum(-relative_positions * normals, axis=1) < epsilon
+        potentially_visible = above_horizon & facing_towards
+        potentially_visible[actual_idx] = False
+        visible_indices = np.where(potentially_visible)[0]
+        potentially_visible_indices[i] = visible_indices
         
-#     return potentially_visible_indices
+    return potentially_visible_indices
 
-# def calculate_visible_facets_parallel(positions, normals, n_jobs, chunk_size):
-#     """Parallel wrapper for calculate_visible_facets using joblib."""
-#     n_facets = len(positions)
-#     n_chunks = (n_facets + chunk_size - 1) // chunk_size
+def calculate_visible_facets_parallel(positions, normals, n_jobs, chunk_size):
+    """Parallel wrapper for calculate_visible_facets using joblib."""
+    n_facets = len(positions)
+    n_chunks = (n_facets + chunk_size - 1) // chunk_size
     
-#     # Create chunks of work
-#     chunks = [(i * chunk_size, min((i + 1) * chunk_size, n_facets)) 
-#              for i in range(n_chunks)]
+    # Create chunks of work
+    chunks = [(i * chunk_size, min((i + 1) * chunk_size, n_facets)) 
+             for i in range(n_chunks)]
     
-#     # Process chunks in parallel using joblib
-#     results = Parallel(n_jobs=n_jobs, verbose=1)(
-#         delayed(calculate_visible_facets_chunk)(positions, normals, start_idx, end_idx)
-#         for start_idx, end_idx in chunks
-#     )
+    # Process chunks in parallel using joblib
+    results = Parallel(n_jobs=n_jobs, verbose=1)(
+        delayed(calculate_visible_facets_chunk)(positions, normals, start_idx, end_idx)
+        for start_idx, end_idx in chunks
+    )
     
-#     # Combine results
-#     all_visible_indices = []
-#     for chunk_result in results:
-#         all_visible_indices.extend(chunk_result)
+    # Combine results
+    all_visible_indices = []
+    for chunk_result in results:
+        all_visible_indices.extend(chunk_result)
     
-#     return all_visible_indices
+    return all_visible_indices
 
-# @jit(nopython=True)
-# def eliminate_obstructed_facets_chunk(positions, shape_model_vertices, potentially_visible_facet_indices, 
-#                                     start_idx, end_idx):
-#     """Process a chunk of facets for obstruction elimination."""
-#     chunk_size = end_idx - start_idx
-#     unobstructed_facets = [np.empty(0, dtype=np.int64) for _ in range(chunk_size)]
+@jit(nopython=True)
+def eliminate_obstructed_facets_chunk(positions, shape_model_vertices, potentially_visible_facet_indices, 
+                                    start_idx, end_idx):
+    """Process a chunk of facets for obstruction elimination."""
+    chunk_size = end_idx - start_idx
+    unobstructed_facets = [np.empty(0, dtype=np.int64) for _ in range(chunk_size)]
 
-#     for i in range(chunk_size):
-#         actual_idx = i + start_idx
-#         potential_indices = potentially_visible_facet_indices[actual_idx]
+    for i in range(chunk_size):
+        actual_idx = i + start_idx
+        potential_indices = potentially_visible_facet_indices[actual_idx]
         
-#         if len(potential_indices) == 0:
-#             continue
+        if len(potential_indices) == 0:
+            continue
 
-#         subject_position = positions[actual_idx]
-#         test_positions = positions[potential_indices]
-#         ray_directions = test_positions - subject_position
-#         ray_directions = normalize_vectors(ray_directions)
+        subject_position = positions[actual_idx]
+        test_positions = positions[potential_indices]
+        ray_directions = test_positions - subject_position
+        ray_directions = normalize_vectors(ray_directions)
 
-#         unobstructed = []
-#         for j, test_facet_index in enumerate(potential_indices):
-#             other_indices = potential_indices[potential_indices != test_facet_index]
-#             test_vertices = shape_model_vertices[other_indices]
+        unobstructed = []
+        for j, test_facet_index in enumerate(potential_indices):
+            other_indices = potential_indices[potential_indices != test_facet_index]
+            test_vertices = shape_model_vertices[other_indices]
 
-#             if len(test_vertices) == 0:
-#                 unobstructed.append(test_facet_index)
-#                 continue
+            if len(test_vertices) == 0:
+                unobstructed.append(test_facet_index)
+                continue
 
-#             intersections, _ = rays_triangles_intersection(
-#                 subject_position,
-#                 ray_directions[j:j+1],
-#                 test_vertices
-#             )
+            intersections, _ = rays_triangles_intersection(
+                subject_position,
+                ray_directions[j:j+1],
+                test_vertices
+            )
 
-#             if not np.any(intersections):
-#                 unobstructed.append(test_facet_index)
+            if not np.any(intersections):
+                unobstructed.append(test_facet_index)
 
-#         unobstructed_facets[i] = np.array(unobstructed, dtype=np.int64)
+        unobstructed_facets[i] = np.array(unobstructed, dtype=np.int64)
 
-#     return unobstructed_facets
+    return unobstructed_facets
 
-# def eliminate_obstructed_facets_parallel(positions, shape_model_vertices, potentially_visible_facet_indices,
-#                                        n_jobs, chunk_size):
-#     """Parallel wrapper for eliminate_obstructed_facets using joblib."""
-#     n_facets = len(positions)
-#     n_chunks = (n_facets + chunk_size - 1) // chunk_size
+def eliminate_obstructed_facets_parallel(positions, shape_model_vertices, potentially_visible_facet_indices,
+                                       n_jobs, chunk_size):
+    """Parallel wrapper for eliminate_obstructed_facets using joblib."""
+    n_facets = len(positions)
+    n_chunks = (n_facets + chunk_size - 1) // chunk_size
     
-#     # Create chunks of work
-#     chunks = [(i * chunk_size, min((i + 1) * chunk_size, n_facets)) 
-#              for i in range(n_chunks)]
+    # Create chunks of work
+    chunks = [(i * chunk_size, min((i + 1) * chunk_size, n_facets)) 
+             for i in range(n_chunks)]
     
-#     # Process chunks in parallel using joblib
-#     results = Parallel(n_jobs=n_jobs, verbose=1)(
-#         delayed(eliminate_obstructed_facets_chunk)(
-#             positions, shape_model_vertices, potentially_visible_facet_indices,
-#             start_idx, end_idx
-#         )
-#         for start_idx, end_idx in chunks
-#     )
+    # Process chunks in parallel using joblib
+    results = Parallel(n_jobs=n_jobs, verbose=1)(
+        delayed(eliminate_obstructed_facets_chunk)(
+            positions, shape_model_vertices, potentially_visible_facet_indices,
+            start_idx, end_idx
+        )
+        for start_idx, end_idx in chunks
+    )
     
-#     # Combine results
-#     all_unobstructed_facets = []
-#     for chunk_result in results:
-#         all_unobstructed_facets.extend(chunk_result)
+    # Combine results
+    all_unobstructed_facets = []
+    for chunk_result in results:
+        all_unobstructed_facets.extend(chunk_result)
     
-#     return all_unobstructed_facets
+    return all_unobstructed_facets
 
 def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, normals, vertices, config):
     shape_model_hash = get_shape_model_hash(shape_model)
@@ -608,15 +607,26 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
         actual_n_jobs = config.validate_jobs()
         conditional_print(silent_mode, f"Calculating visible facets using {actual_n_jobs} parallel jobs...")
         
+        ############ NON-PARALLEL VERSION ############
+
         potentially_visible_indices = calculate_visible_facets(
-            positions, normals, actual_n_jobs, config.chunk_size
-        )
+            positions, normals)
         
         conditional_print(silent_mode, "Eliminating obstructed facets...")
         visible_indices = eliminate_obstructed_facets(
-            positions, vertices, potentially_visible_indices,
-            actual_n_jobs, config.chunk_size
-        )
+            positions, vertices, potentially_visible_indices)
+        
+        ############ PARALLEL VERSION ############
+
+        # potentially_visible_indices = calculate_visible_facets(
+        #     positions, normals, actual_n_jobs, config.chunk_size
+        # )
+        
+        # conditional_print(silent_mode, "Eliminating obstructed facets...")
+        # visible_indices = eliminate_obstructed_facets(
+        #     positions, vertices, potentially_visible_indices,
+        #     actual_n_jobs, config.chunk_size
+        # )
         
         os.makedirs(os.path.dirname(visible_facets_filename), exist_ok=True)
         np.savez_compressed(visible_facets_filename, 
