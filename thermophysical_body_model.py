@@ -609,24 +609,50 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
         
         ############ NON-PARALLEL VERSION ############
 
+        calculate_visible_facets_start = time.time()
+
         potentially_visible_indices = calculate_visible_facets(
             positions, normals)
         
+        calculate_visible_facets_end = time.time()
+
+        conditional_print(silent_mode, f"Time taken to calculate visible facets: {calculate_visible_facets_end - calculate_visible_facets_start:.2f} seconds")
+        
         conditional_print(silent_mode, "Eliminating obstructed facets...")
+
+        eliminate_obstructed_facets_start = time.time()
+
         visible_indices = eliminate_obstructed_facets(
             positions, vertices, potentially_visible_indices)
         
+        eliminate_obstructed_facets_end = time.time()
+
+        conditional_print(silent_mode, f"Time taken to eliminate obstructed facets: {eliminate_obstructed_facets_end - eliminate_obstructed_facets_start:.2f} seconds")
+        
         ############ PARALLEL VERSION ############
 
+        # calculate_visible_facets_start = time.time()
+        
         # potentially_visible_indices = calculate_visible_facets(
         #     positions, normals, actual_n_jobs, config.chunk_size
         # )
         
+        # calculate_visible_facets_end = time.time()
+
+        # conditional_print(silent_mode, f"Time taken to calculate visible facets: {calculate_visible_facets_end - calculate_visible_facets_start:.2f} seconds")
+
         # conditional_print(silent_mode, "Eliminating obstructed facets...")
+
+        # eliminate_obstructed_facets_start = time.time()
+
         # visible_indices = eliminate_obstructed_facets(
         #     positions, vertices, potentially_visible_indices,
         #     actual_n_jobs, config.chunk_size
         # )
+
+        # eliminate_obstructed_facets_end = time.time()
+
+        # conditional_print(silent_mode, f"Time taken to eliminate obstructed facets: {eliminate_obstructed_facets_end - eliminate_obstructed_facets_start:.2f} seconds")
         
         os.makedirs(os.path.dirname(visible_facets_filename), exist_ok=True)
         np.savez_compressed(visible_facets_filename, 
@@ -1499,6 +1525,8 @@ def main(silent_mode=False):
     This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
     '''
 
+    full_run_start_time = time.time()
+
     # Load user configuration
     config = Config()
 
@@ -1714,10 +1742,11 @@ def main(silent_mode=False):
 
     conditional_print(config.silent_mode,  f"Running main simulation loop.\n")
     conditional_print(config.silent_mode,  f"Convergence target: {simulation.convergence_target} K with {config.convergence_method} convergence method.\n")
-    start_time = time.time()
+    solver_start_time = time.time()
     final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error, max_temp_error = thermophysical_body_model(thermal_data, shape_model, simulation, config)
-    end_time = time.time()
-    execution_time = end_time - start_time
+    solver_end_time = time.time()
+    full_run_end_time = time.time()
+    solver_execution_time = solver_end_time - solver_start_time
 
     if final_timestep_temperatures is not None:
         conditional_print(config.silent_mode,  f"Convergence target achieved after {day} days.")
@@ -1727,7 +1756,8 @@ def main(silent_mode=False):
         conditional_print(config.silent_mode,  f"Model did not converge after {day} days.")
         conditional_print(config.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
 
-    conditional_print(config.silent_mode,  f"Execution time: {execution_time} seconds")
+    conditional_print(config.silent_mode,  f"Solver execution time: {solver_execution_time} seconds")
+    conditional_print(config.silent_mode,  f"Full run time: {full_run_end_time - full_run_start_time} seconds")
 
     if config.plot_insolation_curve and not config.silent_mode:
         fig_temperature = plt.figure(figsize=(10, 6))
