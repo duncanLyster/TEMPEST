@@ -68,7 +68,7 @@ class Config:
         self.include_shadowing = True # Recommended to keep this as True for most cases
         self.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
         self.include_self_heating = False
-        self.apply_roughness = True
+        self.apply_roughness = False
 
         ################ PLOTTING ################
         self.plotted_facet_index = 1220 # Index of facet to plot
@@ -620,14 +620,14 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
         
         conditional_print(silent_mode, "Eliminating obstructed facets...")
 
-        eliminate_obstructed_facets_start = time.time()
+        # eliminate_obstructed_facets_start = time.time()
 
-        visible_indices = eliminate_obstructed_facets(
-            positions, vertices, potentially_visible_indices)
+        # visible_indices = eliminate_obstructed_facets(
+        #     positions, vertices, potentially_visible_indices)
         
-        eliminate_obstructed_facets_end = time.time()
+        # eliminate_obstructed_facets_end = time.time()
 
-        conditional_print(silent_mode, f"Time taken to eliminate obstructed facets: {eliminate_obstructed_facets_end - eliminate_obstructed_facets_start:.2f} seconds")
+        # conditional_print(silent_mode, f"Time taken to eliminate obstructed facets: {eliminate_obstructed_facets_end - eliminate_obstructed_facets_start:.2f} seconds")
         
         ############ PARALLEL VERSION ############
 
