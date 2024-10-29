@@ -609,16 +609,18 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
         
         ############ NON-PARALLEL VERSION ############
 
-        calculate_visible_facets_start = time.time()
+        # calculate_visible_facets_start = time.time()
 
-        potentially_visible_indices = calculate_visible_facets(
-            positions, normals)
+        # potentially_visible_indices = calculate_visible_facets(
+        #     positions, normals)
         
-        calculate_visible_facets_end = time.time()
+        # calculate_visible_facets_end = time.time()
 
-        conditional_print(silent_mode, f"Time taken to calculate visible facets: {calculate_visible_facets_end - calculate_visible_facets_start:.2f} seconds")
+        # conditional_print(silent_mode, f"Time taken to calculate visible facets: {calculate_visible_facets_end - calculate_visible_facets_start:.2f} seconds")
         
-        conditional_print(silent_mode, "Eliminating obstructed facets...")
+        # conditional_print(silent_mode, "Eliminating obstructed facets...")
+
+        # visible_indices = potentially_visible_indices
 
         # eliminate_obstructed_facets_start = time.time()
 
@@ -631,15 +633,17 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
         
         ############ PARALLEL VERSION ############
 
-        # calculate_visible_facets_start = time.time()
+        calculate_visible_facets_start = time.time()
         
-        # potentially_visible_indices = calculate_visible_facets(
-        #     positions, normals, actual_n_jobs, config.chunk_size
-        # )
-        
-        # calculate_visible_facets_end = time.time()
+        potentially_visible_indices = calculate_visible_facets(
+            positions, normals, actual_n_jobs, config.chunk_size
+        )
 
-        # conditional_print(silent_mode, f"Time taken to calculate visible facets: {calculate_visible_facets_end - calculate_visible_facets_start:.2f} seconds")
+        visible_indices = potentially_visible_indices
+        
+        calculate_visible_facets_end = time.time()
+
+        conditional_print(silent_mode, f"Time taken to calculate visible facets: {calculate_visible_facets_end - calculate_visible_facets_start:.2f} seconds")
 
         # conditional_print(silent_mode, "Eliminating obstructed facets...")
 
@@ -1589,7 +1593,7 @@ def main(silent_mode=False):
         facet.visible_facets = visible_indices[i]   
         
     if config.include_self_heating or config.n_scatters > 0:
-        all_view_factors = calculate_shape_model_view_factors_parallel(shape_model, thermal_data, simulation, config, n_rays=10000)
+        all_view_factors = calculate_shape_model_view_factors_parallel(shape_model, thermal_data, simulation, config, n_rays=1000)
         
         thermal_data.set_secondary_radiation_view_factors(all_view_factors)
 
