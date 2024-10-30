@@ -48,8 +48,11 @@ class Config:
         # self.path_to_shape_model_file = "private/Lucy/Dinkinesh/Dinkinesh.stl"
         # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
 
-        self.path_to_shape_model_file = "shape_models/67P_not_to_scale_16670_facets.stl"
+        self.path_to_shape_model_file = "shape_models/67P_not_to_scale_1666_facets.stl"
         self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
+        
+        # self.path_to_shape_model_file = "shape_models/67P_not_to_scale_16670_facets.stl"
+        # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
 
         ################ GENERAL ################
         self.silent_mode = False
@@ -635,7 +638,7 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
 
         calculate_visible_facets_start = time.time()
         
-        potentially_visible_indices = calculate_visible_facets(
+        potentially_visible_indices = calculate_visible_facets_parallel(
             positions, normals, actual_n_jobs, config.chunk_size
         )
 
@@ -816,44 +819,44 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     
     return view_factors
 
-# def calculate_shape_model_view_factors(shape_model, thermal_data, simulation, config, n_rays=10000):
-#     all_view_factors = []
+def calculate_shape_model_view_factors(shape_model, thermal_data, simulation, config, n_rays=10000):
+    all_view_factors = []
     
-#     shape_model_hash = get_shape_model_hash(shape_model)
-#     view_factors_filename = get_view_factors_filename(shape_model_hash)
+    shape_model_hash = get_shape_model_hash(shape_model)
+    view_factors_filename = get_view_factors_filename(shape_model_hash)
 
-#     if os.path.exists(view_factors_filename):
-#         with np.load(view_factors_filename, allow_pickle=True) as data:
-#             conditional_print(config.silent_mode,  "Loading existing view factors...")
-#             all_view_factors = list(data['view_factors'])
-#     else:
-#         conditional_print(config.silent_mode,  "No existing view factors found.")
-#         all_view_factors = []
+    if os.path.exists(view_factors_filename):
+        with np.load(view_factors_filename, allow_pickle=True) as data:
+            conditional_print(config.silent_mode,  "Loading existing view factors...")
+            all_view_factors = list(data['view_factors'])
+    else:
+        conditional_print(config.silent_mode,  "No existing view factors found.")
+        all_view_factors = []
     
-#     if not all_view_factors:
-#         conditional_print(simulation, "Calculating new view factors...")
-#         for i in conditional_tqdm(range(len(shape_model)), config.silent_mode, desc="Calculating secondary radiation view factors"):
-#             visible_indices = thermal_data.visible_facets[i]
+    if not all_view_factors:
+        conditional_print(simulation, "Calculating new view factors...")
+        for i in conditional_tqdm(range(len(shape_model)), config.silent_mode, desc="Calculating secondary radiation view factors"):
+            visible_indices = thermal_data.visible_facets[i]
 
-#             subject_vertices = shape_model[i].vertices
-#             subject_area = shape_model[i].area
-#             subject_normal = shape_model[i].normal
-#             test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
-#             test_areas = np.array([shape_model[j].area for j in visible_indices])
+            subject_vertices = shape_model[i].vertices
+            subject_area = shape_model[i].area
+            subject_normal = shape_model[i].normal
+            test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
+            test_areas = np.array([shape_model[j].area for j in visible_indices])
 
-#             view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays)
+            view_factors = calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays)
 
-#             if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
-#                 conditional_print(config.silent_mode,  f"Warning: Invalid view factor for facet {i}")
-#                 conditional_print(config.silent_mode,  f"View factors: {view_factors}")
-#                 conditional_print(config.silent_mode,  f"Visible facets: {visible_indices}")
-#             all_view_factors.append(view_factors)
+            if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
+                conditional_print(config.silent_mode,  f"Warning: Invalid view factor for facet {i}")
+                conditional_print(config.silent_mode,  f"View factors: {view_factors}")
+                conditional_print(config.silent_mode,  f"Visible facets: {visible_indices}")
+            all_view_factors.append(view_factors)
 
-#         # Save the calculated view factors
-#         os.makedirs("view_factors", exist_ok=True)
-#         np.savez_compressed(view_factors_filename, view_factors=np.array(all_view_factors, dtype=object))
+        # Save the calculated view factors
+        os.makedirs("view_factors", exist_ok=True)
+        np.savez_compressed(view_factors_filename, view_factors=np.array(all_view_factors, dtype=object))
 
-#     return all_view_factors
+    return all_view_factors
 
 def process_view_factors_chunk(shape_model, thermal_data, start_idx, end_idx, n_rays):
     """
@@ -1593,7 +1596,12 @@ def main(silent_mode=False):
         facet.visible_facets = visible_indices[i]   
         
     if config.include_self_heating or config.n_scatters > 0:
-        all_view_factors = calculate_shape_model_view_factors_parallel(shape_model, thermal_data, simulation, config, n_rays=1000)
+
+        # Non-parallel calculation of view factors
+        all_view_factors = calculate_shape_model_view_factors(shape_model, thermal_data, simulation, config, n_rays=1000)
+
+        # Parallel calculation of view factors
+        # all_view_factors = calculate_shape_model_view_factors_parallel(shape_model, thermal_data, simulation, config, n_rays=1000)
         
         thermal_data.set_secondary_radiation_view_factors(all_view_factors)
 
