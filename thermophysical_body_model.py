@@ -45,34 +45,40 @@ class Config:
         # self.path_to_shape_model_file = "shape_models/1D_square.stl"
         # self.path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
 
+        self.path_to_shape_model_file = "shape_models/5km_ico_sphere_1280_facets.stl"
+        self.path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
+
         # self.path_to_shape_model_file = "private/Lucy/Dinkinesh/Dinkinesh.stl"
         # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
 
-        self.path_to_shape_model_file = "shape_models/67P_not_to_scale_1666_facets.stl"
-        self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
+        # self.path_to_shape_model_file = "shape_models/67P_not_to_scale_1666_facets.stl"
+        # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
         
         # self.path_to_shape_model_file = "shape_models/67P_not_to_scale_16670_facets.stl"
         # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
 
         ################ GENERAL ################
         self.silent_mode = False
-        self.remote = True
-        n_jobs = 16 # Default 
+        self.remote = False
 
         ################ PERFORMANCE ################
         # Number of parallel jobs to run
         # The calculations that are parallelised are visible facet calculation, elimination of obstructed facets (optional), view factors, scattering, and temperature solver.
         # Use -1 to use all available cores (USE WITH CAUTION on shared computing facilities!)
         # Default to n_jobs or max available cores, whichever is smaller
+        n_jobs = -1
         self.n_jobs = min(n_jobs, cpu_count())  
-        self.chunk_size = 100  # Number of facets to process per parallel task NOTE: It may be sensible to change this depending on the function being parallelised.
+        self.chunk_size = 100  # Number of facets to process per parallel task TODO: It may be sensible to change this depending on the function being parallelised.
 
         ################ MODELLING ################
         self.convergence_method = 'mean' # 'mean' or 'max'. Mean is recommended for most cases, max is best for investigating permanently shadowed regions.
         self.include_shadowing = True # Recommended to keep this as True for most cases
         self.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
         self.include_self_heating = False
-        self.apply_roughness = False #NOTE: It would be better to define number of subdivisions and displacement factors at this stage. 
+        self.apply_roughness = True
+        self.subdivision_levels = 2
+        self.displacement_factors = [0.5, 0.1]
+        self.vf_rays = 1000 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
 
         ################ PLOTTING ################
         self.plotted_facet_index = 1220 # Index of facet to plot
@@ -838,7 +844,7 @@ def process_view_factors_chunk(shape_model, thermal_data, start_idx, end_idx, n_
     
     return chunk_view_factors, warnings
 
-def calculate_all_view_factors_parallel(shape_model, thermal_data, simulation, config, n_rays=10000):
+def calculate_all_view_factors_parallel(shape_model, thermal_data, config, n_rays):
     """
     Parallel version of calculate_shape_model_view_factors using joblib.
     Now includes detailed progress tracking.
@@ -868,36 +874,18 @@ def calculate_all_view_factors_parallel(shape_model, thermal_data, simulation, c
     chunks = [(i * config.chunk_size, min((i + 1) * config.chunk_size, n_facets)) 
              for i in range(n_chunks)]
     
-    # Calculate total workload for progress estimation
-    total_facets = len(shape_model)
-    
     conditional_print(config.silent_mode, 
                      f"\nCalculating view factors using {actual_n_jobs} parallel jobs:")
     conditional_print(config.silent_mode,
-                     f"Total facets: {total_facets:,}")
+                     f"Total facets: {n_facets:,}")
     conditional_print(config.silent_mode,
                      f"Chunk size: {config.chunk_size:,}")
     conditional_print(config.silent_mode,
                      f"Number of chunks: {n_chunks:,}")
-    
-    # Create progress bar
-    if not config.silent_mode:
-        from tqdm import tqdm
-        pbar = tqdm(total=total_facets, 
-                   desc="Processing facets",
-                   unit="facets",
-                   unit_scale=True,
-                   bar_format="{desc}: {percentage:3.1f}%|{bar}| {n_fmt}/{total_fmt} facets [{elapsed}<{remaining}, {rate_fmt}]")
-    
-    def update_progress(result):
-        """Callback function to update progress bar"""
-        if not config.silent_mode:
-            chunk_size = len(result[0])  # Get size of completed chunk
-            pbar.update(chunk_size)
-    
-    # Process chunks in parallel with progress tracking
+
+    # Process chunks in parallel with joblib's built-in verbose output
     try:
-        results = Parallel(n_jobs=actual_n_jobs, verbose=0, backend='loky')(
+        results = Parallel(n_jobs=actual_n_jobs, verbose=10, backend='loky')(
             delayed(process_view_factors_chunk)(
                 shape_model, thermal_data, start_idx, end_idx, n_rays
             ) for start_idx, end_idx in chunks
@@ -910,10 +898,6 @@ def calculate_all_view_factors_parallel(shape_model, thermal_data, simulation, c
         for chunk_view_factors, chunk_warnings in results:
             all_view_factors.extend(chunk_view_factors)
             all_warnings.extend(chunk_warnings)
-        
-        # Close progress bar
-        if not config.silent_mode:
-            pbar.close()
         
         # Report any warnings
         if all_warnings and not config.silent_mode:
@@ -932,18 +916,11 @@ def calculate_all_view_factors_parallel(shape_model, thermal_data, simulation, c
         return all_view_factors
         
     except KeyboardInterrupt:
-        if not config.silent_mode:
-            pbar.close()
         print("\nCalculation interrupted by user. Progress was not saved.")
         raise
     except Exception as e:
-        if not config.silent_mode:
-            pbar.close()
         print(f"\nError during calculation: {str(e)}")
         raise
-    finally:
-        if not config.silent_mode:
-            pbar.close()
 
 def calculate_all_view_factors(shape_model, thermal_data, simulation, config, n_rays=1000):
     all_view_factors = []
@@ -1243,6 +1220,8 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
 def calculate_initial_temperatures(thermal_data, silent_mode, emissivity, n_jobs=-1):
     ''' 
     This function calculates the initial temperature of each facet and sub-surface layer of the body based on the insolation curve for that facet. It writes the initial temperatures to the data cube.
+
+    BUG: Crashed while running with n_jobs=1, icosphere with 1280 facets and 2 roughness subdivisions.
     '''
     # Stefan-Boltzmann constant
     sigma = 5.67e-8
@@ -1552,7 +1531,7 @@ def main(silent_mode=False):
     # Apply roughness to the shape model
     if config.apply_roughness:
         conditional_print(config.silent_mode,  f"Applying roughness to shape model. Original size: {len(shape_model)} facets.")
-        shape_model = apply_roughness(shape_model, simulation, config, subdivision_levels=2, displacement_factors=[0.5, 0.1])
+        shape_model = apply_roughness(shape_model, simulation, config, config.subdivision_levels, config.displacement_factors)
         conditional_print(config.silent_mode,  f"Roughness applied to shape model. New size: {len(shape_model)} facets.")
         # Save the shape model with roughness applied with a new filename
         config.path_to_shape_model_file = f"{config.path_to_shape_model_file[:-4]}_roughness_applied.stl"
@@ -1595,11 +1574,20 @@ def main(silent_mode=False):
         
     if config.include_self_heating or config.n_scatters > 0:
 
-        # Non-parallel calculation of view factors
-        all_view_factors = calculate_all_view_factors(shape_model, thermal_data, simulation, config, n_rays=1000)
+        calculate_view_factors_start = time.time()
 
-        # Parallel calculation of view factors
-        # all_view_factors = calculate_shape_model_view_factors_parallel(shape_model, thermal_data, simulation, config, n_rays=1000)
+        if config.n_jobs == 1:
+            # Use serial version
+            conditional_print(silent_mode, "Calculating view factors...")
+            all_view_factors = calculate_all_view_factors(shape_model, thermal_data, simulation, config, config.vf_rays)
+        else:
+            # Use parallel version
+            actual_n_jobs = config.validate_jobs()
+            all_view_factors = calculate_all_view_factors_parallel(shape_model, thermal_data, config, config.vf_rays)
+
+        calculate_view_factors_end = time.time()
+
+        conditional_print(silent_mode, f"Time taken to calculate view factors: {calculate_view_factors_end - calculate_view_factors_start:.2f} seconds")
         
         thermal_data.set_secondary_radiation_view_factors(all_view_factors)
 
