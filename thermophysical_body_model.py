@@ -32,10 +32,22 @@ from numba import jit, njit, float64, int64, boolean
 from numba.typed import List
 from joblib import Parallel, delayed, cpu_count
 from stl import mesh
-from tqdm import tqdm
-from typing import Tuple
 from scipy.interpolate import interp1d
-from collections import defaultdict
+from calculate_phase_curve import calculate_phase_curve
+from utils import (
+    calculate_black_body_temp,
+    rotate_vector,
+    conditional_print,
+    conditional_tqdm,
+    rays_triangles_intersection,
+    normalize_vector, 
+    normalize_vectors,
+    random_points_in_triangle,
+    get_shape_model_hash,
+    get_view_factors_filename,
+    get_visible_facets_filename,
+    calculate_rotation_matrix
+)
 
 class Config:
     def __init__(self):
@@ -51,7 +63,7 @@ class Config:
         # self.path_to_shape_model_file = "private/Lucy/Dinkinesh/Dinkinesh.stl"
         # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
 
-        # self.path_to_shape_model_file = "shape_models/67P_not_to_scale_1666_facets.stl"
+        # self.path_to_shape_model_file = "shape_models/Rubber_Duck_high_res.stl"
         # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
         
         # self.path_to_shape_model_file = "shape_models/67P_not_to_scale_16670_facets.stl"
@@ -66,7 +78,7 @@ class Config:
         # The calculations that are parallelised are visible facet calculation, elimination of obstructed facets (optional), view factors, scattering, and temperature solver.
         # Use -1 to use all available cores (USE WITH CAUTION on shared computing facilities!)
         # Default to n_jobs or max available cores, whichever is smaller
-        n_jobs = -1
+        n_jobs = 4
         self.n_jobs = min(n_jobs, cpu_count())  
         self.chunk_size = 100  # Number of facets to process per parallel task TODO: It may be sensible to change this depending on the function being parallelised.
 
@@ -75,10 +87,12 @@ class Config:
         self.include_shadowing = True # Recommended to keep this as True for most cases
         self.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
         self.include_self_heating = False
-        self.apply_roughness = True
+        self.apply_roughness = False
         self.subdivision_levels = 2
         self.displacement_factors = [0.5, 0.1]
-        self.vf_rays = 1000 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
+        self.vf_rays = 100 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
+        self.calculate_visible_phase_curve = True
+        self.calculate_thermal_phase_curve = True
 
         ################ PLOTTING ################
         self.plotted_facet_index = 1220 # Index of facet to plot
@@ -89,13 +103,15 @@ class Config:
         self.plot_final_day_all_layers_temp_distribution = False
         self.plot_energy_terms = False # NOTE: You must set config.calculate_energy_terms to True to plot energy terms
         self.plot_final_day_comparison = False
+        self.show_visible_phase_curve = True
+        self.plot_thermal_phase_curve = True
 
         ################ ANIMATIONS ################        BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
         self.animate_roughness_model = False
         self.animate_shadowing = False
         self.animate_secondary_radiation_view_factors = False
         self.animate_secondary_contributions = False
-        self.animate_final_day_temp_distribution = True
+        self.animate_final_day_temp_distribution = False
 
         ################ DEBUGGING ################
         self.calculate_energy_terms = False         # NOTE: Numba must be disabled if calculating energy terms - model will run much slower
@@ -203,16 +219,6 @@ class ThermalData:
 
     def set_secondary_radiation_view_factors(self, view_factors):
         self.secondary_radiation_view_factors = [np.array(view_factor, dtype=np.float64) for view_factor in view_factors]
-
-def conditional_print(silent_mode, message):
-    if not silent_mode:
-        print(message)
-
-def conditional_tqdm(iterable, silent_mode, **kwargs):
-    if silent_mode:
-        return iterable
-    else:
-        return tqdm(iterable, **kwargs)
 
 def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
     ''' 
@@ -660,116 +666,6 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
     return visible_indices
 
 @jit(nopython=True)
-def rays_triangles_intersection(
-    ray_origin: np.ndarray, ray_directions: np.ndarray, triangles_vertices: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Sourced from: https://gist.github.com/V0XNIHILI/87c986441d8debc9cd0e9396580e85f4
-
-    Möller–Trumbore intersection algorithm for calculating whether the ray intersects the triangle
-    and for which t-value. Based on: https://github.com/kliment/Printrun/blob/master/printrun/stltool.py,
-    which is based on:
-    http://en.wikipedia.org/wiki/M%C3%B6ller%E2%80%93Trumbore_intersection_algorithm
-    Parameters
-    ----------
-    ray_origin : np.ndarray(3)
-        Origin coordinate (x, y, z) from which the ray is fired
-    ray_directions : np.ndarray(n, 3)
-        Directions (dx, dy, dz) in which the rays are going
-    triangle_vertices : np.ndarray(m, 3, 3)
-        3D vertices of multiple triangles
-    Returns
-    -------
-    tuple[np.ndarray<bool>(n, m), np.ndarray(n, m)]
-        The first array indicates whether or not there was an intersection, the second array
-        contains the t-values of the intersections
-    """
-
-    output_shape = (len(ray_directions), len(triangles_vertices))
-
-    all_rays_t = np.full(output_shape, np.nan)
-    all_rays_intersected = np.zeros(output_shape, dtype=np.bool_)
-
-    v1 = triangles_vertices[:, 0]
-    v2 = triangles_vertices[:, 1]
-    v3 = triangles_vertices[:, 2]
-
-    eps = 0.000001
-
-    edge1 = v2 - v1
-    edge2 = v3 - v1
-
-    for i, ray in enumerate(ray_directions):
-        all_t = np.zeros((len(triangles_vertices)))
-        intersected = np.full((len(triangles_vertices)), True)
-
-        pvec = np.cross(ray, edge2)
-
-        det = np.sum(edge1 * pvec, axis=1)
-
-        non_intersecting_original_indices = np.absolute(det) < eps
-
-        all_t[non_intersecting_original_indices] = np.nan
-        intersected[non_intersecting_original_indices] = False
-
-        inv_det = 1.0 / det
-
-        tvec = ray_origin - v1
-
-        u = np.sum(tvec * pvec, axis=1) * inv_det
-
-        non_intersecting_original_indices = (u < 0.0) + (u > 1.0)
-        all_t[non_intersecting_original_indices] = np.nan
-        intersected[non_intersecting_original_indices] = False
-
-        qvec = np.cross(tvec, edge1)
-
-        v = np.sum(ray * qvec, axis=1) * inv_det
-
-        non_intersecting_original_indices = (v < 0.0) + (u + v > 1.0)
-
-        all_t[non_intersecting_original_indices] = np.nan
-        intersected[non_intersecting_original_indices] = False
-
-        t = (
-            np.sum(
-                edge2 * qvec,
-                axis=1,
-            )
-            * inv_det
-        )
-
-        non_intersecting_original_indices = t < eps
-        all_t[non_intersecting_original_indices] = np.nan
-        intersected[non_intersecting_original_indices] = False
-
-        intersecting_original_indices = np.invert(non_intersecting_original_indices)
-        all_t[intersecting_original_indices] = t[intersecting_original_indices]
-
-        all_rays_t[i] = all_t
-        all_rays_intersected[i] = intersected
-
-    return all_rays_intersected, all_rays_t
-
-@jit(nopython=True)
-def normalize_vector(v):
-    """Normalize a vector."""
-    norm = np.sqrt(np.sum(v**2))
-    return v / norm if norm != 0 else v
-
-@jit(nopython=True)
-def normalize_vectors(vectors):
-    """Normalize an array of vectors."""
-    norms = np.sqrt(np.sum(vectors**2, axis=1))
-    return vectors / norms[:, np.newaxis]
-
-@jit(nopython=True)
-def random_points_in_triangle(v0, v1, v2, n):
-    r1 = np.sqrt(np.random.rand(n))
-    r2 = np.random.rand(n)
-    return (1 - r1)[:, np.newaxis] * v0 + (r1 * (1 - r2))[:, np.newaxis] * v1 + (r1 * r2)[:, np.newaxis] * v2
-
-@jit(nopython=True)
 def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays):
     '''
     Calculate view factors between one subject facet and multiple test vertices. The view factors are calculated by firing rays from the subject vertices to the test vertices and checking if the rays intersect with the test vertices. The view factor is calculated as the number of rays that intersect with the test vertices divided by the total number of rays fired from the subject vertices.
@@ -961,45 +857,6 @@ def calculate_all_view_factors(shape_model, thermal_data, simulation, config, n_
 
     return all_view_factors
 
-def get_shape_model_hash(shape_model):
-    # Create a hash based on the shape model data
-    model_data = []
-    for facet in shape_model:
-        # Flatten the vertices and concatenate with normal and area
-        facet_data = np.concatenate([facet.vertices.flatten(), facet.normal, [facet.area]])
-        model_data.append(facet_data)
-    
-    # Convert to a 2D numpy array
-    model_data_array = np.array(model_data)
-    
-    # Create a hash of the array
-    return hashlib.sha256(model_data_array.tobytes()).hexdigest()
-
-def get_view_factors_filename(shape_model_hash):
-    return f"view_factors/view_factors_{shape_model_hash}.npz"
-
-def get_visible_facets_filename(shape_model_hash):
-    return f"visible_facets/visible_facets_{shape_model_hash}.npz"
-
-def calculate_black_body_temp(insolation, emissivity, albedo):
-    """
-    Calculate the black body temperature based on insolation and surface properties.
-    
-    Args:
-    insolation (float): Incoming solar radiation in W/m^2
-    emissivity (float): Surface emissivity
-    albedo (float): Surface albedo
-    
-    Returns:
-    float: Black body temperature in Kelvin
-    """
-    stefan_boltzmann = 5.67e-8  # Stefan-Boltzmann constant in W/(m^2·K^4)
-    
-    # Calculate temperature using the Stefan-Boltzmann law
-    temperature = (insolation / (emissivity * stefan_boltzmann)) ** 0.25
-    
-    return temperature
-
 @jit(nopython=True)
 def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vertices, visible_facet_indices):
     '''
@@ -1023,20 +880,6 @@ def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vert
         return 0  # The facet is in shadow
         
     return 1 # The facet is not in shadow
-
-# Calculate rotation matrix for the body's rotation
-@jit(nopython=True)
-def calculate_rotation_matrix(axis, theta):
-    '''Return the rotation matrix associated with counterclockwise rotation about the given axis by theta radians.'''
-    axis = np.asarray(axis)
-    axis = axis / np.sqrt(np.dot(axis, axis))
-    a = np.cos(theta / 2.0)
-    b, c, d = -axis * np.sin(theta / 2.0)
-    aa, bb, cc, dd = a * a, b * b, c * c, d * d
-    bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
-    return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
-                        [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
-                        [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
 
 def apply_scattering(thermal_data, shape_model, simulation, config):
     original_insolation = thermal_data.insolation.copy()
@@ -1152,7 +995,7 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     ''' 
     This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
 
-    NOTE: This could be done as the model runs rather than saving at the start to reduce storage in RAM. Would applying rotation matrix to the entire shape model be faster than applying it to each facet? Or don't use the rotation matrix at all and just work out the geometry of the insolation at each timestep?
+    TODO: Parallelise this function.
     '''
     # Initialize insolation array with zeros for all facets and timesteps
     insolation_array = np.zeros((len(shape_model), simulation.timesteps_per_day))
@@ -1208,7 +1051,6 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
             thermal_data = apply_scattering(thermal_data, shape_model, simulation, config)
         else:
             # Run with parallelisation
-            conditional_print(config.silent_mode, f"Applying light scattering in parallel with {config.n_jobs} jobs...")
             thermal_data = apply_scattering_parallel(thermal_data, shape_model, simulation, config)
 
         scattering_end = time.time()
@@ -1666,7 +1508,12 @@ def main(silent_mode=False):
                           background_colour = 'black')
 
     conditional_print(config.silent_mode,  f"Calculating initial temperatures.\n")
+
+    initial_temperatures_start = time.time()
     thermal_data = calculate_initial_temperatures(thermal_data, config.silent_mode, simulation.emissivity)
+    initial_temperatures_end = time.time()
+
+    conditional_print(config.silent_mode,  f"Time taken to calculate initial temperatures: {initial_temperatures_end - initial_temperatures_start:.2f} seconds")
 
     if config.plot_initial_temp_histogram and not config.silent_mode:
         fig_histogram = plt.figure()
@@ -1889,6 +1736,29 @@ def main(silent_mode=False):
         plt.show()
 
         np.savetxt("final_day.csv", np.column_stack((x_original, final_day_temperatures[config.plotted_facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
+
+
+    if config.calculate_visible_phase_curve:
+        phase_angles, brightness_values = calculate_phase_curve(
+            shape_model,
+            simulation,
+            thermal_data,
+            phase_curve_type='visible',
+            observer_distance=1e9,
+            normalized=False,
+            plot=config.show_visible_phase_curve
+        )
+
+    if config.calculate_thermal_phase_curve:
+        phase_angles, brightness_values = calculate_phase_curve(
+            shape_model,
+            simulation,
+            thermal_data,
+            phase_curve_type='thermal',
+            observer_distance=1e9,
+            normalized=False,
+            plot=config.plot_thermal_phase_curve
+        ) 
 
     conditional_print(config.silent_mode,  f"Model run complete.\n")
 
