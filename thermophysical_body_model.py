@@ -24,7 +24,6 @@ import time
 import sys
 import json
 import pandas as pd
-import datetime
 import warnings
 from animate_model import animate_model
 from numba import jit, njit, float64, int64, boolean
@@ -32,6 +31,7 @@ from numba.typed import List
 from joblib import Parallel, delayed, cpu_count
 from stl import mesh
 from scipy.interpolate import interp1d
+from datetime import datetime
 from calculate_phase_curve import calculate_phase_curve
 from utils import (
     calculate_black_body_temp,
@@ -102,9 +102,9 @@ class Config:
         self.plot_final_day_all_layers_temp_distribution = False
         self.plot_energy_terms = False # NOTE: You must set config.calculate_energy_terms to True to plot energy terms
         self.plot_final_day_comparison = False
-        self.show_visible_phase_curve = True
+        self.show_visible_phase_curve = False # Should be automatically disabled in remote mode
         self.save_visible_phase_curve_data = True
-        self.plot_thermal_phase_curve = False
+        self.show_thermal_phase_curve = False # Should be automatically disabled in remote mode
         self.save_thermal_phase_curve_data = False
 
         ################ ANIMATIONS ################        BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
@@ -1762,6 +1762,19 @@ def main(silent_mode=False):
         })
         df.to_csv(output_csv_path, index=False)
 
+        # Create and save the phase curve plot
+        plt.figure()  # Create a new figure
+        plt.plot(phase_angles, brightness_values, label='Brightness vs Phase Angle')  # Plot the data
+        plt.xlabel('Phase Angle (degrees)')
+        plt.ylabel('Brightness Value')
+        plt.title('Visible Phase Curve')
+        plt.legend()
+        
+        # Save the plot
+        output_image_path = output_csv_path.replace('.csv', '.png')
+        plt.savefig(output_image_path)  # Save the figure as a .png file
+        plt.close()  # Close the figure after saving to avoid displaying it in non-interactive environments
+
         conditional_print(config.silent_mode,  f"Visible phase curve data exported to {output_csv_path}")
 
     if config.calculate_thermal_phase_curve:
@@ -1772,7 +1785,7 @@ def main(silent_mode=False):
             phase_curve_type='thermal',
             observer_distance=1e8,
             normalized=False,
-            plot=config.plot_thermal_phase_curve
+            plot=config.show_thermal_phase_curve
         )
 
     # Save the thermal phase curve data to a CSV file
@@ -1786,8 +1799,22 @@ def main(silent_mode=False):
             'Brightness Value': brightness_values
         })
         df.to_csv(output_csv_path, index=False)
-    
-        conditional_print(config.silent_mode,  f"Thermal phase curve data exported to {output_csv_path}")
+        
+        # Create and save the thermal phase curve plot
+        plt.figure()  # Create a new figure
+        plt.plot(phase_angles, brightness_values, label='Thermal Brightness vs Phase Angle')
+        plt.xlabel('Phase Angle (degrees)')
+        plt.ylabel('Thermal Brightness Value')
+        plt.title('Thermal Phase Curve')
+        plt.legend()
+        
+        # Save the plot
+        output_image_path = output_csv_path.replace('.csv', '.png')
+        plt.savefig(output_image_path)  # Save the figure as a .png file
+        plt.close()  # Close the figure after saving to avoid displaying it in non-interactive environments
+
+        # Notify user
+        conditional_print(config.silent_mode, f"Thermal phase curve data exported to {output_csv_path}")
 
     conditional_print(config.silent_mode,  f"Model run complete.\n")
 
