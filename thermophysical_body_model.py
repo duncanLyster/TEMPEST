@@ -17,7 +17,6 @@ Started: 15 Feb 2024
 Author: Duncan Lyster
 '''
 
-import hashlib
 import numpy as np
 import os
 import matplotlib.pyplot as plt
@@ -66,7 +65,7 @@ class Config:
         # self.path_to_shape_model_file = "shape_models/Rubber_Duck_high_res.stl"
         # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
         
-        # self.path_to_shape_model_file = "shape_models/67P_not_to_scale_16670_facets.stl"
+        # self.path_to_shape_model_file = "shape_models/67P_not_to_scale_1666_facets.stl"
         # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
 
         ################ GENERAL ################
@@ -89,7 +88,7 @@ class Config:
         self.include_self_heating = False
         self.apply_roughness = False
         self.subdivision_levels = 2
-        self.displacement_factors = [0.5, 0.1]
+        self.displacement_factors = [0.05, 0.1]
         self.vf_rays = 100 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
         self.calculate_visible_phase_curve = True
         self.calculate_thermal_phase_curve = True
@@ -104,7 +103,7 @@ class Config:
         self.plot_energy_terms = False # NOTE: You must set config.calculate_energy_terms to True to plot energy terms
         self.plot_final_day_comparison = False
         self.show_visible_phase_curve = True
-        self.plot_thermal_phase_curve = True
+        self.plot_thermal_phase_curve = False
 
         ################ ANIMATIONS ################        BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
         self.animate_roughness_model = False
@@ -1737,14 +1736,13 @@ def main(silent_mode=False):
 
         np.savetxt("final_day.csv", np.column_stack((x_original, final_day_temperatures[config.plotted_facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
-
     if config.calculate_visible_phase_curve:
         phase_angles, brightness_values = calculate_phase_curve(
             shape_model,
             simulation,
             thermal_data,
             phase_curve_type='visible',
-            observer_distance=1e9,
+            observer_distance=1e8,
             normalized=False,
             plot=config.show_visible_phase_curve
         )
@@ -1755,7 +1753,7 @@ def main(silent_mode=False):
             simulation,
             thermal_data,
             phase_curve_type='thermal',
-            observer_distance=1e9,
+            observer_distance=1e8,
             normalized=False,
             plot=config.plot_thermal_phase_curve
         ) 
