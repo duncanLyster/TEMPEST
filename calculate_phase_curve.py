@@ -107,7 +107,7 @@ def compute_observer_direction(sunlight_direction, rotation_axis, phase_angle):
 
     # Rotate the sunlight direction by the phase angle around the perpendicular vector
     observer_direction = rotate_vector(
-        -sunlight_direction, perp_vector, phase_angle
+        sunlight_direction, perp_vector, phase_angle
     )
     observer_direction /= np.linalg.norm(observer_direction)
     return observer_direction
