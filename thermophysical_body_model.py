@@ -103,7 +103,9 @@ class Config:
         self.plot_energy_terms = False # NOTE: You must set config.calculate_energy_terms to True to plot energy terms
         self.plot_final_day_comparison = False
         self.show_visible_phase_curve = True
+        self.save_visible_phase_curve_data = True
         self.plot_thermal_phase_curve = False
+        self.save_thermal_phase_curve_data = False
 
         ################ ANIMATIONS ################        BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
         self.animate_roughness_model = False
@@ -1747,6 +1749,21 @@ def main(silent_mode=False):
             plot=config.show_visible_phase_curve
         )
 
+    # Save the visible phase curve data to a CSV file
+    if config.save_visible_phase_curve_data:
+        output_dir = 'visible_phase_curve_data'
+        os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+        # Create name using shape model name, roughness parameters, and time
+        filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
+        output_csv_path = os.path.join(output_dir, f'{filename}_{config.subdivision_levels}_{config.displacement_factors}_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+        df = pd.DataFrame({
+            'Phase Angle (degrees)': phase_angles,
+            'Brightness Value': brightness_values
+        })
+        df.to_csv(output_csv_path, index=False)
+
+        conditional_print(config.silent_mode,  f"Visible phase curve data exported to {output_csv_path}")
+
     if config.calculate_thermal_phase_curve:
         phase_angles, brightness_values = calculate_phase_curve(
             shape_model,
@@ -1756,7 +1773,21 @@ def main(silent_mode=False):
             observer_distance=1e8,
             normalized=False,
             plot=config.plot_thermal_phase_curve
-        ) 
+        )
+
+    # Save the thermal phase curve data to a CSV file
+    if config.save_thermal_phase_curve_data:
+        output_dir = 'thermal_phase_curve_data'
+        os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+        filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
+        output_csv_path = os.path.join(output_dir, f'{filename}_{config.subdivision_levels}_{config.displacement_factors}_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+        df = pd.DataFrame({
+            'Phase Angle (degrees)': phase_angles,
+            'Brightness Value': brightness_values
+        })
+        df.to_csv(output_csv_path, index=False)
+    
+        conditional_print(config.silent_mode,  f"Thermal phase curve data exported to {output_csv_path}")
 
     conditional_print(config.silent_mode,  f"Model run complete.\n")
 
