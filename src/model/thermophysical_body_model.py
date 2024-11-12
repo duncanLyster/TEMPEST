@@ -33,7 +33,7 @@ from stl import mesh
 from scipy.interpolate import interp1d
 from datetime import datetime
 from calculate_phase_curve import calculate_phase_curve
-from utils import (
+from src.utilities.utils import (
     calculate_black_body_temp,
     rotate_vector,
     conditional_print,
@@ -56,7 +56,7 @@ class Config:
         # self.path_to_shape_model_file = "shape_models/1D_square.stl"
         # self.path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
 
-        self.path_to_shape_model_file = "shape_models/5km_ico_sphere_1280_facets.stl"
+        self.path_to_shape_model_file = "shape_models/5km_ico_sphere_80_facets.stl"
         self.path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
 
         # self.path_to_shape_model_file = "private/Lucy/Dinkinesh/Dinkinesh.stl"
@@ -86,9 +86,9 @@ class Config:
         self.include_shadowing = True # Recommended to keep this as True for most cases
         self.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
         self.include_self_heating = False
-        self.apply_roughness = False
-        self.subdivision_levels = 2
-        self.displacement_factors = [0.05, 0.1]
+        self.apply_roughness = True
+        self.subdivision_levels = 3
+        self.displacement_factors = [0.5, 0.5, 0.5]
         self.vf_rays = 100 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
         self.calculate_visible_phase_curve = True
         self.calculate_thermal_phase_curve = True
@@ -102,9 +102,9 @@ class Config:
         self.plot_final_day_all_layers_temp_distribution = False
         self.plot_energy_terms = False # NOTE: You must set config.calculate_energy_terms to True to plot energy terms
         self.plot_final_day_comparison = False
-        self.show_visible_phase_curve = False # Should be automatically disabled in remote mode
+        self.show_visible_phase_curve = True # TODO: Should be automatically disabled in remote mode
         self.save_visible_phase_curve_data = True
-        self.show_thermal_phase_curve = False # Should be automatically disabled in remote mode
+        self.show_thermal_phase_curve = False # TODO: Should be automatically disabled in remote mode
         self.save_thermal_phase_curve_data = False
 
         ################ ANIMATIONS ################        BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
@@ -292,7 +292,7 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
     else:
         # Remote mode: create a directory to save the animation parameters
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_dir = f"outputs/remote_outputs/animation_outputs_{timestamp}"
+        output_dir = f"outputs/remote_outputs/animation_outputs_{timestamp}" # TODO: include in locations class
         os.makedirs(output_dir, exist_ok=True)
 
         # Save numpy arrays to NPZ file
@@ -864,6 +864,8 @@ def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vert
     This function calculates whether a facet is in shadow at a given time step. It cycles through all visible facets and passes their vertices to rays_triangles_intersections which determines whether they fall on the sunlight direction vector (starting at the facet position). If they do, the facet is in shadow. 
     
     It returns the illumination factor for the facet at that time step. 0 if the facet is in shadow, 1 if it is not.
+
+    TODO: Use Monte Carlo or even distribution ray tracing for faster shadowing calculations.
     '''
 
     # Ensure triangles_vertices is an array of shape (m, 3, 3)
@@ -1744,7 +1746,7 @@ def main(silent_mode=False):
             simulation,
             thermal_data,
             phase_curve_type='visible',
-            observer_distance=1e8,
+            observer_distance=1e6,
             normalized=False,
             plot=config.show_visible_phase_curve
         )
