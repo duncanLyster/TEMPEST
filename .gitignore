@@ -1,39 +1,62 @@
-# Ignore virtual environment directories
+# Ignore virtual environment directories and configuration
 venv/
 pyvenv.cfg
+data/pyvista_env/
 
 # Ignore Python cache directories and compiled files
 __pycache__/
 *.py[cod]
+*.pyo
+*.so
 
 # Ignore macOS metadata files
 .DS_Store
 
-# Ignore private data and directories
+# Ignore output and temporary files
+output/
+
+# Ignore private data
 private/
 
-# Ignore output and temporary files
-outputs/
-output.txt
-*.log
-*.tmp
+# Ignore shape models and large data files
+data/shape_models/
+data/model_setups/
 
-# Ignore data directories not meant to be in the repository
-insolation_data/
-debugging/
-Bennu_Testing/
-verification/
-visible_facets/
-view_factors/
-superseded/
-pyvista_env/
+# Allow specific files in the data directory
+!data/shape_models/67P_not_to_scale_low_res.stl
+!data/shape_models/67P_not_to_scale_1666_facets.stl
+!data/shape_models/5km_ico_sphere_80_facets.stl
+!data/shape_models/5km_ico_sphere_1280_facets.stl
+!data/shape_models/rubber_duck_1500_facets.stl
+!data/model_setups/generic_model_parameters.json
 
-# Ignore profile outputs and generated files
-profile_output/
-shadowing_animation.gif
+# Ignore profile outputs and debugging files
+*.dot
+*.prof
+*.svg
+*.gif
 
-# Ignore any other temporary or backup files
+# Ignore archive and backup files
 *.bak
 *.swp
 *.swo
-remote_outputs/
+*.tmp
+
+# Ignore temporary files and artifacts from editors and IDEs
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+
+# Ignore environment and dependency files that are system-specific
+*.env
+*.virtualenv
+*.tox/
+node_modules/
+build/
+dist/
+
+# Ignore any large datasets or generated CSVs that might clutter the repo
+*.csv
+*.npz
