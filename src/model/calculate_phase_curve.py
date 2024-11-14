@@ -6,7 +6,7 @@ from typing import Tuple
 
 # Import necessary functions from your main script
 # Make sure thermophysical_body_model.py is in your PYTHONPATH or same directory
-from utils import calculate_black_body_temp, rotate_vector
+from src.utilities.utils import calculate_black_body_temp, rotate_vector
 
 def calculate_phase_curve(
     shape_model,

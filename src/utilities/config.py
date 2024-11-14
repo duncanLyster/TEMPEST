@@ -1,82 +1,70 @@
 '''
-This file contains the configuration for the model. The user can set the parameters for the model here. TODO: Update user input method to read everything in from a yaml file.
+This file contains the Config class which is used to load and store the configuration settings from the config.yaml file.
 '''
 
-from src.utilities.locations import get_data_dir
-import os
-from multiprocessing import cpu_count
+import yaml
 import warnings
+from multiprocessing import cpu_count
+from src.utilities.locations import Locations
 
 class Config:
     def __init__(self):
-        ################ START OF USER INPUTS ################
+        # Initialize Locations
+        self.locations = Locations()
         
-        # Get setup file and shape model
-        # self.path_to_shape_model_file = "shape_models/1D_square.stl"
-        # self.path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
-
-        self.path_to_shape_model_file = "shape_models/5km_ico_sphere_80_facets.stl"
-        self.path_to_setup_file = "model_setups/John_Spencer_default_model_parameters.json"
-
-        # self.path_to_shape_model_file = "private/Lucy/Dinkinesh/Dinkinesh.stl"
-        # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
-
-        # self.path_to_shape_model_file = "shape_models/Rubber_Duck_high_res.stl"
-        # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
+        # Load configuration from YAML file
+        config_file_path = self.locations.get_setup_file_path("config.yaml")
+        with open(config_file_path, 'r') as file:
+            self.config_data = yaml.safe_load(file)
         
-        # self.path_to_shape_model_file = "shape_models/67P_not_to_scale_1666_facets.stl"
-        # self.path_to_setup_file = "private/Lucy/Dinkinesh/Dinkinesh_parameters.json"
+        # Load settings from the YAML file
+        self.load_settings()
 
-        ################ GENERAL ################
-        self.silent_mode = False
-        self.remote = False
+    def load_settings(self):
+        # General settings
+        self.silent_mode = self.config_data.get('silent_mode', False)
+        self.remote = self.config_data.get('remote', False)
 
-        ################ PERFORMANCE ################
-        # Number of parallel jobs to run
-        # The calculations that are parallelised are visible facet calculation, elimination of obstructed facets (optional), view factors, scattering, and temperature solver.
-        # Use -1 to use all available cores (USE WITH CAUTION on shared computing facilities!)
-        # Default to n_jobs or max available cores, whichever is smaller
-        n_jobs = 4
-        self.n_jobs = min(n_jobs, cpu_count())  
-        self.chunk_size = 100  # Number of facets to process per parallel task TODO: It may be sensible to change this depending on the function being parallelised.
+        # File paths
+        self.path_to_shape_model_file = self.locations.get_shape_model_path(self.config_data['shape_model_file'])
 
-        ################ MODELLING ################
-        self.convergence_method = 'mean' # 'mean' or 'max'. Mean is recommended for most cases, max is best for investigating permanently shadowed regions.
-        self.include_shadowing = True # Recommended to keep this as True for most cases
-        self.n_scatters = 2 # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unncecessary.
-        self.include_self_heating = False
-        self.apply_roughness = True
-        self.subdivision_levels = 3
-        self.displacement_factors = [0.5, 0.5, 0.5]
-        self.vf_rays = 100 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
-        self.calculate_visible_phase_curve = True
-        self.calculate_thermal_phase_curve = True
+        # Performance settings
+        self.n_jobs = min(self.config_data.get('n_jobs', 4), cpu_count())
+        self.chunk_size = self.config_data.get('chunk_size', 100)
 
-        ################ PLOTTING ################
-        self.plotted_facet_index = 1220 # Index of facet to plot
-        self.plot_insolation_curve = False
-        self.plot_insolation_curve = False 
-        self.plot_initial_temp_histogram = False
-        self.plot_final_day_all_layers_temp_distribution = False
-        self.plot_final_day_all_layers_temp_distribution = False
-        self.plot_energy_terms = False # NOTE: You must set config.calculate_energy_terms to True to plot energy terms
-        self.plot_final_day_comparison = False
-        self.show_visible_phase_curve = True # TODO: Should be automatically disabled in remote mode
-        self.save_visible_phase_curve_data = True
-        self.show_thermal_phase_curve = False # TODO: Should be automatically disabled in remote mode
-        self.save_thermal_phase_curve_data = False
+        # Modelling parameters
+        self.convergence_method = self.config_data.get('convergence_method', 'mean')
+        self.include_shadowing = self.config_data.get('include_shadowing', True)
+        self.n_scatters = self.config_data.get('n_scatters', 2)
+        self.include_self_heating = self.config_data.get('include_self_heating', False)
+        self.apply_roughness = self.config_data.get('apply_roughness', False)
+        self.subdivision_levels = self.config_data.get('subdivision_levels', 3)
+        self.displacement_factors = self.config_data.get('displacement_factors', [0.5, 0.5, 0.5])
+        self.vf_rays = self.config_data.get('vf_rays', 100)
+        self.calculate_visible_phase_curve = self.config_data.get('calculate_visible_phase_curve', True)
+        self.calculate_thermal_phase_curve = self.config_data.get('calculate_thermal_phase_curve', True)
 
-        ################ ANIMATIONS ################        BUG: If using 2 animations, the second one doesn't work (pyvista segmenation fault)
-        self.animate_roughness_model = False
-        self.animate_shadowing = False
-        self.animate_secondary_radiation_view_factors = False
-        self.animate_secondary_contributions = False
-        self.animate_final_day_temp_distribution = False
+        # Plotting settings
+        self.plotted_facet_index = self.config_data.get('plotted_facet_index', 1220)
+        self.plot_insolation_curve = self.config_data.get('plot_insolation_curve', False)
+        self.plot_initial_temp_histogram = self.config_data.get('plot_initial_temp_histogram', False)
+        self.plot_final_day_all_layers_temp_distribution = self.config_data.get('plot_final_day_all_layers_temp_distribution', False)
+        self.plot_energy_terms = self.config_data.get('plot_energy_terms', False)
+        self.plot_final_day_comparison = self.config_data.get('plot_final_day_comparison', False)
+        self.show_visible_phase_curve = self.config_data.get('show_visible_phase_curve', True)
+        self.save_visible_phase_curve_data = self.config_data.get('save_visible_phase_curve_data', True)
+        self.show_thermal_phase_curve = self.config_data.get('show_thermal_phase_curve', False)
+        self.save_thermal_phase_curve_data = self.config_data.get('save_thermal_phase_curve_data', False)
 
-        ################ DEBUGGING ################
-        self.calculate_energy_terms = False         # NOTE: Numba must be disabled if calculating energy terms - model will run much slower
+        # Animations
+        self.animate_roughness_model = self.config_data.get('animate_roughness_model', False)
+        self.animate_shadowing = self.config_data.get('animate_shadowing', False)
+        self.animate_secondary_radiation_view_factors = self.config_data.get('animate_secondary_radiation_view_factors', False)
+        self.animate_secondary_contributions = self.config_data.get('animate_secondary_contributions', False)
+        self.animate_final_day_temp_distribution = self.config_data.get('animate_final_day_temp_distribution', True)
 
-        ################ END OF USER INPUTS ################
+        # Debugging
+        self.calculate_energy_terms = self.config_data.get('calculate_energy_terms', False)
 
     def validate_jobs(self):
         """
