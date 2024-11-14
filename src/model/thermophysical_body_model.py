@@ -45,7 +45,7 @@ from src.model.temperature_solver import (
     iterative_temperature_solver,
     calculate_initial_temperatures
 )
-from src.utilities.plotting.animate_model import check_remote_and_animate
+from src.utilities.plotting.plotting import check_remote_and_animate
 
 def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
     ''' 
@@ -227,7 +227,7 @@ def main(silent_mode=False):
     config = Config()
 
     # Load setup parameters from JSON file
-    simulation = Simulation(config.path_to_setup_file)
+    simulation = Simulation(config)
 
     # Setup simulation
     shape_model = read_shape_model(config.path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)

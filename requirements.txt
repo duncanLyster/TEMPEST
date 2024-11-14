@@ -10,3 +10,4 @@ seaborn
 scikit-learn
 pyvista
 vtk
+pyyaml

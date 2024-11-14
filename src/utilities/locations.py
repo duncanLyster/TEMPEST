@@ -1,20 +1,24 @@
 import os
 
 class Locations:
-    def __init__(self, base_dir='TEMPEST'):
-        self.base_dir = base_dir
+    def __init__(self, base_dir=None):
+        # Dynamically get the absolute path to the root of the project
+        if base_dir is None:
+            self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        else:
+            self.base_dir = os.path.abspath(base_dir)
 
-        # Core directories
-        self.shape_models = os.path.join(self.base_dir, 'src', 'data', 'shape_models')
-        self.model_setups = os.path.join(self.base_dir, 'src', 'data', 'model_setups')
-        self.assets = os.path.join(self.base_dir, 'src', 'data', 'assets')
+        # Core directories (adjusted to reflect your actual project structure)
+        self.shape_models = os.path.join(self.base_dir, 'data', 'shape_models')
+        self.model_setups = os.path.join(self.base_dir, 'data', 'model_setups')
+        self.assets = os.path.join(self.base_dir, 'data', 'assets')
         self.outputs = os.path.join(self.base_dir, 'output')
 
         # Output directories
         self.remote_outputs = os.path.join(self.outputs, 'remote_outputs')
         self.phase_curve_data = os.path.join(self.outputs, 'visible_phase_curve_data')
         self.precalculated = os.path.join(self.outputs, 'precalculated')
-        
+
         # Precomputed data directories
         self.view_factors = os.path.join(self.precalculated, 'view_factors')
         self.visible_facets = os.path.join(self.precalculated, 'visible_facets')
