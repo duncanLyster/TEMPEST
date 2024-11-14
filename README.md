@@ -1,4 +1,4 @@
-![TEMPEST Banner](src/resources/documentation/banner.jpg)
+![TEMPEST Banner](resources/documentation/banner.jpg)
 
 # Thermophysical Body Model Simulation Script
 This Python script simulates diurnal temperature variations of a solar system body based on a given shape model. Initially designed for ESAs Comet Interceptor Mission planning as part of my research at the University of Oxford, it's adaptable for asteroids and other planetary bodies like Enceladus' surface fractures. As of 14 November 2024 it is stable and a range of test shape models converge well, but it is still under development to improve ease of use, computation speed, and validity in a wider range of parameter spaces. 
