@@ -1,0 +1,68 @@
+# General settings
+silent_mode: false  # If true, suppresses most console output
+remote: false       # Set to true when running on a remote server/cluster
+
+# File paths
+shape_model_file: "67P_not_to_scale_low_res.stl"  # Name of the shape model file in data/shape_models/
+
+# Performance settings
+n_jobs: 4          # Number of CPU cores to use for parallel processing (default: 4, max: available cores)
+chunk_size: 100    # Number of facets to process in each parallel batch
+
+# Physical parameters
+emissivity: 0.9            # Surface emissivity (dimensionless, range: 0-1)
+albedo: 0.5               # Bond albedo (dimensionless, range: 0-1)
+thermal_conductivity: 6.67e-5  # Thermal conductivity in W/(m·K)
+density: 1000.0           # Material density in kg/m³
+specific_heat_capacity: 1500.0  # Specific heat capacity in J/(kg·K)
+beaming_factor: 1.0       # Thermal beaming parameter (dimensionless, typically 0.7-1.3)
+
+# Model structure parameters
+n_layers: 45              # Number of depth layers in thermal model
+convergence_method: "mean"  # Method to determine convergence: 'mean' or 'max' temperature difference between days
+convergence_target: 0.01   # Target temperature difference between days for convergence in K
+max_days: 20              # Maximum number of days to run simulation
+min_days: 1               # Minimum number of days to run simulation
+
+# Orbital and rotational parameters
+solar_distance_au: 9.0     # Distance from Sun in astronomical units
+solar_luminosity: 3.86420167e+26  # Solar luminosity in watts
+sunlight_direction: [1, 0, 0]  # Direction vector of sunlight
+rotation_period_hours: 10.0  # Rotation period in hours
+ra_degrees: 0             # Right ascension of rotation axis in degrees
+dec_degrees: 90           # Declination of rotation axis in degrees
+
+# Advanced modelling options
+include_shadowing: true     # Recommended to keep this as True for most cases
+n_scatters: 2              # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
+include_self_heating: false # Whether to include thermal radiation between facets
+apply_roughness: false      # Whether to apply sub-facet scale roughness
+subdivision_levels: 3       # Number of levels for roughness model subdivision
+displacement_factors: [0.05, 0.1, 0.5]  # Displacement factors for each subdivision level (range: 0-1)
+vf_rays: 1000              # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
+
+# Analysis options
+calculate_visible_phase_curve: true   # Whether to calculate visible light phase curve
+calculate_thermal_phase_curve: true   # Whether to calculate thermal phase curve
+
+# Plotting settings
+plotted_facet_index: 1220  # Index of facet to plot detailed temperature evolution
+plot_insolation_curve: false
+plot_initial_temp_histogram: false
+plot_final_day_all_layers_temp_distribution: false
+plot_energy_terms: false
+plot_final_day_comparison: false
+show_visible_phase_curve: true
+save_visible_phase_curve_data: true
+show_thermal_phase_curve: false
+save_thermal_phase_curve_data: false
+
+# Animation settings
+animate_roughness_model: false
+animate_shadowing: false
+animate_secondary_radiation_view_factors: false
+animate_secondary_contributions: false
+animate_final_day_temp_distribution: true
+
+# Debugging settings
+calculate_energy_terms: false  # Whether to calculate and store detailed energy balance terms
