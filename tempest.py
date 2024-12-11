@@ -48,7 +48,6 @@ from src.utilities.utils import (
 )
 from src.model.view_factors import (
     calculate_and_cache_visible_facets,
-    calculate_all_view_factors_parallel,
     calculate_all_view_factors
 )
 from src.model.temperature_solver import (
@@ -295,20 +294,9 @@ def main(silent_mode=False):
         facet.visible_facets = visible_indices[i]   
         
     if config.include_self_heating or config.n_scatters > 0:
-
         calculate_view_factors_start = time.time()
-
-        if config.n_jobs == 1:
-            # Use serial version
-            conditional_print(silent_mode, "Calculating view factors...")
-            all_view_factors = calculate_all_view_factors(shape_model, thermal_data, simulation, config, config.vf_rays)
-        else:
-            # Use parallel version
-            actual_n_jobs = config.validate_jobs()
-            all_view_factors = calculate_all_view_factors_parallel(shape_model, thermal_data, config, config.vf_rays)
-
+        all_view_factors = calculate_all_view_factors(shape_model, thermal_data, config, config.vf_rays)
         calculate_view_factors_end = time.time()
-
         conditional_print(silent_mode, f"Time taken to calculate view factors: {calculate_view_factors_end - calculate_view_factors_start:.2f} seconds")
         
         thermal_data.set_secondary_radiation_view_factors(all_view_factors)
