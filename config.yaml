@@ -35,10 +35,15 @@ dec_degrees: 90           # Declination of rotation axis in degrees
 include_shadowing: true     # Recommended to keep this as True for most cases
 n_scatters: 2              # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
 include_self_heating: false # Whether to include thermal radiation between facets
-roughness_scheme: "lambertian" # "lambertian" is only option currently supported
+scattering_lut: "lambertian.npy" # Name of the scattering lookup table, lambertian is the only option currently supported
+emmission_lut: "lambertian.npy" # Name of the emmission lookup table, lambertian is the only option currently supported
+
+# Outdated roughness settings
+roughness_scheme: "lambertian" # "lambertian" is only option currently supported 
 apply_roughness: false      # Whether to apply sub-facet scale roughness
 subdivision_levels: 3       # Number of levels for roughness model subdivision
 displacement_factors: [0.05, 0.1, 0.5]  # Displacement factors for each subdivision level (range: 0-1)
+
 vf_rays: 1000              # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
 
 # Analysis options

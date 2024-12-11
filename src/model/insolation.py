@@ -1,3 +1,5 @@
+# src/model/insolation.py
+
 '''
 This module calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
 '''
@@ -12,6 +14,7 @@ from src.utilities.utils import (
     rays_triangles_intersection,
     calculate_rotation_matrix
 )   
+from src.model.scattering import BRDFLookupTable
 
 def calculate_insolation(thermal_data, shape_model, simulation, config):
     ''' 
@@ -64,20 +67,11 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
             thermal_data.insolation[i, t] = insolation
 
     if config.n_scatters > 0:
-        conditional_print(config.silent_mode,  f"Applying light scattering with {config.n_scatters} iterations...")
-
+        conditional_print(config.silent_mode, f"Applying light scattering with {config.n_scatters} iterations...")
         scattering_start = time.time()
-        
-        if config.n_jobs == 1:
-            # Run without parallelisation
-            thermal_data = apply_scattering(thermal_data, shape_model, simulation, config)
-        else:
-            # Run with parallelisation
-            thermal_data = apply_scattering_parallel(thermal_data, shape_model, simulation, config)
-
+        thermal_data = apply_scattering(thermal_data, shape_model, simulation, config)
         scattering_end = time.time()
-
-        conditional_print(config.silent_mode,  f"Time taken to apply light scattering: {scattering_end - scattering_start:.2f} seconds")
+        conditional_print(config.silent_mode, f"Time taken to apply light scattering: {scattering_end - scattering_start:.2f} seconds")
 
     return thermal_data
 
@@ -107,37 +101,6 @@ def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vert
         
     return 1 # The facet is not in shadow
 
-def apply_scattering(thermal_data, shape_model, simulation, config):
-    original_insolation = thermal_data.insolation.copy()
-    total_scattered_light = np.zeros_like(original_insolation)
-    
-    for iteration in range(config.n_scatters):
-        conditional_print(config.silent_mode,  f"Scattering iteration {iteration + 1} of {config.n_scatters}...")
-        
-        if iteration == 0:
-            input_light = original_insolation
-        else:
-            input_light = scattered_light
-        
-        scattered_light = np.zeros_like(original_insolation)
-
-        for i, facet in enumerate(shape_model):
-            for t in range(simulation.timesteps_per_day):
-                current_light = input_light[i, t]
-                
-                if current_light > 0:
-                    visible_facets = thermal_data.visible_facets[i]
-                    view_factors = thermal_data.secondary_radiation_view_factors[i]
-                    
-                    for vf_index, vf in zip(visible_facets, view_factors):
-                        scattered_light[vf_index, t] += current_light * vf * (simulation.albedo) / np.pi
-
-        total_scattered_light += scattered_light
-    
-    thermal_data.insolation = original_insolation + total_scattered_light
-    
-    return thermal_data
-
 def process_scattering_chunk(start_idx, end_idx, input_light, visible_facets_list, 
                            view_factors_list, timesteps_per_day, albedo):
     """
@@ -159,22 +122,25 @@ def process_scattering_chunk(start_idx, end_idx, input_light, visible_facets_lis
                     
     return chunk_scattered_light
 
-def apply_scattering_parallel(thermal_data, shape_model, simulation, config):
+def apply_scattering(thermal_data, shape_model, simulation, config):
     """
-    Parallel version of apply_scattering that only passes numpy arrays between processes.
+    Apply scattering using BRDF lookup tables. Works with any number of jobs (including 1).
     """
+    # Initialize BRDF lookup table
+    brdf_lut = BRDFLookupTable(config.scattering_lut)
+    
     original_insolation = thermal_data.insolation.copy()
     total_scattered_light = np.zeros_like(original_insolation)
     n_facets = len(shape_model)
     
-    # Convert Numba typed lists to regular Python lists of numpy arrays
+    # Convert lists to numpy arrays
     visible_facets_list = [np.array(x) for x in thermal_data.visible_facets]
     view_factors_list = [np.array(x) for x in thermal_data.secondary_radiation_view_factors]
     
-    # Validate and get actual number of jobs to use
+    # Get number of jobs
     actual_n_jobs = config.validate_jobs()
     
-    # Calculate chunk size if not specified
+    # Calculate chunk size
     if config.chunk_size <= 0:
         # Aim for at least 4 chunks per core
         config.chunk_size = max(1, n_facets // (actual_n_jobs * 4))

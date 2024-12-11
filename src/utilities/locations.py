@@ -43,6 +43,9 @@ class Locations:
         
     def get_config_path(self):
         return self.config
+
+    def get_scattering_lut_path(self, filename):
+        return os.path.join(self.assets, 'scattering_luts', filename)
     
     def ensure_directories_exist(self):
         """

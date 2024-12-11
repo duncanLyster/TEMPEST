@@ -43,6 +43,8 @@ class Config:
         self.vf_rays = self.config_data.get('vf_rays', 100)
         self.calculate_visible_phase_curve = self.config_data.get('calculate_visible_phase_curve', True)
         self.calculate_thermal_phase_curve = self.config_data.get('calculate_thermal_phase_curve', True)
+        self.scattering_lut = self.config_data.get('scattering_lut', 'lambertian.npy')
+        self.emmission_lut = self.config_data.get('emmission_lut', 'lambertian.npy')
 
         # Plotting settings
         self.plotted_facet_index = self.config_data.get('plotted_facet_index', 1220)
