@@ -8,6 +8,8 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from src.utilities.utils import conditional_print, conditional_tqdm, calculate_black_body_temp
 from src.utilities.plotting.plotting import check_remote_and_animate
+from src.utilities.locations import Locations
+import os
 
 @jit(nopython=True)
 def calculate_temperatures(temperature, insolation, visible_facets_list, view_factors_list, 

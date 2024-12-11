@@ -13,7 +13,7 @@ class Config:
         self.locations = Locations()
         
         # Load configuration from YAML file
-        config_file_path = self.locations.get_setup_file_path("config.yaml")
+        config_file_path = self.locations.get_config_path()
         with open(config_file_path, 'r') as file:
             self.config_data = yaml.safe_load(file)
         

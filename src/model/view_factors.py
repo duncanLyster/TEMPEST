@@ -9,6 +9,7 @@ import time
 import numpy as np
 from numba import jit
 from joblib import Parallel, delayed
+from src.utilities.locations import Locations
 from src.utilities.utils import (
     rays_triangles_intersection,
     normalize_vector,
@@ -208,8 +209,9 @@ def eliminate_obstructed_facets_parallel(positions, shape_model_vertices, potent
     return all_unobstructed_facets
 
 def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, normals, vertices, config):
+    locations = Locations()
     shape_model_hash = get_shape_model_hash(shape_model)
-    visible_facets_filename = get_visible_facets_filename(shape_model_hash)
+    visible_facets_filename = locations.get_visible_facets_path(shape_model_hash)
 
     ################## Calculate/load visible facets ##################
 
@@ -342,7 +344,8 @@ def calculate_all_view_factors_parallel(shape_model, thermal_data, config, n_ray
     Now includes detailed progress tracking.
     """
     shape_model_hash = get_shape_model_hash(shape_model)
-    view_factors_filename = get_view_factors_filename(shape_model_hash)
+    locations = Locations()
+    view_factors_filename = locations.get_view_factors_path(shape_model_hash)
 
     # Try to load existing view factors first
     if os.path.exists(view_factors_filename):
@@ -400,8 +403,10 @@ def calculate_all_view_factors_parallel(shape_model, thermal_data, config, n_ray
                 conditional_print(config.silent_mode, f"View factors: {warning['view_factors']}")
                 conditional_print(config.silent_mode, f"Visible facets: {warning['visible_facets']}")
         
+        # Ensure the directory exists before saving the file
+        os.makedirs(locations.view_factors, exist_ok=True)
+
         # Save the calculated view factors
-        os.makedirs("view_factors", exist_ok=True)
         np.savez_compressed(view_factors_filename, 
                            view_factors=np.array(all_view_factors, dtype=object))
         
@@ -418,7 +423,8 @@ def calculate_all_view_factors(shape_model, thermal_data, simulation, config, n_
     all_view_factors = []
     
     shape_model_hash = get_shape_model_hash(shape_model)
-    view_factors_filename = get_view_factors_filename(shape_model_hash)
+    locations = Locations()
+    view_factors_filename = locations.get_view_factors_path(shape_model_hash)
 
     if os.path.exists(view_factors_filename):
         with np.load(view_factors_filename, allow_pickle=True) as data:
@@ -448,7 +454,7 @@ def calculate_all_view_factors(shape_model, thermal_data, simulation, config, n_
             all_view_factors.append(view_factors)
 
         # Save the calculated view factors
-        os.makedirs("view_factors", exist_ok=True)
+        os.makedirs(locations.view_factors, exist_ok=True)
         np.savez_compressed(view_factors_filename, view_factors=np.array(all_view_factors, dtype=object))
 
     return all_view_factors
