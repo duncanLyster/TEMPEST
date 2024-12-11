@@ -8,11 +8,13 @@ class Locations:
         else:
             self.base_dir = os.path.abspath(base_dir)
 
-        # Core directories (adjusted to reflect your actual project structure)
-        self.shape_models = os.path.join(self.base_dir, 'data', 'shape_models')
-        self.model_setups = os.path.join(self.base_dir, 'data', 'model_setups')
-        self.assets = os.path.join(self.base_dir, 'data', 'assets')
+        # Core directories
+        self.data_dir = os.path.join(self.base_dir, 'data')
+        self.shape_models = os.path.join(self.data_dir, 'shape_models')
+        self.model_setups = os.path.join(self.data_dir, 'model_setups')
+        self.assets = os.path.join(self.data_dir, 'assets')
         self.outputs = os.path.join(self.base_dir, 'output')
+        self.config = os.path.join(self.base_dir, 'config.yaml')
 
         # Output directories
         self.remote_outputs = os.path.join(self.outputs, 'remote_outputs')
@@ -38,6 +40,9 @@ class Locations:
     
     def get_output_path(self, filename):
         return os.path.join(self.outputs, filename)
+        
+    def get_config_path(self):
+        return self.config
     
     def ensure_directories_exist(self):
         """

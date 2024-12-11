@@ -37,6 +37,7 @@ from datetime import datetime
 
 # Import modules from src
 from src.model.calculate_phase_curve import calculate_phase_curve
+from src.utilities.locations import Locations
 from src.model.insolation import calculate_insolation
 from src.model.simulation import Simulation, ThermalData
 from src.model.facet import Facet
@@ -629,11 +630,10 @@ def main(silent_mode=False):
 
     # Save the visible phase curve data to a CSV file
     if config.save_visible_phase_curve_data:
-        output_dir = 'visible_phase_curve_data'
-        os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+        locations = Locations()
         # Create name using shape model name, roughness parameters, and time
         filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
-        output_csv_path = os.path.join(output_dir, f'{filename}_{config.subdivision_levels}_{config.displacement_factors}_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+        output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_{config.subdivision_levels}_{config.displacement_factors}_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
         df = pd.DataFrame({
             'Phase Angle (degrees)': phase_angles,
             'Brightness Value': brightness_values
@@ -668,10 +668,10 @@ def main(silent_mode=False):
 
     # Save the thermal phase curve data to a CSV file
     if config.save_thermal_phase_curve_data:
-        output_dir = 'thermal_phase_curve_data'
-        os.makedirs(output_dir, exist_ok=True)  # Create the directory if it doesn't exist
+        locations = Locations()
+        # Create name using shape model name, roughness parameters, and time
         filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
-        output_csv_path = os.path.join(output_dir, f'{filename}_{config.subdivision_levels}_{config.displacement_factors}_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+        output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_{config.subdivision_levels}_{config.displacement_factors}_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
         df = pd.DataFrame({
             'Phase Angle (degrees)': phase_angles,
             'Brightness Value': brightness_values
