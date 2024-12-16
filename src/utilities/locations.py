@@ -12,7 +12,7 @@ class Locations:
         self.data_dir = os.path.join(self.base_dir, 'data')
         self.shape_models = os.path.join(self.data_dir, 'shape_models')
         self.model_setups = os.path.join(self.data_dir, 'model_setups')
-        self.assets = os.path.join(self.data_dir, 'assets')
+        self.scattering_luts = os.path.join(self.data_dir, 'scattering_luts')
         self.outputs = os.path.join(self.base_dir, 'output')
         self.config = os.path.join(self.base_dir, 'config.yaml')
 
@@ -45,14 +45,14 @@ class Locations:
         return self.config
 
     def get_scattering_lut_path(self, filename):
-        return os.path.join(self.assets, 'scattering_luts', filename)
+        return os.path.join(self.scattering_luts, filename)
     
     def ensure_directories_exist(self):
         """
         Ensure that all necessary directories exist.
         """
         dirs = [
-            self.shape_models, self.model_setups, self.assets, self.outputs,
+            self.shape_models, self.model_setups, self.scattering_luts, self.outputs,
             self.remote_outputs, self.phase_curve_data, self.precalculated,
             self.view_factors, self.visible_facets, self.other_cached_data
         ]

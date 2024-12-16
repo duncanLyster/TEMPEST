@@ -2,6 +2,8 @@
 
 '''
 This module calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
+
+NOTE: Currently this requires a lot of RAM - look for ways to reduce this and check if it's the main bottleneck in the code.
 '''
 
 import time
@@ -15,6 +17,7 @@ from src.utilities.utils import (
     calculate_rotation_matrix
 )   
 from src.model.scattering import BRDFLookupTable
+from tqdm import tqdm
 
 def calculate_insolation(thermal_data, shape_model, simulation, config):
     ''' 
@@ -59,7 +62,7 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
                 if len(facet.visible_facets) != 0 and config.include_shadowing:
                     illumination_factor = calculate_shadowing(np.array(facet.position), np.array([rotated_sunlight_directions[t]]), shape_model_vertices, thermal_data.visible_facets[i])
                 
-                # Calculate insolation
+                # Calculate insolation TODO: Add BRDF dependence to albedo calculation 
                 insolation = simulation.solar_luminosity * (1 - simulation.albedo) * illumination_factor * cos_zenith_angle / (4 * np.pi * simulation.solar_distance_m**2)
             else:
                 insolation = 0
@@ -69,7 +72,8 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     if config.n_scatters > 0:
         conditional_print(config.silent_mode, f"Applying light scattering with {config.n_scatters} iterations...")
         scattering_start = time.time()
-        thermal_data = apply_scattering(thermal_data, shape_model, simulation, config)
+        thermal_data = apply_scattering(thermal_data, shape_model, simulation, config, 
+                                      rotation_matrices, rotated_sunlight_directions)
         scattering_end = time.time()
         conditional_print(config.silent_mode, f"Time taken to apply light scattering: {scattering_end - scattering_start:.2f} seconds")
 
@@ -101,28 +105,108 @@ def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vert
         
     return 1 # The facet is not in shadow
 
+def calculate_brdf_values(shape_model, rotation_matrices, rotated_sunlight_directions, brdf_lut, start_idx, end_idx, visible_facets_list):
+    """
+    Calculate BRDF values for a chunk of facets.
+    Returns array of shape (n_facets_in_chunk, n_visible_facets, timesteps_per_day)
+    """
+    n_timesteps = len(rotation_matrices)
+    brdf_values = {}  # Dictionary to store BRDF values for each facet pair
+    
+    for i in range(start_idx, end_idx):
+        normal_i = shape_model[i].normal
+        position_i = shape_model[i].position
+        visible_facets = visible_facets_list[i]
+        
+        brdf_values[i] = np.zeros((len(visible_facets), n_timesteps))
+        
+        for t in range(n_timesteps):
+            # Rotate source facet normal and position
+            rotated_normal_i = np.dot(rotation_matrices[t], normal_i)
+
+            # Check if facet is illuminated by sun
+            sun_cos = np.dot(rotated_sunlight_directions[t], rotated_normal_i)
+            
+            if sun_cos <= 0:  # Sun is below horizon for this facet
+                continue
+
+            # Calculate incidence angle from sun direction
+            inc = np.arccos(np.clip(np.dot(rotated_sunlight_directions[t], rotated_normal_i), -1.0, 1.0))
+            inc_deg = np.degrees(inc)
+
+            rotated_position_i = np.dot(rotation_matrices[t], position_i)
+            
+            for j, target_idx in enumerate(visible_facets):
+                # Get target facet properties
+                normal_j = shape_model[target_idx].normal
+                position_j = shape_model[target_idx].position
+                
+                # Rotate target facet normal and position
+                rotated_normal_j = np.dot(rotation_matrices[t], normal_j)
+                rotated_position_j = np.dot(rotation_matrices[t], position_j)
+                
+                # Calculate vector from source to target facet
+                direction_vector = rotated_position_j - rotated_position_i
+                direction_vector /= np.linalg.norm(direction_vector)
+                
+                # Calculate emission angle (angle between normal and direction to target)
+                em = np.arccos(np.clip(np.dot(rotated_normal_i, direction_vector), -1.0, 1.0))
+                em_deg = np.degrees(em)
+                
+                # Calculate azimuth angle
+                # Project both the sun vector and the direction vector onto the plane perpendicular to the normal
+                sun_projected = rotated_sunlight_directions[t] - np.dot(rotated_sunlight_directions[t], rotated_normal_i) * rotated_normal_i
+                direction_projected = direction_vector - np.dot(direction_vector, rotated_normal_i) * rotated_normal_i
+                
+                # Normalize the projected vectors
+                sun_projected /= np.linalg.norm(sun_projected)
+                direction_projected /= np.linalg.norm(direction_projected)
+                
+                # Calculate azimuth angle between the projected vectors
+                az = np.arccos(np.clip(np.dot(sun_projected, direction_projected), -1.0, 1.0))
+                az_deg = np.degrees(az)
+                
+                # Look up BRDF value
+                brdf_values[i][j, t] = brdf_lut.query(inc_deg, em_deg, az_deg)
+    
+    return brdf_values
+
 def process_scattering_chunk(start_idx, end_idx, input_light, visible_facets_list, 
-                           view_factors_list, timesteps_per_day, albedo):
+                           view_factors_list, timesteps_per_day, albedo, iteration,
+                           brdf_lut=None, shape_model=None, rotation_matrices=None, 
+                           rotated_sunlight_directions=None):
     """
     Process a chunk of facets for scattering calculation.
-    Only accepts raw numpy arrays and basic Python types.
     """
     chunk_scattered_light = np.zeros_like(input_light)
+    
+    # Only calculate BRDF on first iteration
+    if iteration == 0 and brdf_lut is not None:
+        brdf_values = calculate_brdf_values(
+            shape_model, rotation_matrices, rotated_sunlight_directions,
+            brdf_lut, start_idx, end_idx, visible_facets_list
+        )
+    else:
+        brdf_values = None  # Use default Lambertian scattering for subsequent iterations
     
     for i in range(start_idx, end_idx):
         visible_facets = visible_facets_list[i]
         view_factors = view_factors_list[i]
-        
+
         for t in range(timesteps_per_day):
             current_light = input_light[i, t]
             
             if current_light > 0:
-                for vf_index, vf in zip(visible_facets, view_factors):
-                    chunk_scattered_light[vf_index, t] += current_light * vf * albedo / np.pi
+                for j, (vf_idx, vf) in enumerate(zip(visible_facets, view_factors)):
+                    brdf = brdf_values[i][j, t] if brdf_values is not None else 1.0
+                    chunk_scattered_light[vf_idx, t] += (
+                        brdf * current_light * vf * albedo / np.pi
+                    )
                     
     return chunk_scattered_light
 
-def apply_scattering(thermal_data, shape_model, simulation, config):
+def apply_scattering(thermal_data, shape_model, simulation, config, 
+                    rotation_matrices, rotated_sunlight_directions):
     """
     Apply scattering using BRDF lookup tables. Works with any number of jobs (including 1).
     """
@@ -137,47 +221,47 @@ def apply_scattering(thermal_data, shape_model, simulation, config):
     visible_facets_list = [np.array(x) for x in thermal_data.visible_facets]
     view_factors_list = [np.array(x) for x in thermal_data.secondary_radiation_view_factors]
     
-    # Get number of jobs
+    # Get number of jobs and create chunks
     actual_n_jobs = config.validate_jobs()
     
-    # Calculate chunk size
     if config.chunk_size <= 0:
-        # Aim for at least 4 chunks per core
         config.chunk_size = max(1, n_facets // (actual_n_jobs * 4))
     
-    # Create chunks
-    n_chunks = (n_facets + config.chunk_size - 1) // config.chunk_size
     chunks = [(i * config.chunk_size, min((i + 1) * config.chunk_size, n_facets)) 
-             for i in range(n_chunks)]
+             for i in range((n_facets + config.chunk_size - 1) // config.chunk_size)]
     
     for iteration in range(config.n_scatters):
-        conditional_print(config.silent_mode, 
-                        f"Scattering iteration {iteration + 1} of {config.n_scatters} "
-                        f"using {actual_n_jobs} parallel jobs...")
-        
         if iteration == 0:
             input_light = original_insolation
         else:
             input_light = scattered_light
         
-        # Process chunks in parallel, passing only numpy arrays and basic Python types
-        chunk_results = Parallel(n_jobs=actual_n_jobs, verbose=1)(
+        # Create parallel executor
+        parallel = Parallel(n_jobs=actual_n_jobs, verbose=0)
+        delayed_funcs = [
             delayed(process_scattering_chunk)(
                 start_idx, end_idx,
                 input_light,
                 visible_facets_list,
                 view_factors_list,
                 simulation.timesteps_per_day,
-                simulation.albedo
+                simulation.albedo, 
+                iteration,
+                brdf_lut if iteration == 0 else None,
+                shape_model if iteration == 0 else None,
+                rotation_matrices if iteration == 0 else None,
+                rotated_sunlight_directions if iteration == 0 else None
             )
             for start_idx, end_idx in chunks
-        )
+        ]
         
-        # Combine results from all chunks
+        # Process chunks with real-time progress bar
         scattered_light = np.zeros_like(original_insolation)
-        for chunk_result in chunk_results:
-            scattered_light += chunk_result
-            
+        with tqdm(total=len(chunks), desc=f"Iteration {iteration + 1}/{config.n_scatters}") as pbar:
+            for chunk_result in parallel(delayed_funcs):
+                scattered_light += chunk_result
+                pbar.update(1)
+                
         total_scattered_light += scattered_light
     
     thermal_data.insolation = original_insolation + total_scattered_light

@@ -9,14 +9,11 @@ class BRDFLookupTable:
     def __init__(self, lut_name):
         locations = Locations()
         self.lut_path = locations.get_scattering_lut_path(lut_name)
-        self.initialized = False
         
-        try:
-            if not os.path.exists(self.lut_path):
-                print(f"Warning: LUT file not found at {self.lut_path}")
-                print("Continuing without BRDF lookup table...")
-                return
+        if not os.path.exists(self.lut_path):
+            raise FileNotFoundError(f"BRDF lookup table not found at {self.lut_path}")
                 
+        try:
             # Load the LUT and angle arrays
             lut_data = np.load(self.lut_path, allow_pickle=True).item()
             
@@ -24,17 +21,11 @@ class BRDFLookupTable:
             self.incidence_angles = lut_data['incidence_angles']
             self.emission_angles = lut_data['emission_angles']
             self.azimuth_angles = lut_data['azimuth_angles']
-            self.initialized = True
             
         except Exception as e:
-            print(f"Warning: Failed to initialize BRDF lookup table: {str(e)}")
-            print("Continuing without BRDF lookup table...")
+            raise RuntimeError(f"Failed to initialize BRDF lookup table: {str(e)}")
             
     def query(self, inc, em, az):
-        if not self.initialized:
-            # Return lambertian BRDF value if LUT not initialized
-            return 1.0 / np.pi
-            
         # Ensure angles are within bounds
         az = az % 180  # Use symmetry
         
@@ -45,7 +36,7 @@ class BRDFLookupTable:
         
         # Perform trilinear interpolation
         return self._interpolate(inc, em, az, i, e, a)
-        
+    
     def _interpolate(self, inc, em, az, i, e, a):
         """Implementation of trilinear interpolation.
         

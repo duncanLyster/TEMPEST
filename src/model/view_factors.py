@@ -13,13 +13,9 @@ from src.utilities.locations import Locations
 from src.utilities.utils import (
     rays_triangles_intersection,
     normalize_vector,
-    normalize_vectors,
     random_points_in_triangle,
     conditional_print,
-    conditional_tqdm,
-    get_shape_model_hash,
-    get_view_factors_filename,
-    get_visible_facets_filename
+    get_shape_model_hash
 )
 
 @jit(nopython=True)
