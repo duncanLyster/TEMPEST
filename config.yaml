@@ -64,7 +64,7 @@ save_thermal_phase_curve_data: false
 
 # Animation settings
 animate_roughness_model: false
-animate_shadowing: true
+animate_shadowing: false
 animate_secondary_radiation_view_factors: false
 animate_secondary_contributions: false
 animate_final_day_temp_distribution: false
