@@ -610,10 +610,11 @@ def main(silent_mode=False):
             shape_model,
             simulation,
             thermal_data,
+            config,
             phase_curve_type='visible',
-            observer_distance=1e6,
-            normalized=False,
-            plot=config.show_visible_phase_curve
+            observer_distance=1e9,
+            normalized=True,
+            plot=True
         )
 
     # Save the visible phase curve data to a CSV file
@@ -648,6 +649,7 @@ def main(silent_mode=False):
             shape_model,
             simulation,
             thermal_data,
+            config,
             phase_curve_type='thermal',
             observer_distance=1e8,
             normalized=False,
