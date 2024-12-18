@@ -188,3 +188,36 @@ def calculate_rotation_matrix(axis, theta):
     return np.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
                         [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
+
+def calculate_emission_angles(source_facet, target_facets):
+    """
+    Calculate emission angles between a source facet and target facets.
+    
+    Args:
+        source_facet: The facet emitting radiation
+        target_facets: List of facets receiving radiation
+        
+    Returns:
+        numpy array of emission angles in degrees
+    """
+    source_normal = source_facet.normal
+    source_position = source_facet.center
+    
+    # Convert list of facets to numpy arrays of centers
+    target_centers = np.array([facet.center for facet in target_facets])
+    
+    # Calculate vectors from source to target facets
+    direction_vectors = target_centers - source_position
+    
+    # Normalize the direction vectors
+    norms = np.linalg.norm(direction_vectors, axis=1)
+    direction_vectors /= norms[:, np.newaxis]
+    
+    # Calculate cosine of emission angles using dot product
+    cos_emission = np.einsum('ij,j->i', direction_vectors, source_normal)
+    
+    # Convert to angles in degrees, ensuring values are within valid range
+    cos_emission = np.clip(cos_emission, -1.0, 1.0)
+    emission_angles = np.degrees(np.arccos(cos_emission))
+    
+    return emission_angles

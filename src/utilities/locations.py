@@ -25,6 +25,7 @@ class Locations:
         self.view_factors = os.path.join(self.precalculated, 'view_factors')
         self.visible_facets = os.path.join(self.precalculated, 'visible_facets')
         self.other_cached_data = os.path.join(self.outputs, 'other_cached_data')
+        self.thermal_view_factors = os.path.join(self.data_dir, 'thermal_view_factors')
 
     def get_shape_model_path(self, filename):
         return os.path.join(self.shape_models, filename)
@@ -58,3 +59,11 @@ class Locations:
         ]
         for directory in dirs:
             os.makedirs(directory, exist_ok=True)
+
+    def get_emission_lut_path(self, lut_name):
+        """Get the path to an emission LUT file."""
+        return os.path.join(self.data_dir, 'emission_luts', lut_name)
+
+    def get_thermal_view_factors_path(self, shape_model_hash):
+        """Get the path for cached thermal view factors."""
+        return os.path.join(self.thermal_view_factors, f'thermal_view_factors_{shape_model_hash}.npz')

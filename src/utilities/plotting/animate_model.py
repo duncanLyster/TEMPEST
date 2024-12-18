@@ -18,6 +18,12 @@ import math
 import matplotlib.pyplot as plt
 import gc
 import numpy as np
+import datetime
+import os
+import pandas as pd
+from matplotlib.widgets import Button
+from src.utilities.locations import Locations
+from src.utilities.utils import conditional_print
 
 class AnimationState:
     def __init__(self):
@@ -40,6 +46,7 @@ class AnimationState:
         self.initial_camera_position = None
         self.initial_camera_focal_point = None
         self.initial_camera_up = None
+        self.shape_model_name = None
 
 def get_next_color(state):
     color = state.color_cycle[state.color_index % len(state.color_cycle)]
@@ -124,9 +131,49 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
             plt.ion()
             state.fig, state.ax = plt.subplots()
 
+            def on_key(event):
+                if event.key == 'd':  # Changed from 's' to 'd' for "download"
+                    try:
+                        # Get the output directory using Locations class
+                        locations = Locations()
+                        
+                        # Create base directory for user saved data
+                        user_data_dir = os.path.join(locations.outputs, 'user_saved_data')
+                        os.makedirs(user_data_dir, exist_ok=True)
+                        
+                        # Get or create run-specific directory using shape model name and timestamp
+                        if not hasattr(state, 'run_folder'):
+                            model_name = os.path.splitext(os.path.basename(state.shape_model_name))[0]
+                            timestamp = time.strftime('%d-%m-%Y_%H-%M-%S')
+                            state.run_folder = f"{model_name}_{timestamp}"
+                        
+                        run_dir = os.path.join(user_data_dir, state.run_folder)
+                        os.makedirs(run_dir, exist_ok=True)
+                            
+                        # Prepare data dictionary
+                        data = {}
+                        time_steps = [i / state.timesteps_per_day for i in range(plotted_variable_array.shape[1])]
+                        
+                        for facet_id in state.highlighted_cell_ids:
+                            data[f'Facet_{facet_id}'] = plotted_variable_array[facet_id, :]
+                        
+                        # Create DataFrame
+                        df = pd.DataFrame(data, index=time_steps)
+                        df.index.name = 'Time (fraction of day)'
+                        
+                        # Save to CSV with timestamp only
+                        timestamp = datetime.datetime.now().strftime("%H%M%S")
+                        filename = os.path.join(run_dir, f'facet_data_{timestamp}.csv')
+                        df.to_csv(filename)
+                        conditional_print(False, f"Data saved to {filename}")
+                        
+                    except Exception as e:
+                        print(f"Error saving data: {e}")
+
+            state.fig.canvas.mpl_connect('key_press_event', on_key)
             state.ax.set_xlabel("Fractional angle of rotation")
             state.ax.set_ylabel(axis_label)
-            state.ax.set_title(f"{axis_label} Over Time for Selected Facets")
+            state.ax.set_title(f"{axis_label} Over Time for Selected Facets\nPress 'd' to save data")
 
         values_over_time = plotted_variable_array[cell_id, :]
         time_steps = [i / state.timesteps_per_day for i in range(len(values_over_time))]
@@ -218,6 +265,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     state = AnimationState()
     state.timesteps_per_day = timesteps_per_day
+    state.shape_model_name = path_to_shape_model_file
 
     start_time = time.time()
 

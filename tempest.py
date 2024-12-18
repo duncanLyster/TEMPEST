@@ -48,7 +48,8 @@ from src.utilities.utils import (
 )
 from src.model.view_factors import (
     calculate_and_cache_visible_facets,
-    calculate_all_view_factors
+    calculate_all_view_factors,
+    calculate_thermal_view_factors
 )
 from src.model.temperature_solver import (
     iterative_temperature_solver,
@@ -295,22 +296,27 @@ def main(silent_mode=False):
         
     if config.include_self_heating or config.n_scatters > 0:
         calculate_view_factors_start = time.time()
+        
+        # Calculate regular view factors for scattering
         all_view_factors = calculate_all_view_factors(shape_model, thermal_data, config, config.vf_rays)
+        
+        # Calculate thermal view factors if self-heating is enabled
+        if config.include_self_heating:
+            thermal_view_factors = calculate_thermal_view_factors(
+                shape_model,
+                thermal_data,
+                config
+            )
+            thermal_data.set_thermal_view_factors(thermal_view_factors)
+        
         calculate_view_factors_end = time.time()
         conditional_print(silent_mode, f"Time taken to calculate view factors: {calculate_view_factors_end - calculate_view_factors_start:.2f} seconds")
         
-        thermal_data.set_secondary_radiation_view_factors(all_view_factors)
-
+        # Convert to Numba lists
         numba_view_factors = List()
-        for view_factors in thermal_data.secondary_radiation_view_factors:
+        for view_factors in thermal_data.thermal_view_factors:
             numba_view_factors.append(np.array(view_factors, dtype=np.float64))
-        thermal_data.secondary_radiation_view_factors = numba_view_factors
-    else:
-        # Create an empty Numba List for view factors when self-heating is not included
-        numba_view_factors = List()
-        for _ in range(len(shape_model)):
-            numba_view_factors.append(np.array([], dtype=np.float64))
-        thermal_data.secondary_radiation_view_factors = numba_view_factors
+        thermal_data.thermal_view_factors = numba_view_factors
 
     thermal_data = calculate_insolation(thermal_data, shape_model, simulation, config)
 
