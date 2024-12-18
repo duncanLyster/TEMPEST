@@ -161,9 +161,10 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                         df = pd.DataFrame(data, index=time_steps)
                         df.index.name = 'Time (fraction of day)'
                         
-                        # Save to CSV with timestamp only
+                        # Create a valid filename from the axis label
+                        property_name = axis_label.lower().replace(' ', '_')
                         timestamp = datetime.datetime.now().strftime("%H%M%S")
-                        filename = os.path.join(run_dir, f'facet_data_{timestamp}.csv')
+                        filename = os.path.join(run_dir, f'{property_name}_vs_timestep_{timestamp}.csv')
                         df.to_csv(filename)
                         conditional_print(False, f"Data saved to {filename}")
                         
