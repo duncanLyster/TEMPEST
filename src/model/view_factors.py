@@ -244,3 +244,88 @@ def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
     except Exception as e:
         print(f"\nError during calculation: {str(e)}")
         raise
+
+class EPFLookupTable:
+    """Lookup table for emission phase function values."""
+    def __init__(self, filename):
+        data = np.load(filename)
+        self.angles = data['angles']
+        self.values = data['values']
+        
+    def query(self, angle):
+        """Get EPF value for a given emission angle."""
+        return np.interp(angle, self.angles, self.values)
+
+def calculate_thermal_view_factors(shape_model, thermal_data, config):
+    """Calculate thermal view factors by applying EPF values to existing view factors."""
+    # Initialize EPF lookup table here instead of in tempest.py
+    epf_lut = EPFLookupTable(config.emission_lut)
+    
+    shape_model_hash = get_shape_model_hash(shape_model)
+    locations = Locations()
+    thermal_vf_filename = locations.get_thermal_view_factors_path(shape_model_hash)
+
+    if os.path.exists(thermal_vf_filename):
+        with np.load(thermal_vf_filename, allow_pickle=True) as data:
+            conditional_print(config.silent_mode, "Loading existing thermal view factors...")
+            return list(data['thermal_view_factors'])
+
+    conditional_print(config.silent_mode, "Calculating thermal view factors...")
+    
+    actual_n_jobs = config.validate_jobs()
+    n_facets = len(shape_model)
+    
+    if config.chunk_size <= 0:
+        config.chunk_size = max(1, n_facets // (actual_n_jobs * 4))
+    
+    n_chunks = (n_facets + config.chunk_size - 1) // config.chunk_size
+    chunks = [(i * config.chunk_size, min((i + 1) * config.chunk_size, n_facets)) 
+             for i in range(n_chunks)]
+
+    try:
+        results = Parallel(n_jobs=actual_n_jobs, verbose=10, backend='loky')(
+            delayed(process_thermal_view_factors_chunk)(
+                shape_model, thermal_data, epf_lut, start_idx, end_idx
+            ) for start_idx, end_idx in chunks
+        )
+        
+        all_thermal_view_factors = []
+        for chunk_results in results:
+            all_thermal_view_factors.extend(chunk_results)
+        
+        os.makedirs(locations.thermal_view_factors, exist_ok=True)
+        np.savez_compressed(thermal_vf_filename, 
+                          thermal_view_factors=np.array(all_thermal_view_factors, dtype=object))
+        
+        return all_thermal_view_factors
+        
+    except Exception as e:
+        print(f"Error calculating thermal view factors: {str(e)}")
+        raise
+
+def process_thermal_view_factors_chunk(shape_model, thermal_data, epf_lut, start_idx, end_idx):
+    """Process a chunk of facets for thermal view factor calculation."""
+    chunk_results = []
+    
+    for i in range(start_idx, end_idx):
+        visible_facets = thermal_data.visible_facets[i]
+        view_factors = thermal_data.secondary_radiation_view_factors[i]
+        
+        if len(visible_facets) == 0:
+            chunk_results.append(np.array([]))
+            continue
+            
+        # Calculate emission angles
+        target_centers = np.array([shape_model[idx].center for idx in visible_facets])
+        direction_vectors = target_centers - shape_model[i].center
+        direction_vectors /= np.linalg.norm(direction_vectors, axis=1)[:, np.newaxis]
+        
+        cos_emission = np.einsum('ij,j->i', direction_vectors, shape_model[i].normal)
+        cos_emission = np.clip(cos_emission, -1.0, 1.0)
+        emission_angles = np.degrees(np.arccos(cos_emission))
+        
+        # Get EPF values and combine with view factors
+        epf_values = np.array([epf_lut.query(em) for em in emission_angles])
+        chunk_results.append(view_factors * epf_values)
+    
+    return chunk_results

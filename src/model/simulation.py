@@ -45,6 +45,7 @@ class ThermalData:
         self.insolation = np.zeros((n_facets, timesteps_per_day), dtype=np.float64)
         self.visible_facets = [np.array([], dtype=np.int64) for _ in range(n_facets)]
         self.secondary_radiation_view_factors = [np.array([], dtype=np.float64) for _ in range(n_facets)]
+        self.thermal_view_factors = [np.array([], dtype=np.float64) for _ in range(n_facets)]
 
         self.calculate_energy_terms = calculate_energy_terms
 
@@ -60,3 +61,7 @@ class ThermalData:
 
     def set_secondary_radiation_view_factors(self, view_factors):
         self.secondary_radiation_view_factors = [np.array(view_factor, dtype=np.float64) for view_factor in view_factors]
+        
+    def set_thermal_view_factors(self, view_factors):
+        """Set thermal view factors for all facets."""
+        self.thermal_view_factors = [np.array(view_factor, dtype=np.float64) for view_factor in view_factors]
