@@ -1,21 +1,20 @@
 import os
 
 class Locations:
-    def __init__(self, base_dir=None):
-        # Dynamically get the absolute path to the root of the project
-        if base_dir is None:
-            self.base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-        else:
-            self.base_dir = os.path.abspath(base_dir)
-
-        # Core directories
-        self.data_dir = os.path.join(self.base_dir, 'data')
-        self.shape_models = os.path.join(self.data_dir, 'shape_models')
-        self.model_setups = os.path.join(self.data_dir, 'model_setups')
-        self.scattering_luts = os.path.join(self.data_dir, 'scattering_luts')
-        self.outputs = os.path.join(self.base_dir, 'output')
-        self.config = os.path.join(self.base_dir, 'config.yaml')
-
+    def __init__(self):
+        self.project_root = self._find_project_root()
+        
+        # Base directories
+        self.data = os.path.join(self.project_root, "data")
+        self.private = os.path.join(self.project_root, "private")
+        
+        # Public data subdirectories
+        self.shape_models = os.path.join(self.data, "shape_models")
+        self.config = os.path.join(self.data, "config")
+        self.model_setups = os.path.join(self.data, "model_setups")
+        self.outputs = os.path.join(self.data, "output")
+        self.scattering_luts = os.path.join(self.data, "scattering_luts")
+        
         # Output directories
         self.remote_outputs = os.path.join(self.outputs, 'remote_outputs')
         self.phase_curve_data = os.path.join(self.outputs, 'visible_phase_curve_data')
@@ -25,9 +24,23 @@ class Locations:
         self.view_factors = os.path.join(self.precalculated, 'view_factors')
         self.visible_facets = os.path.join(self.precalculated, 'visible_facets')
         self.other_cached_data = os.path.join(self.outputs, 'other_cached_data')
-        self.thermal_view_factors = os.path.join(self.data_dir, 'thermal_view_factors')
+        self.thermal_view_factors = os.path.join(self.data, 'thermal_view_factors')
+
+    def _find_project_root(self):
+        """Find the project root directory by looking for .git folder"""
+        current = os.path.abspath(os.path.dirname(__file__))
+        while current != '/':
+            if os.path.exists(os.path.join(current, '.git')):
+                return current
+            current = os.path.dirname(current)
+        raise RuntimeError("Could not find project root directory")
 
     def get_shape_model_path(self, filename):
+        # If a custom directory is provided in config, use that instead of default shape_models directory
+        if hasattr(self, 'shape_model_directory'):
+            return os.path.join(self.shape_model_directory, filename)
+        
+        # Fall back to default location
         return os.path.join(self.shape_models, filename)
     
     def get_setup_file_path(self, filename):
@@ -62,7 +75,7 @@ class Locations:
 
     def get_emission_lut_path(self, lut_name):
         """Get the path to an emission LUT file."""
-        return os.path.join(self.data_dir, 'emission_luts', lut_name)
+        return os.path.join(self.data, 'emission_luts', lut_name)
 
     def get_thermal_view_factors_path(self, shape_model_hash):
         """Get the path for cached thermal view factors."""

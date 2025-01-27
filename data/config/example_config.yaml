@@ -1,20 +1,22 @@
 # General settings
 silent_mode: false  # If true, suppresses most console output
-remote: false       # Set to true when running on a remote server
+remote: true       # Set to true when running on a remote server
+
 # File paths
-shape_model_file: "5km_ico_sphere_1280_facets.stl"  # Name of the shape model file in data/shape_models/
+shape_model_file: "Rubber_Duck_1500_facets.stl"  # Name of the shape model file in data/shape_models/
+shape_model_directory: "data/shape_models/"
 
 # Performance settings
-n_jobs: 4          # Number of CPU cores to use for parallel processing (default: 4, max: available cores)
+n_jobs: 16          # Number of CPU cores to use for parallel processing (default: 4, max: available cores)
 chunk_size: 100    # Number of facets to process in each parallel batch
 
 # Physical parameters
-emissivity: 0.9            # Surface emissivity (dimensionless, range: 0-1)
-albedo: 0.5               # Bond albedo (dimensionless, range: 0-1)
-thermal_conductivity: 6.67e-5  # Thermal conductivity in W/(m·K)
-density: 1000.0           # Material density in kg/m³
-specific_heat_capacity: 1500.0  # Specific heat capacity in J/(kg·K)
-beaming_factor: 1.0       # Thermal beaming parameter (dimensionless, typically 0.7-1.3)
+emissivity: 0.5         
+albedo: 0.5              
+thermal_conductivity: 0.001  # W/(m·K) 
+density: 1000.0            # kg/m³
+specific_heat_capacity: 1500.0  # J/(kg·K)
+beaming_factor: 0.9
 
 # Model structure parameters
 n_layers: 45              # Number of depth layers in thermal model
@@ -24,16 +26,16 @@ max_days: 20              # Maximum number of days to run simulation
 min_days: 1               # Minimum number of days to run simulation
 
 # Orbital and rotational parameters
-solar_distance_au: 9.0     # Distance from Sun in astronomical units
-solar_luminosity: 3.86420167e+26  # Solar luminosity in watts
-sunlight_direction: [1, 0, 0]  # Direction vector of sunlight
-rotation_period_hours: 10.0  # Rotation period in hours
-ra_degrees: 0             # Right ascension of rotation axis in degrees
-dec_degrees: 90           # Declination of rotation axis in degrees
+solar_distance_au: 5.2    # Jupiter's average distance from Sun
+solar_luminosity: 3.86420167e+26 # Watts
+sunlight_direction: [1, 0, 0]
+rotation_period_hours: 85.2  # Europa's synchronous rotation period
+ra_degrees: 0            
+dec_degrees: 90           # Assuming pole-on view
 
 # Advanced modelling options
 include_shadowing: true     # Recommended to keep this as True for most cases
-n_scatters: 2              # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
+n_scatters: 0              # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
 include_self_heating: false # Whether to include thermal radiation between facets
 scattering_lut: "lambertian.npy" # Name of the scattering lookup table, lambertian is the only option currently supported
 emission_lut: "lambertian_epf.npy" # Name of the emmission lookup table, lambertian is the only option currently supported
