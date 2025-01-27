@@ -1,6 +1,6 @@
 # General settings
 silent_mode: false  # If true, suppresses most console output
-remote: true       # Set to true when running on a remote server
+remote: false       # Set to true when running on a remote server
 
 # File paths
 shape_model_file: "Rubber_Duck_1500_facets.stl"  # Name of the shape model file in data/shape_models/
