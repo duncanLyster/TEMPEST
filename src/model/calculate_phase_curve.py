@@ -58,8 +58,7 @@ def calculate_phase_curve(
                 ) * projected_area
             else:  # thermal
                 total_brightness += compute_thermal_brightness(
-                    facet, observer_position, simulation, thermal_data,
-                    epf_lut, idx
+                    thermal_data, shape_model, simulation, idx, 0, observer_direction
                 ) * projected_area
 
         brightness_values.append(total_brightness)
@@ -124,22 +123,27 @@ def compute_projected_area(facet, observer_position):
     projected_area = facet.area * cos_theta / distance_squared
     return projected_area
 
-def compute_thermal_brightness(facet, observer_position, simulation, thermal_data, epf_lut, idx):
-    """Compute thermal brightness for a single facet."""
-    # Calculate emission angle
-    to_observer = observer_position - facet.position
-    to_observer_norm = to_observer / np.linalg.norm(to_observer)
-    em_cos = np.dot(facet.normal, to_observer_norm)
-    em_deg = np.degrees(np.arccos(np.clip(em_cos, -1.0, 1.0)))
+def compute_thermal_brightness(thermal_data, shape_model, simulation, idx, time_step, observer_direction):
+    """
+    Compute the thermal brightness contribution from a single facet
+    """
+    # Get surface temperature (now from 2D array)
+    temperature = thermal_data.temperatures[idx, time_step]  
     
-    # Get EPF value
-    epf = epf_lut.query(em_deg)
+    # Rest of the function remains the same
+    normal = shape_model[idx].normal
+    area = shape_model[idx].area
     
-    # Calculate thermal emission
-    temperature = thermal_data.temperatures[idx, 0, 0]  # Surface temperature
-    emitted_flux = simulation.emissivity * 5.67e-8 * temperature**4
+    # Calculate emission angle cosine
+    cos_emission = np.dot(normal, observer_direction)
     
-    return emitted_flux * epf
+    if cos_emission <= 0:
+        return 0
+    
+    # Calculate thermal emission using Planck function
+    thermal_emission = simulation.emissivity * (5.67e-8) * temperature**4
+    
+    return thermal_emission * area * cos_emission
 
 def compute_visible_brightness(facet, observer_position, simulation, thermal_data, brdf_lut, idx, config):
     """Compute visible brightness for a single facet."""
