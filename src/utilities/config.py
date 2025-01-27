@@ -6,16 +6,33 @@ import yaml
 import warnings
 from multiprocessing import cpu_count
 from src.utilities.locations import Locations
+import os
 
 class Config:
-    def __init__(self):
+    def __init__(self, config_path=None):
         # Initialize Locations
         self.locations = Locations()
         
-        # Load configuration from YAML file
-        config_file_path = self.locations.get_config_path()
-        with open(config_file_path, 'r') as file:
+        # Use provided config path or search in standard locations
+        if config_path is None:
+            # Look in private first, then public
+            private_config = os.path.join(self.locations.project_root, "private/data/config/config.yaml")
+            public_config = os.path.join(self.locations.project_root, "data/config/config.yaml")
+            
+            if os.path.exists(private_config):
+                config_path = private_config
+            elif os.path.exists(public_config):
+                config_path = public_config
+            else:
+                raise FileNotFoundError("No configuration file found in standard locations")
+        
+        # Load configuration
+        with open(config_path, 'r') as file:
             self.config_data = yaml.safe_load(file)
+        
+        # Set custom shape model directory if specified
+        if 'shape_model_directory' in self.config_data:
+            self.locations.shape_model_directory = self.config_data['shape_model_directory']
         
         # Load settings from the YAML file
         self.load_settings()

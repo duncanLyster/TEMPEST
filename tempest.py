@@ -20,6 +20,7 @@ Author: Duncan Lyster
 import os
 import sys
 from pathlib import Path
+import argparse
 
 # Add the src directory to the Python path
 current_dir = Path(__file__).resolve().parent
@@ -226,15 +227,45 @@ def export_results(shape_model_name, config, temperature_array):
     # Plot the temperature distribution for the final timestep and save it to the folder
     temp_output_file_path = f"outputs/{folder_name}/"
 
-def main(silent_mode=False):
-    ''' 
-    This is the main program for the thermophysical body model. It calls the necessary functions to read in the shape model, set the material and model properties, calculate insolation and temperature arrays, and iterate until the model converges. The results are saved and visualized.
-    '''
+def parse_args():
+    parser = argparse.ArgumentParser(description='TEMPEST: Thermal Model for Planetary Bodies')
+    parser.add_argument(
+        '--config', 
+        type=str, 
+        help='Path to configuration file'
+    )
+    return parser.parse_args()
 
+def check_environment(config):
+    """Check if the execution environment matches config settings"""
+    from multiprocessing import cpu_count
+    
+    available_cores = cpu_count()
+    requested_cores = config.config_data.get('n_jobs', 4)  # Get original requested cores
+    
+    if config.remote and available_cores < 8:
+        print(f"\nWARNING: Remote execution requested but only {available_cores} CPU cores available")
+        print(f"This might significantly impact performance")
+        response = input("Do you want to continue anyway? (y/n): ")
+        if response.lower() != 'y':
+            sys.exit("Execution cancelled by user")
+    
+    # Always warn about core count mismatch
+    if requested_cores > available_cores:
+        print(f"\nWARNING: Requested {requested_cores} cores but only {available_cores} available")
+        print(f"Setting n_jobs to {available_cores}")
+
+def main():
+    # Parse command line arguments
+    args = parse_args()
+    
     full_run_start_time = time.time()
 
-    # Load user configuration
-    config = Config()
+    # Load user configuration with specified config path
+    config = Config(config_path=args.config)
+    
+    # Check environment
+    check_environment(config)
 
     # Load setup parameters from JSON file
     simulation = Simulation(config)
