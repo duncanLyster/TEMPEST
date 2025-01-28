@@ -27,57 +27,110 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     '''
     # Initialize insolation array with zeros for all facets and timesteps
     insolation_array = np.zeros((len(shape_model), simulation.timesteps_per_day))
-
-    # Precompute rotation matrices and rotated sunlight directions
-    rotation_matrices = np.zeros((simulation.timesteps_per_day, 3, 3))
-    rotated_sunlight_directions = np.zeros((simulation.timesteps_per_day, 3))
-
-    for t in range(simulation.timesteps_per_day):
-        rotation_matrix = calculate_rotation_matrix(simulation.rotation_axis, (2 * np.pi / simulation.timesteps_per_day) * t)
-        rotation_matrices[t] = rotation_matrix
-        
-        rotated_sunlight_direction = np.dot(rotation_matrix.T, simulation.sunlight_direction)
-        rotated_sunlight_direction /= np.linalg.norm(rotated_sunlight_direction)
-        rotated_sunlight_directions[t] = rotated_sunlight_direction
-
-    sunlight_direction_norm = np.linalg.norm(simulation.sunlight_direction)
-
-    shape_model_vertices = np.array([facet.vertices for facet in shape_model])
     
-    for i, facet in enumerate(conditional_tqdm(shape_model, config.silent_mode, desc="Calculating insolation")):
-        normal = facet.normal
-        
-        for t in range(simulation.timesteps_per_day):
-            new_normal = np.dot(rotation_matrices[t], normal)
-            new_normal_norm = np.linalg.norm(new_normal)  # Precompute new normal vector norm
-            sun_dot_normal = np.dot(simulation.sunlight_direction, new_normal)
-            
-            # Precompute cosine of zenith angle
-            cos_zenith_angle = sun_dot_normal / (sunlight_direction_norm * new_normal_norm)
-            
-            # Zenith angle calculation
-            if cos_zenith_angle > 0:
-                illumination_factor = 1  # Default to no shadowing
+    # Precompute rotation matrices and rotated sunlight directions
+    rotation_matrices = np.zeros((simulation.timesteps_per_day, 3, 3), dtype=np.float64)
+    rotated_sunlight_directions = np.zeros((simulation.timesteps_per_day, 3), dtype=np.float64)
+    
+    for t in range(simulation.timesteps_per_day):
+        rotation_matrix = calculate_rotation_matrix(simulation.rotation_axis, 
+                                                 (2 * np.pi / simulation.timesteps_per_day) * t)
+        rotation_matrices[t] = rotation_matrix
+        rotated_sunlight_directions[t] = np.dot(rotation_matrix.T, simulation.sunlight_direction)
+        rotated_sunlight_directions[t] /= np.linalg.norm(rotated_sunlight_directions[t])
 
-                if len(facet.visible_facets) != 0 and config.include_shadowing:
-                    illumination_factor = calculate_shadowing(np.array(facet.position), np.array([rotated_sunlight_directions[t]]), shape_model_vertices, thermal_data.visible_facets[i])
-                
-                # Calculate insolation TODO: Add BRDF dependence to albedo calculation 
-                insolation = simulation.solar_luminosity * (1 - simulation.albedo) * illumination_factor * cos_zenith_angle / (4 * np.pi * simulation.solar_distance_m**2)
-            else:
-                insolation = 0
-            
-            thermal_data.insolation[i, t] = insolation
+    # Create chunks for parallel processing
+    n_facets = len(shape_model)
+    if config.chunk_size <= 0:
+        config.chunk_size = max(1, n_facets // (config.n_jobs * 4))
+    
+    chunks = [(i * config.chunk_size, min((i + 1) * config.chunk_size, n_facets)) 
+              for i in range((n_facets + config.chunk_size - 1) // config.chunk_size)]
+
+    # Extract numpy arrays from shape model and ensure float64 dtype
+    normals = np.array([facet.normal for facet in shape_model], dtype=np.float64)
+    positions = np.array([facet.position for facet in shape_model], dtype=np.float64)
+    shape_model_vertices = np.array([facet.vertices for facet in shape_model], dtype=np.float64)
+    
+    # Process chunks in parallel
+    parallel = Parallel(n_jobs=config.n_jobs, verbose=0)
+    results = parallel(
+        delayed(process_insolation_chunk)(
+            normals[start_idx:end_idx],
+            positions[start_idx:end_idx],
+            thermal_data.visible_facets[start_idx:end_idx],
+            rotation_matrices,
+            rotated_sunlight_directions,
+            simulation.solar_luminosity,
+            simulation.albedo,
+            simulation.solar_distance_m,
+            simulation.sunlight_direction.astype(np.float64),  # Ensure float64
+            config.include_shadowing,
+            shape_model_vertices
+        )
+        for start_idx, end_idx in chunks
+    )
+
+    # Combine results
+    for chunk_idx, (start_idx, end_idx) in enumerate(chunks):
+        thermal_data.insolation[start_idx:end_idx] = results[chunk_idx]
 
     if config.n_scatters > 0:
-        conditional_print(config.silent_mode, f"Applying light scattering with {config.n_scatters} iterations...")
+        conditional_print(config.silent_mode, 
+                        f"Applying light scattering with {config.n_scatters} iterations...")
         scattering_start = time.time()
-        thermal_data = apply_scattering(thermal_data, shape_model, simulation, config, 
+        thermal_data = apply_scattering(thermal_data, shape_model, simulation, config,
                                       rotation_matrices, rotated_sunlight_directions)
         scattering_end = time.time()
-        conditional_print(config.silent_mode, f"Time taken to apply light scattering: {scattering_end - scattering_start:.2f} seconds")
+        conditional_print(config.silent_mode, 
+                        f"Time taken to apply light scattering: {scattering_end - scattering_start:.2f} seconds")
 
     return thermal_data
+
+@jit(nopython=True)
+def process_insolation_chunk(normals, positions, visible_facets, rotation_matrices, 
+                           rotated_sunlight_directions, solar_luminosity, albedo,
+                           solar_distance_m, sunlight_direction, include_shadowing,
+                           shape_model_vertices):
+    """
+    Process insolation calculations for a chunk of facets using only numba-compatible types.
+    """
+    chunk_size = len(normals)
+    timesteps = len(rotation_matrices)
+    insolation = np.zeros((chunk_size, timesteps))
+    
+    for i in range(chunk_size):
+        normal = normals[i]
+        position = positions[i]
+        
+        for t in range(timesteps):
+            new_normal = np.dot(rotation_matrices[t], normal)
+            new_normal_norm = np.linalg.norm(new_normal)  # Precompute new normal vector norm
+            sun_dot_normal = np.dot(sunlight_direction, new_normal)
+            
+            # Calculate cosine of zenith angle
+            cos_zenith_angle = sun_dot_normal / (np.linalg.norm(sunlight_direction) * new_normal_norm)
+            
+            if cos_zenith_angle > 0:
+                illumination_factor = 1
+                
+                if len(visible_facets[i]) != 0 and include_shadowing:
+                    illumination_factor = calculate_shadowing(
+                        position, 
+                        rotated_sunlight_directions[t:t+1],  # Use slice instead of creating new array
+                        shape_model_vertices,
+                        visible_facets[i]
+                    )
+                
+                insolation[i, t] = (
+                    solar_luminosity * 
+                    (1 - albedo) * 
+                    illumination_factor * 
+                    cos_zenith_angle / 
+                    (4 * np.pi * solar_distance_m**2)
+                )
+    
+    return insolation
 
 @jit(nopython=True)
 def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vertices, visible_facet_indices):
