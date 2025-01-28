@@ -47,6 +47,10 @@ class AnimationState:
         self.initial_camera_focal_point = None
         self.initial_camera_up = None
         self.shape_model_name = None
+        self.use_local_time = False  # Toggle between global and local time
+        self.facet_normals = None
+        self.sunlight_direction = None
+        self.rotation_axis = None
 
 def get_next_color(state):
     color = state.color_cycle[state.color_index % len(state.color_cycle)]
@@ -120,7 +124,7 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
             line.remove()
         if cell_id in state.highlight_colors:
             color = state.highlight_colors.pop(cell_id)
-            state.color_index = (state.color_index - 1) % len(state.color_cycle)  # Return the color to the pool
+            state.color_index = (state.color_index - 1) % len(state.color_cycle)
     else:
         # Add the cell if it's not highlighted
         state.highlighted_cell_ids.append(cell_id)
@@ -132,7 +136,7 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
             state.fig, state.ax = plt.subplots()
 
             def on_key(event):
-                if event.key == 'd':  # Changed from 's' to 'd' for "download"
+                if event.key == 'd':  # Download functionality
                     try:
                         # Get the output directory using Locations class
                         locations = Locations()
@@ -170,14 +174,47 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                         
                     except Exception as e:
                         print(f"Error saving data: {e}")
+                elif event.key == 't':  # Add time toggle functionality
+                    state.use_local_time = not state.use_local_time
+                    # Update all existing lines
+                    for facet_id, line in state.cell_colors.items():
+                        values = plotted_variable_array[facet_id, :]
+                        if state.use_local_time:
+                            values = convert_to_local_time(values, 
+                                                         state.facet_normals[facet_id],
+                                                         state.sunlight_direction, 
+                                                         state.rotation_axis,
+                                                         facet_id)
+                            time_steps = np.linspace(0, 24, len(values))  # 24-hour time
+                        else:
+                            time_steps = np.linspace(0, 1, len(values))
+                        line.set_xdata(time_steps)
+                        line.set_ydata(values)
+                    
+                    state.ax.set_xlabel("Local Time (hours)" if state.use_local_time else "Fractional angle of rotation")
+                    if state.use_local_time:
+                        state.ax.set_xlim(0, 24)
+                        state.ax.set_xticks(np.linspace(0, 24, 13))
+                    else:
+                        state.ax.set_xlim(0, 1)
+                        state.ax.set_xticks(np.linspace(0, 1, 5))
+                    state.fig.canvas.draw()
 
             state.fig.canvas.mpl_connect('key_press_event', on_key)
             state.ax.set_xlabel("Fractional angle of rotation")
             state.ax.set_ylabel(axis_label)
-            state.ax.set_title(f"{axis_label} Over Time for Selected Facets\nPress 'd' to save data")
+            state.ax.set_title(f"{axis_label} Over Time for Selected Facets\nPress 'd' to save data, 't' to toggle local/global time")
 
         values_over_time = plotted_variable_array[cell_id, :]
-        time_steps = [i / state.timesteps_per_day for i in range(len(values_over_time))]
+        if state.use_local_time:
+            values_over_time = convert_to_local_time(values_over_time, 
+                                                   state.facet_normals[cell_id],
+                                                   state.sunlight_direction, 
+                                                   state.rotation_axis,
+                                                   cell_id)
+            time_steps = np.linspace(0, 24, len(values_over_time))
+        else:
+            time_steps = np.linspace(0, 1, len(values_over_time))
         line, = state.ax.plot(time_steps, values_over_time, label=f'Cell {cell_id}', color=color)
         state.cell_colors[cell_id] = line
 
@@ -260,13 +297,63 @@ def on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_l
         cell_id = picked_mesh['vtkOriginalCellIds'][0]
         plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variable_array, axis_label)
 
+def convert_to_local_time(global_time_data, facet_normal, sunlight_direction, rotation_axis, facet_id):
+    """
+    Converts global time data to local time by finding when the facet normal is most aligned with the sun.
+    
+    Args:
+        global_time_data: Array of data points over one rotation
+        facet_normal: Normal vector of the facet
+        sunlight_direction: Direction vector of sunlight
+        rotation_axis: Rotation axis vector
+        facet_id: ID of the facet being processed
+    
+    Returns:
+        Array shifted to local time
+    """
+    timesteps = len(global_time_data)
+    max_alignment = -float('inf')
+    noon_frame = 0
+    
+    # For each timestep, calculate the alignment between rotated normal and sun
+    for t in range(timesteps):
+        angle = (2 * np.pi * t) / timesteps
+        cos_angle = np.cos(angle)
+        sin_angle = np.sin(angle)
+        
+        # Create rotation matrix
+        rotation_matrix = np.array([
+            [cos_angle + rotation_axis[0]**2*(1-cos_angle), 
+             rotation_axis[0]*rotation_axis[1]*(1-cos_angle) - rotation_axis[2]*sin_angle,
+             rotation_axis[0]*rotation_axis[2]*(1-cos_angle) + rotation_axis[1]*sin_angle],
+            [rotation_axis[1]*rotation_axis[0]*(1-cos_angle) + rotation_axis[2]*sin_angle,
+             cos_angle + rotation_axis[1]**2*(1-cos_angle),
+             rotation_axis[1]*rotation_axis[2]*(1-cos_angle) - rotation_axis[0]*sin_angle],
+            [rotation_axis[2]*rotation_axis[0]*(1-cos_angle) - rotation_axis[1]*sin_angle,
+             rotation_axis[2]*rotation_axis[1]*(1-cos_angle) + rotation_axis[0]*sin_angle,
+             cos_angle + rotation_axis[2]**2*(1-cos_angle)]
+        ])
+        
+        # Rotate the normal
+        rotated_normal = np.dot(rotation_matrix, facet_normal)
+        
+        # Calculate alignment with sun direction
+        alignment = np.dot(rotated_normal, sunlight_direction)
+        
+        if alignment > max_alignment:
+            max_alignment = alignment
+            noon_frame = t
+    
+    # Calculate shift needed to center on maximum alignment
+    shift = (timesteps // 2) - noon_frame  # Shift to put noon at middle of day
+    
+    conditional_print(False, f"Facet {facet_id} shifted by {shift} timesteps ({(shift/timesteps * 360):.1f} degrees)")
+    
+    return np.roll(global_time_data, shift)
+
 def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
                   timesteps_per_day, solar_distance_au, rotation_period_hr, colour_map, plot_title, axis_label, animation_frames, 
                   save_animation, save_animation_name, background_colour, pre_selected_facets=[1220, 845]):
-
-    state = AnimationState()
-    state.timesteps_per_day = timesteps_per_day
-    state.shape_model_name = path_to_shape_model_file
 
     start_time = time.time()
 
@@ -288,6 +375,20 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     pv_mesh = pv.PolyData(vertices, faces)
     pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
+
+    # Store facet normals when loading the mesh
+    facet_normals = np.zeros((shape_mesh.vectors.shape[0], 3))
+    for i in range(shape_mesh.vectors.shape[0]):
+        v1, v2, v3 = shape_mesh.vectors[i]
+        normal = np.cross(v2 - v1, v3 - v1)
+        facet_normals[i] = normal / np.linalg.norm(normal)
+    
+    state = AnimationState()
+    state.timesteps_per_day = timesteps_per_day
+    state.shape_model_name = path_to_shape_model_file
+    state.facet_normals = facet_normals
+    state.sunlight_direction = sunlight_direction
+    state.rotation_axis = rotation_axis
 
     text_color = 'white' if background_colour == 'black' else 'black' 
     bar_color = (1, 1, 1) if background_colour == 'black' else (0, 0, 0)
@@ -362,7 +463,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.scalar_bar.SetUseCustomLabels(True)
 
     plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
-    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select  facet\n'C' - Clear selections\n'L/R Arrow keys' - Rotate\n'R' - Reset camera", position='upper_left', font_size=10, color=text_color)
+    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'L/R Arrow keys' - Rotate\n'R' - Reset camera", position='upper_left', font_size=10, color=text_color)
 
     info_text = f"Solar Distance: {solar_distance_au} AU\nRotation Period: {rotation_period_hr} hours"
     plotter.add_text(info_text, position='upper_right', font_size=10, color=text_color)
