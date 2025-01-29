@@ -59,8 +59,9 @@ def calculate_visible_facets(positions, normals, n_jobs, chunk_size, silent_mode
     
     all_visible_indices = []
     total_visible_pairs = 0
+    start_time = time.time()
     
-    with Parallel(n_jobs=n_jobs, verbose=1) as parallel:
+    with Parallel(n_jobs=n_jobs, verbose=0) as parallel:  
         for chunk_start in range(0, len(chunks), n_jobs):
             chunk_end = min(chunk_start + n_jobs, len(chunks))
             current_chunks = chunks[chunk_start:chunk_end]
@@ -74,7 +75,23 @@ def calculate_visible_facets(positions, normals, n_jobs, chunk_size, silent_mode
             for chunk_results in results:
                 all_visible_indices.extend(chunk_results)
                 total_visible_pairs += sum(len(indices) for indices in chunk_results)
+            
+            # Calculate progress and estimated time
+            tasks_done = chunk_end
+            percent_done = (tasks_done / n_chunks) * 100
+            elapsed_time = time.time() - start_time
+            estimated_total = elapsed_time / (tasks_done / n_chunks)
+            remaining_time = estimated_total - elapsed_time
+            
+            if not silent_mode:
+                print(f"\rCalculating visible facets: {percent_done:0.1f}% done | "
+                      f"Tasks: {tasks_done:,}/{n_chunks:,} | "
+                      f"Elapsed: {elapsed_time/60:0.1f}min | "
+                      f"Remaining (estimate): {remaining_time/60:0.1f}min", end="")
     
+    if not silent_mode:
+        print()  # New line after progress complete
+        
     reduction_percent = ((total_possible_pairs - total_visible_pairs) / total_possible_pairs) * 100
     conditional_print(silent_mode, f"Facet visibility culling: {total_possible_pairs:,} → {total_visible_pairs:,} pairs")
     conditional_print(silent_mode, f"Reduced by {reduction_percent:.1f}%")
