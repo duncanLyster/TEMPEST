@@ -3,7 +3,7 @@ import numpy as np
 import os
 from datetime import datetime
 
-from animate_model import animate_model 
+from animate_model import animate_model
 
 def get_output_folders(base_dir):
     """Retrieve all folders in the base directory sorted by modification time."""
