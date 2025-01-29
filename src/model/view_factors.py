@@ -57,18 +57,23 @@ def calculate_visible_facets(positions, normals, n_jobs, chunk_size, silent_mode
     chunks = [(i * chunk_size, min((i + 1) * chunk_size, n_facets)) 
              for i in range(n_chunks)]
     
-    # Process chunks in parallel using joblib
-    results = Parallel(n_jobs=n_jobs, verbose=1)(
-        delayed(calculate_visible_facets_chunk)(positions, normals, start_idx, end_idx)
-        for start_idx, end_idx in chunks
-    )
-    
-    # Combine results and count visible pairs
     all_visible_indices = []
     total_visible_pairs = 0
-    for chunk_results in results:
-        all_visible_indices.extend(chunk_results)
-        total_visible_pairs += sum(len(indices) for indices in chunk_results)
+    
+    with Parallel(n_jobs=n_jobs, verbose=1) as parallel:
+        for chunk_start in range(0, len(chunks), n_jobs):
+            chunk_end = min(chunk_start + n_jobs, len(chunks))
+            current_chunks = chunks[chunk_start:chunk_end]
+            
+            results = parallel(
+                delayed(calculate_visible_facets_chunk)(positions, normals, start_idx, end_idx)
+                for start_idx, end_idx in current_chunks
+            )
+            
+            # Process and save results after each batch
+            for chunk_results in results:
+                all_visible_indices.extend(chunk_results)
+                total_visible_pairs += sum(len(indices) for indices in chunk_results)
     
     reduction_percent = ((total_possible_pairs - total_visible_pairs) / total_possible_pairs) * 100
     conditional_print(silent_mode, f"Facet visibility culling: {total_possible_pairs:,} → {total_visible_pairs:,} pairs")
@@ -87,7 +92,8 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
         conditional_print(silent_mode, "Loading existing visible facets...")
         with np.load(visible_facets_filename, allow_pickle=True) as data:
             visible_indices = data['visible_indices']
-        visible_indices = [np.array(indices) for indices in visible_indices]
+            # Convert each array to int64 explicitly after loading
+            visible_indices = [np.array(indices, dtype=np.int64) for indices in visible_indices]
     else:
         calculate_visible_facets_start = time.time()
 
