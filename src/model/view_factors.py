@@ -20,7 +20,11 @@ from src.utilities.utils import (
 
 @jit(nopython=True)
 def calculate_visible_facets_chunk(positions, normals, start_idx, end_idx):
-    """Calculate visible facets for a chunk of the shape model."""
+    """Calculate potentially visible facets for a chunk of the shape model.
+        This elimates any facets from the view factor calculations that:
+            a) Are below the 'horizon' of the subject facet. 
+            b) Face away from the subject facet.
+    """
     n_facets = len(positions)
     chunk_size = end_idx - start_idx
     potentially_visible_indices = [np.empty(0, dtype=np.int64) for _ in range(chunk_size)]
@@ -38,15 +42,16 @@ def calculate_visible_facets_chunk(positions, normals, start_idx, end_idx):
         
     return potentially_visible_indices
 
-def calculate_visible_facets(positions, normals, n_jobs, chunk_size):
+def calculate_visible_facets(positions, normals, n_jobs, chunk_size, silent_mode=False):
     """Parallel wrapper for calculate_visible_facets using joblib.
-    
-    This function calculates the visible (test) facets from each subject facet. It calculates the angle between the normal vector of each facet and the line of sight to every other facet. It returns the indices of the visible facets.
 
-    NOTE: Idea for improvement - instaed of geometrically comparing every facet - do this only for nearby facets, then use tracing of evenly distributed rays to determine shadowing 'globe/sphere' for the rest of the facets.
+    NOTE: Idea for improvement - instead of geometrically comparing every facet - do this only for nearby facets, then use tracing of evenly 
+    distributed rays to determine shadowing 'globe/sphere' for the rest of the facets.
     """
     n_facets = len(positions)
     n_chunks = (n_facets + chunk_size - 1) // chunk_size
+    
+    total_possible_pairs = n_facets * n_facets  # Total possible facet pairs
     
     # Create chunks of work
     chunks = [(i * chunk_size, min((i + 1) * chunk_size, n_facets)) 
@@ -58,10 +63,16 @@ def calculate_visible_facets(positions, normals, n_jobs, chunk_size):
         for start_idx, end_idx in chunks
     )
     
-    # Combine results
+    # Combine results and count visible pairs
     all_visible_indices = []
-    for chunk_result in results:
-        all_visible_indices.extend(chunk_result)
+    total_visible_pairs = 0
+    for chunk_results in results:
+        all_visible_indices.extend(chunk_results)
+        total_visible_pairs += sum(len(indices) for indices in chunk_results)
+    
+    reduction_percent = ((total_possible_pairs - total_visible_pairs) / total_possible_pairs) * 100
+    conditional_print(silent_mode, f"Facet visibility culling: {total_possible_pairs:,} → {total_visible_pairs:,} pairs")
+    conditional_print(silent_mode, f"Reduced by {reduction_percent:.1f}%")
     
     return all_visible_indices
 

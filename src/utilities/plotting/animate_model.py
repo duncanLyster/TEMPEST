@@ -51,6 +51,8 @@ class AnimationState:
         self.facet_normals = None
         self.sunlight_direction = None
         self.rotation_axis = None
+        self.current_min = None
+        self.current_max = None
 
 def get_next_color(state):
     color = state.color_cycle[state.color_index % len(state.color_cycle)]
@@ -270,8 +272,9 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
         rotated_vertices = np.dot(vertices, rot_mat.T)
         pv_mesh.points = rotated_vertices
         
-        # Update cell data
+        # Update cell data with current range
         pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame]
+        plotter.update_scalar_bar_range((state.current_min, state.current_max))
         
         # Update highlights only if there are highlighted cells
         if state.highlighted_cell_ids:
@@ -461,6 +464,49 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     plotter.scalar_bar.SetCustomLabels(vtk_labels)
     plotter.scalar_bar.SetUseCustomLabels(True)
+
+    # After creating the plotter and before adding text elements
+    # Get the initial data range
+    data_min = np.min(plotted_variable_array)
+    data_max = np.max(plotted_variable_array)
+    range_padding = (data_max - data_min) * 0.1  # Add 10% padding
+    
+    # Store the current range in the state
+    state.current_min = data_min
+    state.current_max = data_max
+    
+    def update_min(value):
+        state.current_min = value
+        plotter.update_scalar_bar_range((state.current_min, state.current_max))
+        pv_mesh.set_active_scalars(axis_label)
+        plotter.render()
+    
+    def update_max(value):
+        state.current_max = value
+        plotter.update_scalar_bar_range((state.current_min, state.current_max))
+        pv_mesh.set_active_scalars(axis_label)
+        plotter.render()
+    
+    # Add sliders for min and max values
+    plotter.add_slider_widget(
+        callback=update_min,
+        rng=[data_min - range_padding, data_max],
+        value=data_min,
+        title=f"Min {axis_label}",
+        pointa=(0.025, 0.1),
+        pointb=(0.225, 0.1),
+        style='modern'
+    )
+    
+    plotter.add_slider_widget(
+        callback=update_max,
+        rng=[data_min, data_max + range_padding],
+        value=data_max,
+        title=f"Max {axis_label}",
+        pointa=(0.025, 0.15),
+        pointb=(0.225, 0.15),
+        style='modern'
+    )
 
     plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
     plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'L/R Arrow keys' - Rotate\n'R' - Reset camera", position='upper_left', font_size=10, color=text_color)
