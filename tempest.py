@@ -52,11 +52,12 @@ from src.model.view_factors import (
     calculate_all_view_factors,
     calculate_thermal_view_factors
 )
-from src.model.temperature_solver import (
-    iterative_temperature_solver,
-    calculate_initial_temperatures
-)
+# from src.model.temperature_solver import (
+#     iterative_temperature_solver,
+#     calculate_initial_temperatures
+# )
 from src.utilities.plotting.plotting import check_remote_and_animate
+from src.model.solvers import TemperatureSolverFactory
 
 def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
     ''' 
@@ -415,7 +416,8 @@ def main():
     conditional_print(config.silent_mode,  f"Calculating initial temperatures.\n")
 
     initial_temperatures_start = time.time()
-    thermal_data = calculate_initial_temperatures(thermal_data, config.silent_mode, simulation.emissivity)
+    solver = TemperatureSolverFactory.create(config.temp_solver)
+    thermal_data = solver.initialize_temperatures(thermal_data, simulation, config)
     initial_temperatures_end = time.time()
 
     conditional_print(config.silent_mode,  f"Time taken to calculate initial temperatures: {initial_temperatures_end - initial_temperatures_start:.2f} seconds")
@@ -492,22 +494,24 @@ def main():
 
     conditional_print(config.silent_mode,  f"Running main simulation loop.\n")
     conditional_print(config.silent_mode,  f"Convergence target: {simulation.convergence_target} K with {config.convergence_method} convergence method.\n")
+
+    # Run solver
     solver_start_time = time.time()
-    final_day_temperatures, final_day_temperatures_all_layers, final_timestep_temperatures, day, temperature_error, max_temp_error = iterative_temperature_solver(thermal_data, shape_model, simulation, config)
+    result = solver.solve(thermal_data, shape_model, simulation, config)
     solver_end_time = time.time()
-    full_run_end_time = time.time()
     solver_execution_time = solver_end_time - solver_start_time
+    full_run_end_time = time.time()
 
-    if final_timestep_temperatures is not None:
-        conditional_print(config.silent_mode,  f"Convergence target achieved after {day} days.")
-        conditional_print(config.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
-        conditional_print(config.silent_mode,  f"Max temperature error for any facet: {max_temp_error} K")
+    if result["final_timestep_temperatures"] is not None:
+        conditional_print(config.silent_mode, f"Convergence target achieved after {result['days_to_convergence']} days.")
+        conditional_print(config.silent_mode, f"Final temperature error: {result['mean_temperature_error']} K")
+        conditional_print(config.silent_mode, f"Max temperature error: {result['max_temperature_error']} K")
     else:
-        conditional_print(config.silent_mode,  f"Model did not converge after {day} days.")
-        conditional_print(config.silent_mode,  f"Final temperature error: {temperature_error / len(shape_model)} K")
+        conditional_print(config.silent_mode, f"Model did not converge after {result['days_to_convergence']} days.")
+        conditional_print(config.silent_mode, f"Final temperature error: {result['mean_temperature_error']} K")
 
-    conditional_print(config.silent_mode,  f"Solver execution time: {solver_execution_time} seconds")
-    conditional_print(config.silent_mode,  f"Full run time: {full_run_end_time - full_run_start_time} seconds")
+    conditional_print(config.silent_mode, f"Solver execution time: {solver_execution_time} seconds")
+    conditional_print(config.silent_mode, f"Full run time: {full_run_end_time - full_run_start_time} seconds")
 
     if config.plot_insolation_curve and not config.silent_mode:
         fig_temperature = plt.figure(figsize=(10, 6))
@@ -517,7 +521,7 @@ def main():
             conditional_print(config.silent_mode, f"Facet index {config.plotted_facet_index} out of range. Please select a facet index between 0 and {len(shape_model) - 1}.")
         else:
             # Get the temp data for the facet
-            temperature_data = final_day_temperatures[config.plotted_facet_index]
+            temperature_data = result["final_day_temperatures"][config.plotted_facet_index]
             
             # Calculate black body temperatures
             insolation_data = thermal_data.insolation[config.plotted_facet_index]
@@ -567,7 +571,7 @@ def main():
 
     if config.plot_final_day_all_layers_temp_distribution and not config.silent_mode:
         fig_final_all_layers_temp_dist = plt.figure()
-        plt.plot(final_day_temperatures_all_layers[config.plotted_facet_index])
+        plt.plot(result["final_day_temperatures_all_layers"][config.plotted_facet_index])
         plt.xlabel('Timestep')
         plt.ylabel('Temperature (K)')
         plt.title('Final day temperature distribution for all layers in facet')
@@ -583,11 +587,11 @@ def main():
 
     if config.plot_energy_terms and not config.silent_mode:
         fig_energy_terms = plt.figure()
-        plt.plot(shape_model[config.plotted_facet_index].unphysical_energy_loss[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Unphysical energy loss')
-        plt.plot(shape_model[config.plotted_facet_index].insolation_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Insolation energy')
-        plt.plot(shape_model[config.plotted_facet_index].re_emitted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Re-emitted energy')
-        plt.plot(-shape_model[config.plotted_facet_index].surface_energy_change[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Surface energy change')
-        plt.plot(shape_model[config.plotted_facet_index].conducted_energy[(day - 1) * simulation.timesteps_per_day:day * simulation.timesteps_per_day], label='Conducted energy')
+        plt.plot(shape_model[config.plotted_facet_index].unphysical_energy_loss[(result['days_to_convergence'] - 1) * simulation.timesteps_per_day:result['days_to_convergence'] * simulation.timesteps_per_day], label='Unphysical energy loss')
+        plt.plot(shape_model[config.plotted_facet_index].insolation_energy[(result['days_to_convergence'] - 1) * simulation.timesteps_per_day:result['days_to_convergence'] * simulation.timesteps_per_day], label='Insolation energy')
+        plt.plot(shape_model[config.plotted_facet_index].re_emitted_energy[(result['days_to_convergence'] - 1) * simulation.timesteps_per_day:result['days_to_convergence'] * simulation.timesteps_per_day], label='Re-emitted energy')
+        plt.plot(-shape_model[config.plotted_facet_index].surface_energy_change[(result['days_to_convergence'] - 1) * simulation.timesteps_per_day:result['days_to_convergence'] * simulation.timesteps_per_day], label='Surface energy change')
+        plt.plot(shape_model[config.plotted_facet_index].conducted_energy[(result['days_to_convergence'] - 1) * simulation.timesteps_per_day:result['days_to_convergence'] * simulation.timesteps_per_day], label='Conducted energy')
         plt.legend()
         plt.xlabel('Timestep')
         plt.ylabel('Energy (J)')
@@ -598,7 +602,7 @@ def main():
         conditional_print(config.silent_mode,  f"Preparing temperature animation.\n")
 
         check_remote_and_animate(config.remote, config.path_to_shape_model_file, 
-                      final_day_temperatures, 
+                      result["final_day_temperatures"], 
                       simulation.rotation_axis, 
                       simulation.sunlight_direction, 
                       simulation.timesteps_per_day,
@@ -614,13 +618,13 @@ def main():
 
     if config.plot_final_day_comparison and not config.silent_mode:
         conditional_print(config.silent_mode,  f"Saving final day temperatures for facet to CSV file.\n")
-        np.savetxt("final_day_temperatures.csv", np.column_stack((np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[config.plotted_facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
+        np.savetxt("final_day_temperatures.csv", np.column_stack((np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), result["final_day_temperatures"][config.plotted_facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
         thermprojrs_data = np.loadtxt("thermprojrs_data.csv", delimiter=',', skiprows=1)
 
         fig_model_comparison = plt.figure()
         plt.plot(thermprojrs_data[:, 0], thermprojrs_data[:, 1], label='Thermprojrs')
-        plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), final_day_temperatures[config.plotted_facet_index], label='This model')
+        plt.plot(np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), result["final_day_temperatures"][config.plotted_facet_index], label='This model')
         plt.xlabel('Rotation angle (rad)')
         plt.ylabel('Temperature (K)')
         plt.title('Final day temperature distribution for facet')
@@ -633,14 +637,14 @@ def main():
         interp_func = interp1d(x_new, thermprojrs_data[:, 1], kind='linear')
         thermprojrs_interpolated = interp_func(x_original)
 
-        plt.plot(x_original, final_day_temperatures[config.plotted_facet_index] - thermprojrs_interpolated, label='This model')
+        plt.plot(x_original, result["final_day_temperatures"][config.plotted_facet_index] - thermprojrs_interpolated, label='This model')
         plt.xlabel('Rotation angle (rad)')
         plt.ylabel('Temperature difference (K)')
         plt.title('Temperature difference between this model and Thermprojrs for facet')
         plt.legend()
         plt.show()
 
-        np.savetxt("final_day.csv", np.column_stack((x_original, final_day_temperatures[config.plotted_facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
+        np.savetxt("final_day.csv", np.column_stack((x_original, result["final_day_temperatures"][config.plotted_facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
     if config.calculate_visible_phase_curve:
         phase_angles, brightness_values = calculate_phase_curve(

@@ -3,46 +3,52 @@
 # This config file is used for testing the model and can be saved as a template for your own objects.
 
 # General settings
-silent_mode: false  # Set to true when running batch jobs (suppresses most console output
-remote: false       # Set to true when running on a remote server (suppresses plotting)
+silent_mode: false                  # Set to true when running batch jobs (suppresses most console output)
+remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
 shape_model_file: "Rubber_Duck_1500_facets.stl"  # Name of the shape model file in data/shape_models/
 shape_model_directory: "data/shape_models/"
 
 # Performance settings
-n_jobs: 16          # Number of CPU cores to use for parallel processing (default: 4, max: available cores)
-chunk_size: 1000    # Number of facets to process in each parallel batch
+n_jobs:                 16          # Number of CPU cores to use for parallel processing (default: 4, max: available cores)
+chunk_size:             1000        # Number of facets to process in each parallel batch
 
 # Physical parameters
-emissivity: 0.5         
-albedo: 0.5              
-thermal_conductivity: 0.001         # W/(m·K) 
-density: 1000.0                     # kg/m³
+emissivity:             0.5         
+albedo:                 0.5              
+beaming_factor:         0.9
+
+# TEMPEST standard solver parameters (only needed if using TEMPEST standard solver)
+thermal_conductivity:   0.001       # W/(m·K) 
+density:                1000.0      # kg/m³
 specific_heat_capacity: 1500.0      # J/(kg·K)
-beaming_factor: 0.9
+
+# Thermprojrs solver parameters (only needed if using thermprojrs solver)
+thermal_inertia:        50.0
 
 # Model structure parameters
-n_layers: 45                        # Number of depth layers in thermal model - try increasing this if the model doesn't converge
-convergence_method: "mean"          # Method to determine convergence: 'mean' or 'max' temperature difference between days
-convergence_target: 0.1             # Target temperature difference between days for convergence in K. Higher values will converge faster.
-max_days: 20                        # Maximum number of days to run simulation
-min_days: 1                         # Minimum number of days to run simulation
+n_layers:               45          # Number of depth layers in thermal model - try increasing this if the model doesn't converge
+convergence_method:     "mean"      # Method to determine convergence: 'mean' or 'max' temperature difference between days
+convergence_target:     0.1         # Target temperature difference between days for convergence in K. Higher values will converge faster.
+max_days:               20          # Maximum number of days to run simulation
+min_days:               1           # Minimum number of days to run simulation
 
 # Orbital and rotational parameters
-solar_distance_au: 2                # Note: TEMPEST treats the object as having a perfect circular orbit
+solar_distance_au:      2           # TEMPEST treats the object as having a perfect circular orbit
 solar_luminosity: 3.86420167e+26    # Watts (leave this for any solar system objects)
 sunlight_direction: [1, 0, 0]       # Direction of the Sun relative to the object
-rotation_period_hours: 10           # Rotation period of the object relative to the Sun
-ra_degrees: 0                       # Right ascension of the object's pole (0 is the vernal equinox)
-dec_degrees: 90                     # Declination of the object's pole (90 is the north pole)
+rotation_period_hours:  10          # Rotation period of the object relative to the Sun
+ra_degrees:             0           # Right ascension of the object's pole (0 is the vernal equinox)
+dec_degrees:            90          # Declination of the object's pole (90 is the north pole)
 
 # Advanced modelling options
 include_shadowing: true             # Recommended to keep this as True for most cases
 n_scatters: 0                       # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
 include_self_heating: false         # Whether to include thermal radiation between facets
-scattering_lut: "lambertian.npy"    # Name of the scattering lookup table, lambertian is the only option currently supported
-emission_lut: "lambertian_epf.npy"  # Name of the emmission lookup table, lambertian or Lommel-Seeliger are the only options currently supported
+scattering_lut: "lambertian.npy"    # Lambertian is the only option currently supported
+emission_lut: "lambertian_epf.npy"  # Lambertian or Lommel-Seeliger are the only options currently supported
+temp_solver: "tempest_standard"     # Options: "tempest_standard" or "thermprojrs_like"
 vf_rays: 1000                       # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
 
 # Extra analysis options
