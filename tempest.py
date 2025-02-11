@@ -52,10 +52,6 @@ from src.model.view_factors import (
     calculate_all_view_factors,
     calculate_thermal_view_factors
 )
-# from src.model.temperature_solver import (
-#     iterative_temperature_solver,
-#     calculate_initial_temperatures
-# )
 from src.utilities.plotting.plotting import check_remote_and_animate
 from src.model.solvers import TemperatureSolverFactory
 
