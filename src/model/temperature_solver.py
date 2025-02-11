@@ -1,15 +1,10 @@
 # src/model/temperature_solver.py
 
-import sys
 import numpy as np
 from numba import jit
 from joblib import Parallel, delayed
 from tqdm import tqdm
-import matplotlib.pyplot as plt
-from src.utilities.utils import conditional_print, conditional_tqdm, calculate_black_body_temp
-from src.utilities.plotting.plotting import check_remote_and_animate
-from src.utilities.locations import Locations
-import os
+from src.utilities.utils import conditional_print, conditional_tqdm
 
 @jit(nopython=True)
 def calculate_temperatures(temperatures, layer_temperatures, insolation, visible_facets_list, 
