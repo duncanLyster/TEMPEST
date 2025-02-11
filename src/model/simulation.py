@@ -29,7 +29,7 @@ class Simulation:
         self.thermal_inertia = (self.density * self.specific_heat_capacity * self.thermal_conductivity)**0.5
         self.layer_thickness = 8 * self.skin_depth / self.n_layers
         self.thermal_diffusivity = self.thermal_conductivity / (self.density * self.specific_heat_capacity)
-        self.timesteps_per_day = int(round(self.rotation_period_s / (self.layer_thickness**2 / (2 * self.thermal_diffusivity))))
+        self.timesteps_per_day = int(round(self.rotation_period_s / (self.layer_thickness**2 / (2 * self.thermal_diffusivity)))) # Set using CFL condition
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
         
         # Compute unit vector from RA and Dec
