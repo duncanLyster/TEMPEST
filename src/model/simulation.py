@@ -13,7 +13,7 @@ class Simulation:
 
     def load_configuration(self):
         """
-        Load configuration directly from the Config object.
+        Load configuration directly from the Config object. TODO: Only initialise parameters that aren't already set in the config file.
         """
         # Assign configuration to attributes, converting lists to numpy arrays as needed
         for key, value in self.config.config_data.items():
