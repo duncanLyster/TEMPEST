@@ -1,6 +1,10 @@
+# To run the model, run the following command:
+# python tempest.py --config /data/config/example_config.yaml/
+# This config file is used for testing the model and can be saved as a template for your own objects.
+
 # General settings
-silent_mode: false  # If true, suppresses most console output
-remote: false       # Set to true when running on a remote server
+silent_mode: false  # Set to true when running batch jobs (suppresses most console output
+remote: false       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
 shape_model_file: "Rubber_Duck_1500_facets.stl"  # Name of the shape model file in data/shape_models/
@@ -8,68 +12,69 @@ shape_model_directory: "data/shape_models/"
 
 # Performance settings
 n_jobs: 16          # Number of CPU cores to use for parallel processing (default: 4, max: available cores)
-chunk_size: 100    # Number of facets to process in each parallel batch
+chunk_size: 1000    # Number of facets to process in each parallel batch
 
 # Physical parameters
 emissivity: 0.5         
 albedo: 0.5              
-thermal_conductivity: 0.001  # W/(m·K) 
-density: 1000.0            # kg/m³
-specific_heat_capacity: 1500.0  # J/(kg·K)
+thermal_conductivity: 0.001         # W/(m·K) 
+density: 1000.0                     # kg/m³
+specific_heat_capacity: 1500.0      # J/(kg·K)
 beaming_factor: 0.9
 
 # Model structure parameters
-n_layers: 45              # Number of depth layers in thermal model
-convergence_method: "mean"  # Method to determine convergence: 'mean' or 'max' temperature difference between days
-convergence_target: 0.1   # Target temperature difference between days for convergence in K
-max_days: 20              # Maximum number of days to run simulation
-min_days: 1               # Minimum number of days to run simulation
+n_layers: 45                        # Number of depth layers in thermal model - try increasing this if the model doesn't converge
+convergence_method: "mean"          # Method to determine convergence: 'mean' or 'max' temperature difference between days
+convergence_target: 0.1             # Target temperature difference between days for convergence in K. Higher values will converge faster.
+max_days: 20                        # Maximum number of days to run simulation
+min_days: 1                         # Minimum number of days to run simulation
 
 # Orbital and rotational parameters
-solar_distance_au: 5.2    # Jupiter's average distance from Sun
-solar_luminosity: 3.86420167e+26 # Watts
-sunlight_direction: [1, 0, 0]
-rotation_period_hours: 85.2  # Europa's synchronous rotation period
-ra_degrees: 0            
-dec_degrees: 90           # Assuming pole-on view
+solar_distance_au: 2                # Note: TEMPEST treats the object as having a perfect circular orbit
+solar_luminosity: 3.86420167e+26    # Watts (leave this for any solar system objects)
+sunlight_direction: [1, 0, 0]       # Direction of the Sun relative to the object
+rotation_period_hours: 10           # Rotation period of the object relative to the Sun
+ra_degrees: 0                       # Right ascension of the object's pole (0 is the vernal equinox)
+dec_degrees: 90                     # Declination of the object's pole (90 is the north pole)
 
 # Advanced modelling options
-include_shadowing: true     # Recommended to keep this as True for most cases
-n_scatters: 0              # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
-include_self_heating: false # Whether to include thermal radiation between facets
-scattering_lut: "lambertian.npy" # Name of the scattering lookup table, lambertian is the only option currently supported
-emission_lut: "lambertian_epf.npy" # Name of the emmission lookup table, lambertian is the only option currently supported
+include_shadowing: true             # Recommended to keep this as True for most cases
+n_scatters: 0                       # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
+include_self_heating: false         # Whether to include thermal radiation between facets
+scattering_lut: "lambertian.npy"    # Name of the scattering lookup table, lambertian is the only option currently supported
+emission_lut: "lambertian_epf.npy"  # Name of the emmission lookup table, lambertian or Lommel-Seeliger are the only options currently supported
+vf_rays: 1000                       # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
 
-# Outdated roughness settings
-roughness_scheme: "lambertian" # "lambertian" is only option currently supported 
-apply_roughness: false      # Whether to apply sub-facet scale roughness
-subdivision_levels: 3       # Number of levels for roughness model subdivision
-displacement_factors: [0.05, 0.1, 0.5]  # Displacement factors for each subdivision level (range: 0-1)
+# Extra analysis options
+calculate_visible_phase_curve: false   # Whether to calculate visible light phase curve (not thoroughly validated)
+calculate_thermal_phase_curve: false   # Whether to calculate thermal phase curve (not thoroughly validated)
 
-vf_rays: 1000              # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
+# Animation settings
+animate_final_day_temp_distribution: true # 3D animation showing final day temperature distribution
+animate_shadowing: false                  # 3D animation showing insolation - looks cool and can be used to validate shadowing calculations
 
-# Analysis options
-calculate_visible_phase_curve: false   # Whether to calculate visible light phase curve
-calculate_thermal_phase_curve: false   # Whether to calculate thermal phase curve
+# Plotting settings for individual facet properties 
+plotted_facet_index: 1220                 # Index of facet to plot detailed temperature evolution
+plot_insolation_curve: false              # Plot insolation for a facet
+plot_initial_temp_histogram: false        # Plot initial temperature distribution of all facets
+plot_final_day_all_layers_temp_distribution: false # Plot final day temperature distribution for all layers including subsurface
+plot_final_day_comparison: false          # Plot final day temperature distribution against the same from previous run (if it exists)
 
-# Plotting settings
-plotted_facet_index: 1220  # Index of facet to plot detailed temperature evolution
-plot_insolation_curve: false
-plot_initial_temp_histogram: false
-plot_final_day_all_layers_temp_distribution: false
-plot_energy_terms: false
-plot_final_day_comparison: false
+# Plotting settings for phase curves
 show_visible_phase_curve: false
 save_visible_phase_curve_data: false
 show_thermal_phase_curve: false
 save_thermal_phase_curve_data: false
 
-# Animation settings
-animate_roughness_model: false
-animate_shadowing: false
-animate_secondary_radiation_view_factors: false
-animate_secondary_contributions: false
-animate_final_day_temp_distribution: true
+# Debugging
+calculate_energy_terms: false             # Whether to calculate and store detailed energy balance terms (not thoroughly validated - very slow to run)
+animate_secondary_radiation_view_factors: false # 3D animation showing secondary radiation view factors
+animate_secondary_contributions: false    # 3D animation showing radiative self-heating contributions
+plot_energy_terms: false                  # Plot energy balance terms
 
-# Debugging settings
-calculate_energy_terms: false  # Whether to calculate and store detailed energy balance terms
+# Fractal roughness (Relic from an earlier version and needs more work)
+roughness_scheme: "lambertian"
+apply_roughness: false 
+subdivision_levels: 3  
+displacement_factors: [0.05, 0.1, 0.5]  # Displacement factors for each subdivision level (range: 0-1)
+animate_roughness_model: false

@@ -14,6 +14,7 @@ __pycache__/
 
 # Ignore output and temporary files
 output/
+outputs/
 
 # Ignore private data
 private/
@@ -21,15 +22,6 @@ private/
 # Ignore shape models and large data files
 data/shape_models/
 data/model_setups/
-
-# Allow specific files in the data directory
-!data/model_setups/config.yaml
-!data/shape_models/67P_not_to_scale_low_res.stl
-!data/shape_models/67P_not_to_scale_1666_facets.stl
-!data/shape_models/5km_ico_sphere_80_facets.stl
-!data/shape_models/5km_ico_sphere_1280_facets.stl
-!data/shape_models/rubber_duck_1500_facets.stl
-!data/model_setups/generic_model_parameters.json
 
 # Ignore profile outputs and debugging files
 *.dot
