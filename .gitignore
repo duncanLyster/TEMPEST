@@ -23,6 +23,9 @@ private/
 data/shape_models/
 data/model_setups/
 
+# Ignore flyby moon scripts
+scripts/flyby_sim/
+
 # Ignore profile outputs and debugging files
 *.dot
 *.prof
