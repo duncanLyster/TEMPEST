@@ -39,12 +39,20 @@ def calculate_temperatures(temperatures, layer_temperatures, insolation, visible
                 )
             
             conducted_heat_term = const3 * (prev_temp_layer1 - prev_temp)
+
+            ##### THE NEW BIT #####
+            # This adds a constant heat flux to the surface - units/real world meaning are currently guesswork as they depend on physical parameters, but given a bit more time it would be possible to make this physically meaningful
+
+            # endogenic_heat_term = 2.0
+            
+            #######################
             
             new_temp = (prev_temp + 
                     insolation_term + 
                     re_emitted_radiation_term + 
                     conducted_heat_term + 
                     secondary_radiation_term)
+            # +        endogenic_heat_term)
 
             temperatures[i, time_step] = new_temp
             layer_temperatures[i, current_column, 0] = new_temp
@@ -99,13 +107,12 @@ class TempestStandardSolver(TemperatureSolver):
                 thermal_data.temperatures,
                 thermal_data.layer_temperatures,
                 thermal_data.insolation,
-                thermal_data.visible_facets,
+                thermal_data.visible_facets, 
                 thermal_data.secondary_radiation_view_factors,
                 const1, const2, const3, self_heating_const,
                 simulation.timesteps_per_day, simulation.n_layers,
                 config.include_self_heating
             )
-
             # Check for invalid temperatures
             for i in range(len(shape_model)):
                 for time_step in range(simulation.timesteps_per_day):

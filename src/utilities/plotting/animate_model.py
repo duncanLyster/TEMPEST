@@ -137,6 +137,19 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
             plt.ion()
             state.fig, state.ax = plt.subplots()
 
+            # Set dark theme for the matplotlib diurnal plot:
+            state.fig.patch.set_facecolor('black')
+            state.ax.set_facecolor('black')
+            state.ax.tick_params(colors='white', which='both')
+            state.ax.xaxis.label.set_color('white')
+            state.ax.yaxis.label.set_color('white')
+            state.ax.title.set_color('white')
+            for spine in state.ax.spines.values():
+                spine.set_color('white')
+            
+            # Fix the y-axis to be from 70 to 130K
+            state.ax.set_ylim(70, 130)
+
             def on_key(event):
                 if event.key == 'd':  # Download functionality
                     try:
@@ -183,17 +196,17 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                         values = plotted_variable_array[facet_id, :]
                         if state.use_local_time:
                             values = convert_to_local_time(values, 
-                                                         state.facet_normals[facet_id],
-                                                         state.sunlight_direction, 
-                                                         state.rotation_axis,
-                                                         facet_id)
+                                                           state.facet_normals[facet_id],
+                                                           state.sunlight_direction, 
+                                                           state.rotation_axis,
+                                                           facet_id)
                             time_steps = np.linspace(0, 24, len(values))  # 24-hour time
                         else:
                             time_steps = np.linspace(0, 1, len(values))
                         line.set_xdata(time_steps)
                         line.set_ydata(values)
                     
-                    state.ax.set_xlabel("Local Time (hours)" if state.use_local_time else "Fractional angle of rotation")
+                    state.ax.set_xlabel("Local Time (hours)" if state.use_local_time else "Fractional angle of rotation", color='white')
                     if state.use_local_time:
                         state.ax.set_xlim(0, 24)
                         state.ax.set_xticks(np.linspace(0, 24, 13))
@@ -203,17 +216,17 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                     state.fig.canvas.draw()
 
             state.fig.canvas.mpl_connect('key_press_event', on_key)
-            state.ax.set_xlabel("Fractional angle of rotation")
-            state.ax.set_ylabel(axis_label)
-            state.ax.set_title(f"{axis_label} Over Time for Selected Facets\nPress 'd' to save data, 't' to toggle local/global time")
+            state.ax.set_xlabel("Fractional angle of rotation", color='white')
+            state.ax.set_ylabel(axis_label, color='white')
+            state.ax.set_title(f"{axis_label} Over Time for Selected Facets\nPress 'd' to save data, 't' to toggle local/global time", color='white')
 
         values_over_time = plotted_variable_array[cell_id, :]
         if state.use_local_time:
             values_over_time = convert_to_local_time(values_over_time, 
-                                                   state.facet_normals[cell_id],
-                                                   state.sunlight_direction, 
-                                                   state.rotation_axis,
-                                                   cell_id)
+                                                     state.facet_normals[cell_id],
+                                                     state.sunlight_direction, 
+                                                     state.rotation_axis,
+                                                     cell_id)
             time_steps = np.linspace(0, 24, len(values_over_time))
         else:
             time_steps = np.linspace(0, 1, len(values_over_time))
@@ -223,7 +236,10 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
     # Ensure the graph and highlight mesh are updated
     update_highlight_mesh(state, plotter, pv_mesh)
     if state.fig is not None:
-        state.ax.legend()
+        leg = state.ax.legend()
+        # Ensure legend text is white
+        for text in leg.get_texts():
+            text.set_color("white")
         state.fig.canvas.draw()
         state.fig.canvas.flush_events()
 
