@@ -55,14 +55,14 @@ class Config:
         self.include_shadowing = self.config_data.get('include_shadowing', True)
         self.n_scatters = self.config_data.get('n_scatters', 2)
         self.include_self_heating = self.config_data.get('include_self_heating', False)
-        self.apply_roughness = self.config_data.get('apply_roughness', False)
-        self.subdivision_levels = self.config_data.get('subdivision_levels', 3)
-        self.displacement_factors = self.config_data.get('displacement_factors', [0.5, 0.5, 0.5])
-        self.vf_rays = self.config_data.get('vf_rays', 100)
-        self.calculate_visible_phase_curve = self.config_data.get('calculate_visible_phase_curve', True)
-        self.calculate_thermal_phase_curve = self.config_data.get('calculate_thermal_phase_curve', True)
-        self.scattering_lut = self.config_data.get('scattering_lut', 'lambertian.npy')
-        self.emission_lut = self.config_data.get('emission_lut', 'lambertian.npy')
+        
+        # Surface Roughness Model settings
+        self.apply_spherical_depression_roughness = self.config_data.get('apply_spherical_depression_roughness', False)
+        self.depression_subfacets_count = self.config_data.get('depression_subfacets_count', 30)
+        self.depression_profile_angle_degrees = self.config_data.get('depression_profile_angle_degrees', 45)
+        self.depression_MCRT_rays_per_emission_step = self.config_data.get('depression_MCRT_rays_per_emission_step', 100)
+        self.depression_internal_scattering_iterations = self.config_data.get('depression_internal_scattering_iterations', 2)
+        self.depression_outgoing_emission_bins = self.config_data.get('depression_outgoing_emission_bins', 36)
 
         # Plotting settings
         self.plotted_facet_index = self.config_data.get('plotted_facet_index', 1220)
@@ -77,7 +77,6 @@ class Config:
         self.save_thermal_phase_curve_data = self.config_data.get('save_thermal_phase_curve_data', False)
 
         # Animations
-        self.animate_roughness_model = self.config_data.get('animate_roughness_model', False)
         self.animate_shadowing = self.config_data.get('animate_shadowing', False)
         self.animate_secondary_radiation_view_factors = self.config_data.get('animate_secondary_radiation_view_factors', False)
         self.animate_secondary_contributions = self.config_data.get('animate_secondary_contributions', False)
