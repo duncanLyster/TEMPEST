@@ -1,5 +1,5 @@
 # To run the model, run the following command:
-# python tempest.py --config /data/config/example_config.yaml/
+# python tempest.py --config /data/config/example_config.yaml 
 # This config file is used for testing the model and can be saved as a template for your own objects.
 
 # General settings
@@ -7,7 +7,7 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "Rubber_Duck_1500_facets.stl"  # Name of the shape model file in data/shape_models/
+shape_model_file: "67P_not_to_scale_low_res.stl"  # Name of the shape model file in data/shape_models/
 shape_model_directory: "data/shape_models/"
 
 # Performance settings
@@ -78,9 +78,10 @@ animate_secondary_radiation_view_factors: false # 3D animation showing secondary
 animate_secondary_contributions: false    # 3D animation showing radiative self-heating contributions
 plot_energy_terms: false                  # Plot energy balance terms
 
-# Fractal roughness (Relic from an earlier version and needs more work)
-roughness_scheme: "lambertian"
-apply_roughness: false 
-subdivision_levels: 3  
-displacement_factors: [0.05, 0.1, 0.5]  # Displacement factors for each subdivision level (range: 0-1)
-animate_roughness_model: false
+# Surface Roughness Model
+apply_spherical_depression_roughness: true  # Master switch for new roughness model
+depression_subfacets_count: 30              # Number of sub-facets per depression
+depression_profile_angle_degrees: 45        # Controls depth/curvature (0=flat, 90=hemisphere)
+depression_MCRT_rays_per_emission_step: 100 # Rays traced from each sub-facet when radiating
+depression_internal_scattering_iterations: 2 # Light bounces within a depression
+depression_outgoing_emission_bins: 36       # Number of directional bins for emission hemisphere

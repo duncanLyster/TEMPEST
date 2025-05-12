@@ -279,36 +279,14 @@ def main():
     conditional_print(config.silent_mode,  f"\n Number of facets: {len(shape_model)}")
 
     # Apply roughness to the shape model
-    if config.apply_roughness:
-        conditional_print(config.silent_mode,  f"Applying roughness to shape model. Original size: {len(shape_model)} facets.")
-        shape_model = apply_roughness(shape_model, simulation, config, config.subdivision_levels, config.displacement_factors)
-        conditional_print(config.silent_mode,  f"Roughness applied to shape model. New size: {len(shape_model)} facets.")
-        # Save the shape model with roughness applied with a new filename
-        config.path_to_shape_model_file = f"{config.path_to_shape_model_file[:-4]}_roughness_applied.stl"
-        # Save it to a new file
-        save_shape_model(shape_model, config.path_to_shape_model_file, config)
-
-        # Read in the new shape model to ensure facets are updated
-        shape_model = read_shape_model(config.path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
-
-        thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
-
-        # Visualise shape model with roughness
-        if config.animate_roughness_model: 
-            check_remote_and_animate(config.remote, config.path_to_shape_model_file, 
-                np.ones((len(shape_model), 1)),  # Make this a 2D array
-                simulation.rotation_axis, 
-                simulation.sunlight_direction, 
-                1, 
-                simulation.solar_distance_au,
-                simulation.rotation_period_hours,
-                colour_map='viridis', 
-                plot_title='Roughness applied to shape model', 
-                axis_label='Roughness Value', 
-                animation_frames=1, 
-                save_animation=False, 
-                save_animation_name='roughness_animation.gif', 
-                background_colour='black')
+    if config.apply_spherical_depression_roughness:
+        conditional_print(config.silent_mode, f"Applying spherical depression roughness to shape model. Original size: {len(shape_model)} facets.")
+        conditional_print(config.silent_mode, "WARNING: Spherical depression roughness is not fully implemented yet.")
+        conditional_print(config.silent_mode, "Running with placeholder implementation for testing purposes.")
+        
+        # Initialize the roughness model for each facet
+        for facet in shape_model:
+            facet.generate_spherical_depression(config, simulation)
 
     # Setup the model
     positions = np.array([facet.position for facet in shape_model])
