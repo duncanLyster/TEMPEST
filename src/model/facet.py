@@ -2,6 +2,7 @@
 
 import numpy as np
 from src.model.sub_facet import SubFacet
+from src.model.spherical_cap_mesh import generate_canonical_spherical_cap
 
 class Facet:
     def __init__(self, normal, vertices, timesteps_per_day, max_days, n_layers, calculate_energy_terms):
@@ -32,23 +33,39 @@ class Facet:
         return np.linalg.norm(np.cross(v1-v0, v2-v0)) / 2
 
     def generate_spherical_depression(self, config, simulation):
-        """
-        Generate the spherical depression geometry for this parent facet.
-        This is a placeholder - we'll implement the actual geometry generation in Step 3.
-        """
         if not config.apply_spherical_depression_roughness:
             return
-            
-        # For now, just create a single sub-facet as a placeholder
-        # We'll implement proper spherical depression geometry in Step 3
-        sub_facet = SubFacet(
-            parent_id=id(self),
-            local_id=0,
-            vertices=self.vertices,  # Using parent vertices for now
-            normal=self.normal       # Using parent normal for now
-        )
-        self.sub_facets = [sub_facet]
-        
+
+        # Only generate the canonical mesh once and cache it as a class attribute
+        if not hasattr(Facet, "_canonical_subfacet_mesh") or Facet._canonical_subfacet_mesh is None:
+            Facet._canonical_subfacet_mesh = generate_canonical_spherical_cap(
+                config.depression_subfacets_count,
+                config.depression_profile_angle_degrees
+            )
+            # Optional: Store config parameters used to generate the mesh to detect if regeneration is needed
+            Facet._canonical_mesh_params = (config.depression_subfacets_count, config.depression_profile_angle_degrees)
+        else:
+            # Optional: Check if config changed, requiring regeneration
+            current_params = (config.depression_subfacets_count, config.depression_profile_angle_degrees)
+            if hasattr(Facet, "_canonical_mesh_params") and Facet._canonical_mesh_params != current_params:
+                Facet._canonical_subfacet_mesh = generate_canonical_spherical_cap(
+                    config.depression_subfacets_count,
+                    config.depression_profile_angle_degrees
+                )
+                Facet._canonical_mesh_params = current_params
+
+
+        self.sub_facets = []
+        if Facet._canonical_subfacet_mesh: # Check if mesh generation was successful
+            for i, _ in enumerate(Facet._canonical_subfacet_mesh): # Iterate using index
+                # SubFacet no longer takes vertices/normal directly
+                subfacet = SubFacet(
+                    parent_id=id(self), 
+                    local_id=i # Use 'i' as the local_id and canonical_index
+                )
+                # subfacet.canonical_index = i # Already set by local_id in SubFacet's __init__
+                self.sub_facets.append(subfacet)
+
     def process_intra_depression_energetics(self, config, simulation):
         """
         Process energy exchange within the depression.
