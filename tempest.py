@@ -45,7 +45,8 @@ from src.model.facet import Facet
 from src.utilities.config import Config
 from src.utilities.utils import (
     calculate_black_body_temp,
-    conditional_print
+    conditional_print,
+    calculate_rotation_matrix
 )
 from src.model.view_factors import (
     calculate_and_cache_visible_facets,
@@ -54,6 +55,7 @@ from src.model.view_factors import (
 )
 from src.utilities.plotting.plotting import check_remote_and_animate
 from src.model.solvers import TemperatureSolverFactory
+from src.model.view_factors import calculate_view_factors
 
 def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
     ''' 
@@ -284,6 +286,33 @@ def main():
         # Initialize the roughness model for each facet
         for facet in shape_model:
             facet.generate_spherical_depression(config, simulation)
+        # Precompute dome-to-parent view-factors for proper roughness coupling
+        import math
+        parent_vertices = np.array([f.vertices for f in shape_model])
+        parent_areas = np.array([f.area for f in shape_model])
+        for facet in shape_model:
+            M = len(facet.dome_facets)
+            subj_vertices = np.zeros((M, 3, 3), dtype=np.float64)
+            subj_normals = np.zeros((M, 3), dtype=np.float64)
+            subj_areas = np.zeros(M, dtype=np.float64)
+            for j, entry in enumerate(facet.dome_facets):
+                parent_radius = math.sqrt(facet.area / math.pi)
+                # Scale local dome triangle by radius factor
+                local_scaled = entry['vertices'] * (config.kernel_dome_radius_factor * parent_radius)
+                # Rotate into world and translate to facet center
+                world_tris = (facet.dome_rotation.dot(local_scaled.T)).T + facet.position
+                subj_vertices[j] = world_tris
+                subj_normals[j] = facet.dome_rotation.dot(entry['normal'])
+                subj_areas[j] = entry['area'] * (config.kernel_dome_radius_factor * parent_radius)**2
+            # Compute view-factors from each dome patch to parent facets
+            F_dp = np.zeros((M, len(shape_model)), dtype=np.float64)
+            for j in range(M):
+                F_dp[j, :] = calculate_view_factors(
+                    subj_vertices[j], subj_normals[j], subj_areas[j],
+                    parent_vertices, parent_areas, config.vf_rays
+                )
+            facet.depression_global_F_dp = F_dp
+        conditional_print(config.silent_mode, "Precomputed dome-to-parent view-factors for depressions")
 
     # Setup the model
     positions = np.array([facet.position for facet in shape_model])
@@ -322,6 +351,34 @@ def main():
         thermal_data.thermal_view_factors = numba_view_factors
 
     thermal_data = calculate_insolation(thermal_data, shape_model, simulation, config)
+
+    # If kernel-based roughness is enabled, process per-timestep sub-facet insolation
+    if config.apply_kernel_based_roughness:
+        # Parent facet areas for directional coupling
+        parent_areas = np.array([f.area for f in shape_model], dtype=np.float64)
+        for t in range(simulation.timesteps_per_day):
+            # Compute rotated sun direction for this timestep
+            angle = (2 * np.pi / simulation.timesteps_per_day) * t
+            R = calculate_rotation_matrix(simulation.rotation_axis, angle)
+            world_dir = R.T.dot(simulation.sunlight_direction)
+            for i, facet in enumerate(shape_model):
+                # Use parent insolation flux per unit area for depression solver
+                flux = thermal_data.insolation[i, t]
+                facet.parent_incident_energy_packets.append((flux, world_dir, 'solar'))
+                facet.process_intra_depression_energetics(config, simulation)
+                # Store absorbed solar input for conduction solver
+                facet.depression_thermal_data.insolation[:, t] = facet._last_absorbed_solar
+                # Proper directional coupling via dome-to-parent view-factors
+                M = len(facet.dome_facets)
+                out_vis = np.array([facet.depression_outgoing_flux_distribution['scattered_visible'].get(j, 0.0) for j in range(M)], dtype=np.float64)
+                inc_to_parents = facet.depression_global_F_dp.T.dot(out_vis)
+                # Convert incident power to flux per unit area and accumulate on all parent facets
+                thermal_data.insolation[:, t] += inc_to_parents / parent_areas
+                # Thermal coupling via dome-to-parent view-factors
+                out_th = np.array([facet.depression_outgoing_flux_distribution['thermal'].get(j, 0.0) for j in range(M)], dtype=np.float64)
+                inc_th_to_parents = facet.depression_global_F_dp.T.dot(out_th)
+                # Convert thermal incident power to flux per unit area and accumulate
+                thermal_data.insolation[:, t] += inc_th_to_parents / parent_areas
 
     if config.plot_insolation_curve and not config.silent_mode:
         fig_insolation = plt.figure(figsize=(10, 6))
@@ -568,6 +625,31 @@ def main():
         plt.ylabel('Energy (J)')
         plt.title('Energy terms for facet for the final day')
         fig_energy_terms.show()
+
+    # If roughness enabled, run sub-facet solves and aggregate before final-day animation
+    if config.apply_kernel_based_roughness:
+        sub_solver = TemperatureSolverFactory.create(config.temp_solver)
+        old_silent = config.silent_mode
+        config.silent_mode = True
+        for facet in shape_model:
+            sub_solver.initialize_temperatures(facet.depression_thermal_data, simulation, config)
+            facet.depression_temperature_result = sub_solver.solve(
+                facet.depression_thermal_data,
+                facet.sub_facets,
+                simulation,
+                config
+            )
+        config.silent_mode = old_silent
+        # Aggregate sub-facet final-day temperatures to parent facets
+        n_parents = len(shape_model)
+        parent_t_final = np.zeros((n_parents, simulation.timesteps_per_day), dtype=np.float64)
+        for i, facet in enumerate(shape_model):
+            sub_temps = facet.depression_temperature_result["final_day_temperatures"]
+            mesh = Facet._canonical_subfacet_mesh
+            area_vec = np.array([entry['area'] * facet.area for entry in mesh], dtype=np.float64)
+            parent_t_final[i, :] = (area_vec[:, None] * sub_temps).sum(axis=0) / area_vec.sum()
+        result["final_day_temperatures"] = parent_t_final
+        result["final_timestep_temperatures"] = parent_t_final[:, -1]
 
     if config.animate_final_day_temp_distribution:
         conditional_print(config.silent_mode,  f"Preparing temperature animation.\n")

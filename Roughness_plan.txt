@@ -1,6 +1,6 @@
 High-Level Roughness Model Plan
 
-Status: We are up to Step 4: implementing the intra-facet view-factor + dome radiosity solver (no more MCRT internally).
+Status: Step 4 complete. Step 5 (Core Intra-Facet Solver) skeleton implemented: incident mapping, shadowing, iterative scattering, one-bounce thermal self-heating, dome projection. Pending: canonical view-factor computation, conduction/temperature updates.
 
 1. Configuration Updates
 • apply_kernel_based_roughness: true
@@ -8,6 +8,7 @@ Status: We are up to Step 4: implementing the intra-facet view-factor + dome rad
 • kernel_subfacets_count: <N>         # number of sub-facets per kernel (e.g. 30)
 • kernel_profile_angle_degrees: <φ>   # controls curvature for spherical_cap (0=flat, up to 90=hemisphere)
 • kernel_directional_bins: <M>        # number of dome directional bins (e.g. facets of an icosphere)
+• intra_facet_scatters: 2  # number of internal scattering iterations
 
 2. Core Abstractions
 • Define RoughnessKernel interface with methods:
@@ -33,18 +34,35 @@ Status: We are up to Step 4: implementing the intra-facet view-factor + dome rad
 • Store only local mapping to canonical indices (no per-instance storage of full mesh or VFs)
 
 5. Core Intra-Facet Solver (Facet.process_intra_roughness_energetics)
-Inputs: parent_incident_packets [(flux, dir_vec, type)]
-• Flat-disc (φ≈0) shortcut:
-    – total_incident = Σ flux_packets
-    – for each dome bin j: out[j] = total_incident × (cosθ_j×area_j) / Σ(cosθ_k×area_k)
-• Depression case:
-    1. Assemble E0[N]: per-i subfacet incident = Σ packets × area_i × cosθ_inc_i × (1–albedo or emissivity)
-    2. Solve radiosity:
-       • scattering:  B_vis = (I−ρ·F_ss)^(-1) · E0_vis
-       • thermal:   B_th  = ε·(I−(1−ε)·F_ss)^(-1) · E0_th
-    3. Project onto dome: out_vis[M] = F_sd^T · B_vis; out_th[M] = F_sd^T · B_th
-    4. Store depression_outgoing_flux_distribution['scattered_visible']=out_vis
-       and ['thermal']=out_th; reset incident packets
+Inputs: parent_incident_packets [(flux, dir_world, type_flag)], where type_flag∈{'solar','scattered_visible','thermal'}
+
+Implemented Workflow:
+  a. Preprocess incidents:
+     - Map each world-space dir_vec → facet-local (via dome_rotation)
+     - Shadow test each subfacet via calculate_shadowing against its canonical triangle
+     - Compute incident energy = flux×area_i×cosθ
+     - Accumulate into E0_vis (all visible incident) or E0_th (thermal incident), track absorbed fractions (1–albedo or 1–ε)
+
+  b. Iterative scattering (visible):
+     B_vis = Σ_{k=0..K−1} [ρ^k (F_ss^k · E0_vis)]
+     (K = intra_facet_scatters)
+
+  c. Thermal self-heating (no scattering):
+     B_th_direct = ε · E0_th
+     B_th_self   = F_ssᵀ · B_th_direct  # single-bounce
+     B_th        = B_th_direct + B_th_self
+
+  d. Project onto dome:
+     out_vis[M] = F_sdᵀ · B_vis
+     out_th[M]  = F_sdᵀ · B_th
+     Store in depression_outgoing_flux_distribution
+
+Deviations from original plan:
+• Replaced analytic radiosity solves with iterative scattering loops (no matrix inversion needed).
+• Thermal solved as direct emission + single-bounce, not full (I−(1−ε)F_ss)⁻¹.
+• Integrated intra-facet shadowing for each incident ray using calculate_shadowing.
+• Flat-disc shortcut and conduction/temperature update not yet implemented.
+• _compute_canonical_view_factors() remains unimplemented.
 
 6. Integration with Rest of Model
 • Insolation & visible scattering:
