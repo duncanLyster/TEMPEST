@@ -62,6 +62,8 @@ class Config:
         self.kernel_subfacets_count = self.config_data.get('kernel_subfacets_count', 30)
         self.kernel_profile_angle_degrees = self.config_data.get('kernel_profile_angle_degrees', 45)
         self.kernel_directional_bins = self.config_data.get('kernel_directional_bins', 36)
+        # Dome geometry scale factor relative to parent facet radius
+        self.kernel_dome_radius_factor = self.config_data.get('kernel_dome_radius_factor', 100.0)
 
         # Plotting settings
         self.plotted_facet_index = self.config_data.get('plotted_facet_index', 1220)
