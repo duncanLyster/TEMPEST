@@ -278,12 +278,9 @@ def main():
     conditional_print(config.silent_mode,  f"Skin depth: {simulation.skin_depth} m")
     conditional_print(config.silent_mode,  f"\n Number of facets: {len(shape_model)}")
 
-    # Apply roughness to the shape model
-    if config.apply_spherical_depression_roughness:
-        conditional_print(config.silent_mode, f"Applying spherical depression roughness to shape model. Original size: {len(shape_model)} facets.")
-        conditional_print(config.silent_mode, "WARNING: Spherical depression roughness is not fully implemented yet.")
-        conditional_print(config.silent_mode, "Running with placeholder implementation for testing purposes.")
-        
+    # Apply kernel-based roughness to the shape model
+    if config.apply_kernel_based_roughness:
+        conditional_print(config.silent_mode, f"Applying kernel-based roughness ({config.roughness_kernel}) to shape model. Original size: {len(shape_model)} facets.")
         # Initialize the roughness model for each facet
         for facet in shape_model:
             facet.generate_spherical_depression(config, simulation)
