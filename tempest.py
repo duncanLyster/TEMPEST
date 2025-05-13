@@ -357,14 +357,20 @@ def main():
         # Parent facet areas for directional coupling
         parent_areas = np.array([f.area for f in shape_model], dtype=np.float64)
         for t in range(simulation.timesteps_per_day):
+            # Snapshot base insolation (net flux) at this time before coupling
+            base_insolation = thermal_data.insolation[:, t].copy()
             # Compute rotated sun direction for this timestep
             angle = (2 * np.pi / simulation.timesteps_per_day) * t
             R = calculate_rotation_matrix(simulation.rotation_axis, angle)
             world_dir = R.T.dot(simulation.sunlight_direction)
             for i, facet in enumerate(shape_model):
-                # Use parent insolation flux per unit area for depression solver
-                flux = thermal_data.insolation[i, t]
-                facet.parent_incident_energy_packets.append((flux, world_dir, 'solar'))
+                # Recover raw flux0 (no albedo) from net insolation
+                flux_net = base_insolation[i]
+                cos_parent = np.dot(facet.normal, world_dir)
+                if cos_parent <= 0:
+                    continue
+                flux0 = flux_net / ((1 - simulation.albedo) * cos_parent)
+                facet.parent_incident_energy_packets.append((flux0, world_dir, 'solar'))
                 facet.process_intra_depression_energetics(config, simulation)
                 # Store absorbed solar input for conduction solver
                 facet.depression_thermal_data.insolation[:, t] = facet._last_absorbed_solar

@@ -197,14 +197,18 @@ class Facet:
         for flux, dir_world, type_flag in self.parent_incident_energy_packets:
             # Map direction into facet-local space
             d_local = self.dome_rotation.dot(np.array(dir_world))
-            # Single shadow test per facet
+            # Shadow test each subfacet against all *other* triangles to avoid self-shadowing
             for i in range(N):
+                # Build list of other triangles (exclude self) for shadow test
+                other_idx = np.arange(N) != i
+                triangles_other = sub_triangles[other_idx]
+                idxs_other = np.arange(triangles_other.shape[0])
                 # Shadowing check: 1 if lit, 0 if shadowed
                 lit = calculate_shadowing(
-                    np.array([centers[i]]),          # subject position
-                    np.array([d_local]),             # ray direction
-                    sub_triangles,                    # triangle vertices
-                    np.arange(N)                     # all sub-facet indices
+                    np.array([centers[i]]),  # subject position
+                    np.array([d_local]),     # ray direction
+                    triangles_other,         # other triangle vertices
+                    idxs_other               # their indices
                 )
                 if lit == 0:
                     continue
@@ -214,6 +218,7 @@ class Facet:
                 cos_theta = np.dot(n_i, d_local)
                 if cos_theta <= 0:
                     continue
+                # Compute incident energy using raw flux and subfacet orientation
                 incident = flux * area_i * cos_theta
                 if type_flag in ('solar', 'scattered_visible'):
                     # visible incident

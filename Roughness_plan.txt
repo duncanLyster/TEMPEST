@@ -1,98 +1,69 @@
 High-Level Roughness Model Plan
 
-Status: Step 4 complete. Step 5 (Core Intra-Facet Solver) skeleton implemented: incident mapping, shadowing, iterative scattering, one-bounce thermal self-heating, dome projection. Pending: canonical view-factor computation, conduction/temperature updates.
+Status: Steps 1–6 fully implemented and integrated into TEMPEST:
+  • Config flags loaded and tested
+  • SphericalCapKernel canonical mesh (N sub-facets) and dome (M bins) generation
+  • Precomputed canonical view-factor matrices F_ss and F_sd cached by (kernel, N, φ, M)
+  • ParentFacet.generate_spherical_depression: instantiate SubFacet objects, build facet-local dome, compute dome_rotation
+  • Core intra-facet solver: E0_vis/E0_th assembly with shadowing, iterative visible scattering, one-bounce thermal self-heating, dome projection
+  • Roughness ↔ parent coupling: dome-to-parent F_dp distribution of visible & thermal flux each timestep
+  • Per-depression ThermalData created; per-subfacet conduction solved; area-weighted aggregation back to parent
 
-1. Configuration Updates
-• apply_kernel_based_roughness: true
-• roughness_kernel: 'spherical_cap'   # choose from ['spherical_cap', 'fractal', ...]
-• kernel_subfacets_count: <N>         # number of sub-facets per kernel (e.g. 30)
-• kernel_profile_angle_degrees: <φ>   # controls curvature for spherical_cap (0=flat, up to 90=hemisphere)
-• kernel_directional_bins: <M>        # number of dome directional bins (e.g. facets of an icosphere)
-• intra_facet_scatters: 2  # number of internal scattering iterations
+Next Steps: Testing and Validation (Step 7)
+1. Flat-Disc Sanity Check - passed. 
+   1.1 Run with kernel_profile_angle_degrees ≈ 0 (flat disc) vs apply_kernel_based_roughness=False
+   1.2 Verify identical parent-insolation curves and final-day temperatures
 
-2. Core Abstractions
-• Define RoughnessKernel interface with methods:
-    – canonical_subfacets() → (vertices[N], normals[N], areas[N])
-    – canonical_F_ss() → np.ndarray shape (N×N)
-    – canonical_F_sd(dome_bins=M) → np.ndarray shape (N×M)
-• Implement SphericalCapKernel(profile_angle, subfacets_count)
-• (Future) Implement FractalKernel, other patch shapes via same interface
-• Define DirectionalityDome(dome_bins=M): holds fixed normals[M], areas[M]
+2. Energy Conservation Diagnostics
+   2.1 At each timestep, track: total incident = absorbed + Σ(out_vis) + Σ(out_th)
+   2.2 Add quick logging or asserts in process_intra_depression_energetics and parent coupling to flag imbalances
 
-3. Precompute Canonical View-Factors
-• On first use of a given (kernel, N, M):
-    a. Generate canonical sub-facet mesh (N triangles) and dome (M facets)
-    b. Compute F_ss (N×N) among sub-facets
-    c. Compute F_sd (N×M) from sub-facets into dome facets
-    d. Cache arrays keyed by (kernel_type, N, φ, M)
+3. Performance Profiling & Optimization
+   3.1 Profile run-time hot spots: MCRT view-factors, dome-to-parent coupling, subfacet calls
+   3.2 Ideas for speed-ups:
+      • Lower vf_rays for coarse tests; adaptive ray counts per facet
+      • Vectorize per-facet loops; batch subfacet solves
+      • Use numba on process_intra_depression_energetics
+      • Cache parent_areas, dome_rotation, view-factors in compact structures
+      • Early exit flat-disc case without radiosity solve
 
-4. Initialization of Roughness Model (ParentFacet.generate_roughness)
-• If apply_kernel_based_roughness is false, skip
-• Ask RoughnessKernel for canonical mesh; orient & scale into parent facet plane
-• Instantiate SubFacet(parent_id, local_id=i, canonical_index=i) for i in 0…N−1
-• Build DirectionalityDome(M); rotate dome normals to align dome pole with parent normal - use the same spherical_cap_mesh.py script to generate the dome (should have 90 degree profile angle)
-• Store only local mapping to canonical indices (no per-instance storage of full mesh or VFs)
+4. 1D Model Validation
+   4.1 Compare parent and subfacet conduction vs established 1D thermal solver for a single facet
+   4.2 Run roughness model on 1 parent facet with N subfacets; compare spatially averaged T(t)
+   4.3 Confirm agreement to within <1% error
 
-5. Core Intra-Facet Solver (Facet.process_intra_roughness_energetics)
-Inputs: parent_incident_packets [(flux, dir_world, type_flag)], where type_flag∈{'solar','scattered_visible','thermal'}
+5. Phase‐Curve & Opposition Effect Tests
+   5.1 Compute visible and thermal phase curves with and without roughness
+   5.2 Check for opposition surge in visible brightness
+   5.3 Validate against analytic Lambertian / Lommel-Seeliger expectations
 
-Implemented Workflow:
-  a. Preprocess incidents:
-     - Map each world-space dir_vec → facet-local (via dome_rotation)
-     - Shadow test each subfacet via calculate_shadowing against its canonical triangle
-     - Compute incident energy = flux×area_i×cosθ
-     - Accumulate into E0_vis (all visible incident) or E0_th (thermal incident), track absorbed fractions (1–albedo or 1–ε)
+6. BRDF & EPF Characterization
+   6.1 Use sub-facet geometry & F_sd to derive effective BRDF and EPF LUTs
+   6.2 Compare with lab-measured rough surface BRDF/EPF
+   6.3 Calculate RMS slope from canonical mesh; compare to target φ and literature
 
-  b. Iterative scattering (visible):
-     B_vis = Σ_{k=0..K−1} [ρ^k (F_ss^k · E0_vis)]
-     (K = intra_facet_scatters)
+7. Unit Tests & CI
+   • Canonical mesh generation: N, φ consistency, near-equilateral triangles
+   • F_ss and F_sd dimensions and simple integrals (sum to 1)
+   • Idempotency: repeated generate_spherical_depression no side-effects
+   • process_intra logic for toy kernels (N=1,2)
+   • Flat vs smooth results equal for φ→0
+   • Energy balance checks
 
-  c. Thermal self-heating (no scattering):
-     B_th_direct = ε · E0_th
-     B_th_self   = F_ssᵀ · B_th_direct  # single-bounce
-     B_th        = B_th_direct + B_th_self
+8. Software Roadmap & Documentation
+   8.1 Create high-level flowchart: modules → data flows → kernel interfaces
+   8.2 Update README: describe roughness design, config parameters, kernel interface
+   8.3 Write architecture doc: class diagrams, sequence of calls
+   8.4 Clean up file structure: split view-factors, solvers, mesh utilities into separate packages
+   8.5 Enforce best practices: logging, error handling, type hints
 
-  d. Project onto dome:
-     out_vis[M] = F_sdᵀ · B_vis
-     out_th[M]  = F_sdᵀ · B_th
-     Store in depression_outgoing_flux_distribution
-
-Deviations from original plan:
-• Replaced analytic radiosity solves with iterative scattering loops (no matrix inversion needed).
-• Thermal solved as direct emission + single-bounce, not full (I−(1−ε)F_ss)⁻¹.
-• Integrated intra-facet shadowing for each incident ray using calculate_shadowing.
-• Flat-disc shortcut and conduction/temperature update not yet implemented.
-• _compute_canonical_view_factors() remains unimplemented.
-
-6. Integration with Rest of Model
-• Insolation & visible scattering:
-    – Create solar packets on parents → process_intra_roughness_energetics
-    – Use inter-parent view-factors on dome bins to distribute scattered energy
-• Thermal self-heating:
-    – Create thermal emission packets per dome bin → distribute to other parents
-    – Recv on parent_incident_packets → process internally to update depression_total_absorbed_thermal_flux
-• Phase curves:
-    – After process_intra, sum dome bins pointed at observer for visible/thermal brightness
-
-7. Development & Testing Strategy
-• Flat-disc sanity: dome projection reproduces discrete Lambert cosine law
-• Energy conservation: incident = absorbed + Σ(out_vis) + Σ(out_th)
-• Mesh-convergence: vary N, M → track net-flux convergence
-• Cross-validation: compare a handful of cases vs legacy MCRT code (<1% difference)
-• Unit tests for:
-    – RoughnessKernel canonical mesh/F_ss/F_sd shapes
-    – Facet.generate_roughness idempotency and param change
-    – process_intra logic for simple N=1 or N=2 toy kernels
-
-8. Optional Next Steps
-• Swap in new roughness kernels: fractal patches, Gaussian-bump kernels, user-supplied meshes
-• Anisotropic / specular scattering: extend F_ss/F_sd integrals or add per-kernel BRDF functions
-• Adaptive dome resolution: refine M in directions of high flux gradient
-• GPU accelerate radiosity solves for very large N
-• Hybrid MCRT fallback for extremely non-Lambertian kernels
-
-9. Cleanup & Documentation
-• Update README/docs: describe view-factor approach, config params, kernel interface
-• Deprecate old MCRT internal code paths, remove config flags no longer needed
+Optional Future Steps (from original doc)
+• Implement additional kernels: fractal, Gaussian‐bump, user‐supplied meshes
+• Anisotropic/specular scattering: extend F_ss/F_sd or plug-in BRDF functions
+• Adaptive dome resolution: refine directional bins in high-gradient regions
+• GPU‐accelerate view‐factor solves for large N
+• Hybrid MCRT fallback for non‐Lambertian BRDFs
+• Phase‐curve validation vs observational datasets
+• Packaging & distribution: pip installable, CLI improvements
 
 -- End of Plan --
