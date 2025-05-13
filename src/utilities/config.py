@@ -55,6 +55,7 @@ class Config:
         self.include_shadowing = self.config_data.get('include_shadowing', True)
         self.n_scatters = self.config_data.get('n_scatters', 2)
         self.include_self_heating = self.config_data.get('include_self_heating', False)
+        self.vf_rays = self.config_data.get('vf_rays', 1000)
         
         # Surface Roughness Model settings (kernel-based)
         self.apply_kernel_based_roughness = self.config_data.get('apply_kernel_based_roughness', False)
@@ -64,6 +65,8 @@ class Config:
         self.kernel_directional_bins = self.config_data.get('kernel_directional_bins', 36)
         # Dome geometry scale factor relative to parent facet radius
         self.kernel_dome_radius_factor = self.config_data.get('kernel_dome_radius_factor', 100.0)
+        # Number of intra-facet scattering iterations
+        self.intra_facet_scatters = self.config_data.get('intra_facet_scatters', 2)
 
         # Plotting settings
         self.plotted_facet_index = self.config_data.get('plotted_facet_index', 1220)
@@ -85,6 +88,9 @@ class Config:
 
         # Debugging
         self.calculate_energy_terms = self.config_data.get('calculate_energy_terms', False)
+        # Phase curve toggles (legacy keys)
+        self.calculate_visible_phase_curve = self.config_data.get('calculate_visible_phase_curve', False)
+        self.calculate_thermal_phase_curve = self.config_data.get('calculate_thermal_phase_curve', False)
 
     def validate_jobs(self):
         """

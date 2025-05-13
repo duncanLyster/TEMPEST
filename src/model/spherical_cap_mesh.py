@@ -224,4 +224,7 @@ def visualize_spherical_cap(n_subfacets, profile_angle_deg):
     plotter.show()
 
 if __name__ == "__main__":
-    visualize_spherical_cap(100, 90)
+    N_facets_target = 30
+    profile_angle_deg = 0
+    
+    visualize_spherical_cap(N_facets_target, profile_angle_deg)
