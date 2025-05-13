@@ -56,13 +56,12 @@ class Config:
         self.n_scatters = self.config_data.get('n_scatters', 2)
         self.include_self_heating = self.config_data.get('include_self_heating', False)
         
-        # Surface Roughness Model settings
-        self.apply_spherical_depression_roughness = self.config_data.get('apply_spherical_depression_roughness', False)
-        self.depression_subfacets_count = self.config_data.get('depression_subfacets_count', 30)
-        self.depression_profile_angle_degrees = self.config_data.get('depression_profile_angle_degrees', 45)
-        self.depression_MCRT_rays_per_emission_step = self.config_data.get('depression_MCRT_rays_per_emission_step', 100)
-        self.depression_internal_scattering_iterations = self.config_data.get('depression_internal_scattering_iterations', 2)
-        self.depression_outgoing_emission_bins = self.config_data.get('depression_outgoing_emission_bins', 36)
+        # Surface Roughness Model settings (kernel-based)
+        self.apply_kernel_based_roughness = self.config_data.get('apply_kernel_based_roughness', False)
+        self.roughness_kernel = self.config_data.get('roughness_kernel', 'spherical_cap')
+        self.kernel_subfacets_count = self.config_data.get('kernel_subfacets_count', 30)
+        self.kernel_profile_angle_degrees = self.config_data.get('kernel_profile_angle_degrees', 45)
+        self.kernel_directional_bins = self.config_data.get('kernel_directional_bins', 36)
 
         # Plotting settings
         self.plotted_facet_index = self.config_data.get('plotted_facet_index', 1220)

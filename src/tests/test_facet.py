@@ -10,9 +10,10 @@ class MockSimulation:
 
 class MockConfig:
     def __init__(self, apply_roughness=True, subfacets_count=12, profile_angle=45):
-        self.apply_spherical_depression_roughness = apply_roughness
-        self.depression_subfacets_count = subfacets_count
-        self.depression_profile_angle_degrees = profile_angle
+        self.apply_kernel_based_roughness = apply_roughness
+        self.roughness_kernel = 'spherical_cap'
+        self.kernel_subfacets_count = subfacets_count
+        self.kernel_profile_angle_degrees = profile_angle
 
 def test_facet_initialization():
     """Test basic Facet initialization and parent facet functionality."""

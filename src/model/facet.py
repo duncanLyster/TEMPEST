@@ -33,27 +33,26 @@ class Facet:
         return np.linalg.norm(np.cross(v1-v0, v2-v0)) / 2
 
     def generate_spherical_depression(self, config, simulation):
-        if not config.apply_spherical_depression_roughness:
+        if not config.apply_kernel_based_roughness:
             return
 
         # Only generate the canonical mesh once and cache it as a class attribute
         if not hasattr(Facet, "_canonical_subfacet_mesh") or Facet._canonical_subfacet_mesh is None:
+            # Generate canonical mesh once (kernel-specific parameters)
             Facet._canonical_subfacet_mesh = generate_canonical_spherical_cap(
-                config.depression_subfacets_count,
-                config.depression_profile_angle_degrees
+                config.kernel_subfacets_count,
+                config.kernel_profile_angle_degrees
             )
-            # Optional: Store config parameters used to generate the mesh to detect if regeneration is needed
-            Facet._canonical_mesh_params = (config.depression_subfacets_count, config.depression_profile_angle_degrees)
+            Facet._canonical_mesh_params = (config.kernel_subfacets_count, config.kernel_profile_angle_degrees)
         else:
-            # Optional: Check if config changed, requiring regeneration
-            current_params = (config.depression_subfacets_count, config.depression_profile_angle_degrees)
+            # Regenerate if kernel params changed
+            current_params = (config.kernel_subfacets_count, config.kernel_profile_angle_degrees)
             if hasattr(Facet, "_canonical_mesh_params") and Facet._canonical_mesh_params != current_params:
                 Facet._canonical_subfacet_mesh = generate_canonical_spherical_cap(
-                    config.depression_subfacets_count,
-                    config.depression_profile_angle_degrees
+                    config.kernel_subfacets_count,
+                    config.kernel_profile_angle_degrees
                 )
                 Facet._canonical_mesh_params = current_params
-
 
         self.sub_facets = []
         if Facet._canonical_subfacet_mesh: # Check if mesh generation was successful
@@ -71,7 +70,7 @@ class Facet:
         Process energy exchange within the depression.
         This is a placeholder - we'll implement the actual MCRT in Step 4.
         """
-        if not config.apply_spherical_depression_roughness:
+        if not config.apply_kernel_based_roughness:
             # If roughness is disabled, just pass through the parent facet's energy
             return
             

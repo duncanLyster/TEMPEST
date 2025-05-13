@@ -1,0 +1,80 @@
+High-Level Roughness Model Plan
+
+Status: We are up to Step 4: implementing the intra-facet view-factor + dome radiosity solver (no more MCRT internally).
+
+1. Configuration Updates
+• apply_kernel_based_roughness: true
+• roughness_kernel: 'spherical_cap'   # choose from ['spherical_cap', 'fractal', ...]
+• kernel_subfacets_count: <N>         # number of sub-facets per kernel (e.g. 30)
+• kernel_profile_angle_degrees: <φ>   # controls curvature for spherical_cap (0=flat, up to 90=hemisphere)
+• kernel_directional_bins: <M>        # number of dome directional bins (e.g. facets of an icosphere)
+
+2. Core Abstractions
+• Define RoughnessKernel interface with methods:
+    – canonical_subfacets() → (vertices[N], normals[N], areas[N])
+    – canonical_F_ss() → np.ndarray shape (N×N)
+    – canonical_F_sd(dome_bins=M) → np.ndarray shape (N×M)
+• Implement SphericalCapKernel(profile_angle, subfacets_count)
+• (Future) Implement FractalKernel, other patch shapes via same interface
+• Define DirectionalityDome(dome_bins=M): holds fixed normals[M], areas[M]
+
+3. Precompute Canonical View-Factors
+• On first use of a given (kernel, N, M):
+    a. Generate canonical sub-facet mesh (N triangles) and dome (M facets)
+    b. Compute F_ss (N×N) among sub-facets
+    c. Compute F_sd (N×M) from sub-facets into dome facets
+    d. Cache arrays keyed by (kernel_type, N, φ, M)
+
+4. Initialization of Roughness Model (ParentFacet.generate_roughness)
+• If apply_kernel_based_roughness is false, skip
+• Ask RoughnessKernel for canonical mesh; orient & scale into parent facet plane
+• Instantiate SubFacet(parent_id, local_id=i, canonical_index=i) for i in 0…N−1
+• Build DirectionalityDome(M); rotate dome normals to align dome pole with parent normal - use the same spherical_cap_mesh.py script to generate the dome (should have 90 degree profile angle)
+• Store only local mapping to canonical indices (no per-instance storage of full mesh or VFs)
+
+5. Core Intra-Facet Solver (Facet.process_intra_roughness_energetics)
+Inputs: parent_incident_packets [(flux, dir_vec, type)]
+• Flat-disc (φ≈0) shortcut:
+    – total_incident = Σ flux_packets
+    – for each dome bin j: out[j] = total_incident × (cosθ_j×area_j) / Σ(cosθ_k×area_k)
+• Depression case:
+    1. Assemble E0[N]: per-i subfacet incident = Σ packets × area_i × cosθ_inc_i × (1–albedo or emissivity)
+    2. Solve radiosity:
+       • scattering:  B_vis = (I−ρ·F_ss)^(-1) · E0_vis
+       • thermal:   B_th  = ε·(I−(1−ε)·F_ss)^(-1) · E0_th
+    3. Project onto dome: out_vis[M] = F_sd^T · B_vis; out_th[M] = F_sd^T · B_th
+    4. Store depression_outgoing_flux_distribution['scattered_visible']=out_vis
+       and ['thermal']=out_th; reset incident packets
+
+6. Integration with Rest of Model
+• Insolation & visible scattering:
+    – Create solar packets on parents → process_intra_roughness_energetics
+    – Use inter-parent view-factors on dome bins to distribute scattered energy
+• Thermal self-heating:
+    – Create thermal emission packets per dome bin → distribute to other parents
+    – Recv on parent_incident_packets → process internally to update depression_total_absorbed_thermal_flux
+• Phase curves:
+    – After process_intra, sum dome bins pointed at observer for visible/thermal brightness
+
+7. Development & Testing Strategy
+• Flat-disc sanity: dome projection reproduces discrete Lambert cosine law
+• Energy conservation: incident = absorbed + Σ(out_vis) + Σ(out_th)
+• Mesh-convergence: vary N, M → track net-flux convergence
+• Cross-validation: compare a handful of cases vs legacy MCRT code (<1% difference)
+• Unit tests for:
+    – RoughnessKernel canonical mesh/F_ss/F_sd shapes
+    – Facet.generate_roughness idempotency and param change
+    – process_intra logic for simple N=1 or N=2 toy kernels
+
+8. Optional Next Steps
+• Swap in new roughness kernels: fractal patches, Gaussian-bump kernels, user-supplied meshes
+• Anisotropic / specular scattering: extend F_ss/F_sd integrals or add per-kernel BRDF functions
+• Adaptive dome resolution: refine M in directions of high flux gradient
+• GPU accelerate radiosity solves for very large N
+• Hybrid MCRT fallback for extremely non-Lambertian kernels
+
+9. Cleanup & Documentation
+• Update README/docs: describe view-factor approach, config params, kernel interface
+• Deprecate old MCRT internal code paths, remove config flags no longer needed
+
+-- End of Plan --
