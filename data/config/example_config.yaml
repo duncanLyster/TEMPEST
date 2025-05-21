@@ -56,8 +56,10 @@ calculate_visible_phase_curve: false   # Whether to calculate visible light phas
 calculate_thermal_phase_curve: false   # Whether to calculate thermal phase curve (not thoroughly validated)
 
 # Animation settings
-animate_final_day_temp_distribution: true # 3D animation showing final day temperature distribution
-animate_shadowing: false                  # 3D animation showing insolation - looks cool and can be used to validate shadowing calculations
+animate_final_day_temp_distribution: true  # 3D animation of final day temperatures
+animate_subfacets: false                   # Animate temperatures for sub-facets
+subfacet_facet_index: 37                   # Parent facet index for sub-facet visualization
+animate_shadowing: false                   # 3D animation showing insolation and shadowing
 
 # Plotting settings for individual facet properties 
 plotted_facet_index: 1220                 # Index of facet to plot detailed temperature evolution
@@ -79,10 +81,10 @@ animate_secondary_contributions: false    # 3D animation showing radiative self-
 plot_energy_terms: false                  # Plot energy balance terms
 
 # Surface Roughness Model (kernel-based)
-apply_kernel_based_roughness: true         # Master switch for kernel-based roughness
-roughness_kernel: 'spherical_cap'            # Options: 'spherical_cap', 'fractal', ...
-kernel_subfacets_count: 100                   # Number of sub-facets per kernel patch
-kernel_profile_angle_degrees: 90             # Controls curvature for 'spherical_cap' kernel
-kernel_directional_bins: 100                  # Number of dome directional bins for emission/scatter
-kernel_dome_radius_factor: 100.0              # Scale factor for dome radius relative to parent facet
-intra_facet_scatters: 2                       # Number of internal scattering iterations per depression
+apply_kernel_based_roughness: true        # Master switch for kernel-based roughness
+roughness_kernel: 'spherical_cap'         # Options: 'spherical_cap', 'fractal', ...
+kernel_subfacets_count: 30               # Number of sub-facets per kernel patch
+kernel_profile_angle_degrees: 90           # Controls curvature for 'spherical_cap' kernel
+kernel_directional_bins: 30               # Number of dome directional bins for emission/scatter
+kernel_dome_radius_factor: 100.0          # Scale factor for dome radius relative to parent facet
+intra_facet_scatters: 2                   # Number of internal scattering iterations per depression
