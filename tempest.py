@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt
 import time
 import pandas as pd
 from numba.typed import List
-from stl import mesh
+from stl import mesh as stl_mesh_module
 from scipy.interpolate import interp1d
 from datetime import datetime
 
@@ -86,11 +86,11 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_
                 shape_model.append(facet)
     except UnicodeDecodeError:
         # If ASCII reading fails, try binary
-        stl_mesh = mesh.Mesh.from_file(filename)
+        shape_mesh = stl_mesh_module.Mesh.from_file(filename)
         shape_model = []
-        for i in range(len(stl_mesh.vectors)):
-            normal = stl_mesh.normals[i]
-            vertices = stl_mesh.vectors[i]
+        for i in range(len(shape_mesh.vectors)):
+            normal = shape_mesh.normals[i]
+            vertices = shape_mesh.vectors[i]
             facet = Facet(normal, vertices, timesteps_per_day, max_days, n_layers, calculate_energy_terms)
             shape_model.append(facet)
 
@@ -218,7 +218,7 @@ def export_results(shape_model_name, config, temperature_array):
 
     folder_name = f"{shape_model_name}_{time.strftime('%d-%m-%Y_%H-%M-%S')}" # Create new folder name
     os.makedirs(f"outputs/{folder_name}") # Create folder for results
-    shape_mesh = mesh.Mesh.from_file(config.path_to_shape_model_file) # Load shape model
+    shape_mesh = stl_mesh_module.Mesh.from_file(config.path_to_shape_model_file) # Load shape model
     os.system(f"cp {config.path_to_shape_model_file} outputs/{folder_name}") # Copy shape model .stl file to folder
     os.system(f"cp {config.path_to_setup_file} outputs/{folder_name}") # Copy model parameters .json file to folder
     np.savetxt(f"outputs/{folder_name}/temperatures.csv", temperature_array, delimiter=',') # Save the final timestep temperatures to .csv file
@@ -357,18 +357,19 @@ def main():
         # Parent facet areas for directional coupling
         parent_areas = np.array([f.area for f in shape_model], dtype=np.float64)
         for t in range(simulation.timesteps_per_day):
-            # Snapshot base insolation (net flux) at this time before coupling
+            # Snapshot net insolation at this time before coupling
             base_insolation = thermal_data.insolation[:, t].copy()
             # Compute rotated sun direction for this timestep
             angle = (2 * np.pi / simulation.timesteps_per_day) * t
             R = calculate_rotation_matrix(simulation.rotation_axis, angle)
             world_dir = R.T.dot(simulation.sunlight_direction)
             for i, facet in enumerate(shape_model):
-                # Recover raw flux0 (no albedo) from net insolation
+                # Recover raw incident flux0 (W/m^2) from stored net insolation
                 flux_net = base_insolation[i]
                 cos_parent = np.dot(facet.normal, world_dir)
                 if cos_parent <= 0:
                     continue
+                # undo (1-albedo)*cos_parent to get raw flux0
                 flux0 = flux_net / ((1 - simulation.albedo) * cos_parent)
                 facet.parent_incident_energy_packets.append((flux0, world_dir, 'solar'))
                 facet.process_intra_depression_energetics(config, simulation)
@@ -656,6 +657,39 @@ def main():
             parent_t_final[i, :] = (area_vec[:, None] * sub_temps).sum(axis=0) / area_vec.sum()
         result["final_day_temperatures"] = parent_t_final
         result["final_timestep_temperatures"] = parent_t_final[:, -1]
+        # Sub-facet temperature animation
+        if config.animate_subfacets:
+            idx = config.subfacet_facet_index
+            facet = shape_model[idx]
+            N_sub = len(facet.sub_facets)
+            # Reconstruct world-space sub-facet triangles
+            scale = np.sqrt(facet.area)
+            R_l2w = facet.dome_rotation.T
+            tri = stl_mesh_module.Mesh(np.zeros(N_sub, dtype=stl_mesh_module.Mesh.dtype))
+            for j, entry in enumerate(Facet._canonical_subfacet_mesh):
+                local_tri = entry["vertices"] * scale
+                world_tri = (R_l2w.dot(local_tri.T)).T + facet.position
+                tri.vectors[j] = world_tri
+            tmp_path = f"subfacet_{idx}.stl"
+            tri.save(tmp_path)
+            # Animate sub-facet temperatures over a full rotation
+            check_remote_and_animate(
+                config.remote,
+                tmp_path,
+                facet.depression_temperature_result["final_day_temperatures"],
+                simulation.rotation_axis,
+                simulation.sunlight_direction,
+                simulation.timesteps_per_day,
+                simulation.solar_distance_au,
+                simulation.rotation_period_hours,
+                colour_map="coolwarm",
+                plot_title=f"Subfacet Temps (facet {idx})",
+                axis_label="Temperature (K)",
+                animation_frames=simulation.timesteps_per_day,
+                save_animation=False,
+                save_animation_name=f"subfacet_{idx}_temps.gif",
+                background_colour="white"
+            )
 
     if config.animate_final_day_temp_distribution:
         conditional_print(config.silent_mode,  f"Preparing temperature animation.\n")
