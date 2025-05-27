@@ -15,6 +15,7 @@ from src.utilities.utils import (
     normalize_vector,
     random_points_in_triangle,
     conditional_print,
+    conditional_tqdm,
     get_shape_model_hash
 )
 
@@ -109,8 +110,13 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
         conditional_print(silent_mode, "Loading existing visible facets...")
         with np.load(visible_facets_filename, allow_pickle=True) as data:
             visible_indices = data['visible_indices']
-            # Convert each array to int64 explicitly after loading
-            visible_indices = [np.array(indices, dtype=np.int64) for indices in visible_indices]
+            # Convert each array to int64 explicitly after loading, with progress
+            visible_indices = [
+                np.array(indices, dtype=np.int64)
+                for indices in conditional_tqdm(
+                    visible_indices, silent_mode, desc="Converting visible facets"
+                )
+            ]
     else:
         calculate_visible_facets_start = time.time()
 
