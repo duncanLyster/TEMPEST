@@ -123,8 +123,8 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
         conditional_print(silent_mode, f"Time taken to calculate visible facets: {calculate_visible_facets_end - calculate_visible_facets_start:.2f} seconds")
         
         os.makedirs(os.path.dirname(visible_facets_filename), exist_ok=True)
-        np.savez_compressed(visible_facets_filename, 
-                          visible_indices=np.array(visible_indices, dtype=object))
+        # Save uncompressed for faster load
+        np.savez(visible_facets_filename, visible_indices=np.array(visible_indices, dtype=object))
 
     return visible_indices
 

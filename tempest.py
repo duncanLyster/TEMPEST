@@ -270,7 +270,17 @@ def main():
     simulation = Simulation(config)
 
     # Setup simulation
-    shape_model = read_shape_model(config.path_to_shape_model_file, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
+    try:
+        shape_model = read_shape_model(
+            config.path_to_shape_model_file,
+            simulation.timesteps_per_day,
+            simulation.n_layers,
+            simulation.max_days,
+            config.calculate_energy_terms
+        )
+    except Exception as e:
+        print(f"Failed to load shape model: {e}")
+        sys.exit(1)
     thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
 
     conditional_print(config.silent_mode,  f"\nDerived model parameters:")
@@ -654,7 +664,8 @@ def main():
             sub_temps = facet.depression_temperature_result["final_day_temperatures"]
             mesh = Facet._canonical_subfacet_mesh
             area_vec = np.array([entry['area'] * facet.area for entry in mesh], dtype=np.float64)
-            parent_t_final[i, :] = (area_vec[:, None] * sub_temps).sum(axis=0) / area_vec.sum()
+            # Take T^4 weighted mean and convert back to T
+            parent_t_final[i, :] = np.power((area_vec[:, None] * np.power(sub_temps, 4)).sum(axis=0) / area_vec.sum(), 0.25)
         result["final_day_temperatures"] = parent_t_final
         result["final_timestep_temperatures"] = parent_t_final[:, -1]
         # Sub-facet temperature animation
@@ -820,6 +831,22 @@ def main():
 
     conditional_print(config.silent_mode,  f"Model run complete.\n")
 
-# Call the main program to start execution
+    # Export insolation and temperature data for facets 0 and 1
+    print("Exporting insolation and temperature for facets 0 and 1...")
+    degrees = np.linspace(0, 360, simulation.timesteps_per_day, endpoint=False)
+    os.makedirs('insolation_data', exist_ok=True)
+    os.makedirs('temperature_data', exist_ok=True)
+    for idx in [0, 1]:
+        df_ins = pd.DataFrame({'rotation_deg': degrees, 'insolation_Wm2': thermal_data.insolation[idx]})
+        df_ins.to_csv(f'insolation_data/facet_{idx}.csv', index=False)
+        df_temp = pd.DataFrame({'rotation_deg': degrees, 'temperature_K': result['final_day_temperatures'][idx]})
+        df_temp.to_csv(f'temperature_data/facet_{idx}.csv', index=False)
+        print(f"  facet {idx}: insolation_data/facet_{idx}.csv, temperature_data/facet_{idx}.csv")
+
+# Call the main program with interrupt handling
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nRun interrupted by user (Ctrl-C). Exiting.")
+        sys.exit(1)

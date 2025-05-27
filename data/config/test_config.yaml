@@ -1,0 +1,56 @@
+# Test configuration for TEMPEST quick smoke-tests
+silent_mode: true                  # Suppress most console output
+remote: true                       # Disable interactive plotting/animations
+
+# Shape model
+shape_model_file: "simple_facet_test.stl"
+shape_model_directory: "data/shape_models/"
+
+# Performance settings
+n_jobs: 1                          # Single‐core for reproducibility
+tchunk_size: 10                    # Small chunk size
+
+# Physical parameters (defaults)
+emissivity: 0.5
+albedo: 0.5
+beaming_factor: 0.9
+temp_solver: "tempest_standard"
+
+# Model structure
+n_layers: 45
+convergence_method: "mean"
+convergence_target: 0.1
+max_days: 1
+min_days: 1
+
+# Orbital/rotational (solar along +X, 24h period)
+solar_distance_au: 1
+sunlight_direction: [1, 0, 0]
+rotation_period_hours: 24
+ra_degrees: 0
+dec_degrees: 90
+
+# Shadowing and scattering
+enable_shadowing: true
+n_scatters: 0                     # No intra-facet scattering
+include_self_heating: false
+vf_rays: 100                      # Reduced rays for speed
+
+# Disable all animations and plotting
+plot_insolation_curve: false
+plot_initial_temp_histogram: false
+plot_final_day_all_layers_temp_distribution: false
+plot_final_day_comparison: false
+show_visible_phase_curve: false
+save_visible_phase_curve_data: false
+show_thermal_phase_curve: false
+save_thermal_phase_curve_data: false
+animate_final_day_temp_distribution: false
+animate_subfacets: false
+animate_shadowing: false
+animate_secondary_radiation_view_factors: false
+animate_secondary_contributions: false
+
+# Disable roughness
+apply_kernel_based_roughness: false
+n_jobs: 1  # reiterate single-core 
