@@ -46,7 +46,8 @@ from src.utilities.config import Config
 from src.utilities.utils import (
     calculate_black_body_temp,
     conditional_print,
-    calculate_rotation_matrix
+    calculate_rotation_matrix,
+    conditional_tqdm
 )
 from src.model.view_factors import (
     calculate_and_cache_visible_facets,
@@ -362,40 +363,49 @@ def main():
 
     thermal_data = calculate_insolation(thermal_data, shape_model, simulation, config)
 
-    # If kernel-based roughness is enabled, process per-timestep sub-facet insolation
+    # If kernel-based roughness is enabled, process per-timestep sub-facet insolation in vectorized fashion
     if config.apply_kernel_based_roughness:
-        # Parent facet areas for directional coupling
+        n_facets = len(shape_model)
+        # Precompute normals and parent areas
+        normals_array = np.array([f.normal for f in shape_model], dtype=np.float64)
         parent_areas = np.array([f.area for f in shape_model], dtype=np.float64)
-        for t in range(simulation.timesteps_per_day):
-            # Snapshot net insolation at this time before coupling
-            base_insolation = thermal_data.insolation[:, t].copy()
-            # Compute rotated sun direction for this timestep
-            angle = (2 * np.pi / simulation.timesteps_per_day) * t
-            R = calculate_rotation_matrix(simulation.rotation_axis, angle)
-            world_dir = R.T.dot(simulation.sunlight_direction)
+        # Stack F_dp matrices for all facets: shape (n_facets, M, n_facets)
+        F_dp_all = np.stack([f.depression_global_F_dp for f in shape_model], axis=0)
+        # Precompute sun directions per timestep
+        world_dirs = np.zeros((simulation.timesteps_per_day, 3), dtype=np.float64)
+        for tt in range(simulation.timesteps_per_day):
+            ang = (2 * np.pi / simulation.timesteps_per_day) * tt
+            R_tt = calculate_rotation_matrix(simulation.rotation_axis, ang)
+            wd = R_tt.T.dot(simulation.sunlight_direction)
+            world_dirs[tt] = wd / np.linalg.norm(wd)
+        conditional_print(
+            config.silent_mode,
+            f"Applying kernel-based roughness over {simulation.timesteps_per_day} timesteps and {n_facets} facets..."
+        )
+        # Loop over timesteps
+        for t in conditional_tqdm(range(simulation.timesteps_per_day), config.silent_mode, desc="Roughness timesteps"):
+            # Base insolation and sun dir
+            base_ins = thermal_data.insolation[:, t]
+            wd = world_dirs[t]
+            cos_parent = normals_array.dot(wd)
+            # Process each facet's intra-depression energetics
             for i, facet in enumerate(shape_model):
-                # Recover raw incident flux0 (W/m^2) from stored net insolation
-                flux_net = base_insolation[i]
-                cos_parent = np.dot(facet.normal, world_dir)
-                if cos_parent <= 0:
+                cp = cos_parent[i]
+                if cp <= 0:
                     continue
-                # undo (1-albedo)*cos_parent to get raw flux0
-                flux0 = flux_net / ((1 - simulation.albedo) * cos_parent)
-                facet.parent_incident_energy_packets.append((flux0, world_dir, 'solar'))
+                flux0 = base_ins[i] / ((1 - simulation.albedo) * cp)
+                facet.parent_incident_energy_packets.append((flux0, wd, 'solar'))
                 facet.process_intra_depression_energetics(config, simulation)
-                # Store absorbed solar input for conduction solver
+                # Store absorbed solar input
                 facet.depression_thermal_data.insolation[:, t] = facet._last_absorbed_solar
-                # Proper directional coupling via dome-to-parent view-factors
-                M = len(facet.dome_facets)
-                out_vis = np.array([facet.depression_outgoing_flux_distribution['scattered_visible'].get(j, 0.0) for j in range(M)], dtype=np.float64)
-                inc_to_parents = facet.depression_global_F_dp.T.dot(out_vis)
-                # Convert incident power to flux per unit area and accumulate on all parent facets
-                thermal_data.insolation[:, t] += inc_to_parents / parent_areas
-                # Thermal coupling via dome-to-parent view-factors
-                out_th = np.array([facet.depression_outgoing_flux_distribution['thermal'].get(j, 0.0) for j in range(M)], dtype=np.float64)
-                inc_th_to_parents = facet.depression_global_F_dp.T.dot(out_th)
-                # Convert thermal incident power to flux per unit area and accumulate
-                thermal_data.insolation[:, t] += inc_th_to_parents / parent_areas
+            # Aggregate outgoing flux arrays across all facets
+            out_vis_all = np.stack([f.depression_outgoing_flux_array_vis for f in shape_model], axis=0)
+            out_th_all  = np.stack([f.depression_outgoing_flux_array_th  for f in shape_model], axis=0)
+            # Vectorized coupling: sum over i and dome bins j
+            inc_vis = np.tensordot(out_vis_all, F_dp_all, axes=([0,1], [0,1]))
+            inc_th  = np.tensordot(out_th_all,  F_dp_all, axes=([0,1], [0,1]))
+            # Update insolation with directional coupling
+            thermal_data.insolation[:, t] += (inc_vis + inc_th) / parent_areas
 
     if config.plot_insolation_curve and not config.silent_mode:
         fig_insolation = plt.figure(figsize=(10, 6))

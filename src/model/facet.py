@@ -78,6 +78,10 @@ class Facet:
 
         # Store dome facets in facet-local coordinates
         self.dome_facets = Facet._canonical_dome_mesh
+        # Initialize outgoing flux arrays to zeros so they always exist
+        M = len(self.dome_facets)
+        self.depression_outgoing_flux_array_vis = np.zeros(M, dtype=np.float64)
+        self.depression_outgoing_flux_array_th  = np.zeros(M, dtype=np.float64)
 
         # Compute world->local rotation matrix for mapping directions into facet space
         up = np.array([0.0, 0.0, 1.0])
@@ -276,9 +280,9 @@ class Facet:
         triangles = Facet._canonical_subfacet_triangles
         centers = Facet._canonical_subfacet_centers
 
-        # Process each incident packet in parallel
-        results = Parallel(n_jobs=config.n_jobs)(
-            delayed(Facet._process_incident_packet)(
+        # Process each incident packet sequentially (no Parallel overhead)
+        for packet in self.parent_incident_energy_packets:
+            E0v_loc, E0t_loc, abs_s, abs_t = Facet._process_incident_packet(
                 packet,
                 self.dome_rotation,
                 self.area,
@@ -288,15 +292,12 @@ class Facet:
                 centers,
                 simulation.albedo,
                 simulation.emissivity
-            ) for packet in self.parent_incident_energy_packets
-        )
-        # Sum contributions from all packets
-        for E0v_loc, E0t_loc, abs_s, abs_t in results:
+            )
             E0_vis += E0v_loc
             E0_th  += E0t_loc
             self.depression_total_absorbed_solar_flux += abs_s
             self.depression_total_absorbed_thermal_flux += abs_t
-        # End parallel accumulation
+        # End sequential accumulation
 
         # Convert absorbed power E0_vis (W) into absorbed flux per subfacet area (W/m^2)
         # Note: E0_vis contains total energy on each sub-facet.
@@ -328,9 +329,12 @@ class Facet:
         out_vis = F_sd.T.dot(B_vis)
         out_th  = F_sd.T.dot(B_th)
 
-        # Store directional distributions as dicts
+        # Store directional distributions as dicts (for backwards compatibility)
         self.depression_outgoing_flux_distribution['scattered_visible'] = {j: out_vis[j] for j in range(out_vis.size)}
         self.depression_outgoing_flux_distribution['thermal']          = {j: out_th[j]  for j in range(out_th.size)}
+        # Also store as numpy arrays for fast access
+        self.depression_outgoing_flux_array_vis = out_vis.copy()
+        self.depression_outgoing_flux_array_th  = out_th.copy()
 
         # Clear incident packets
         self.parent_incident_energy_packets = []
