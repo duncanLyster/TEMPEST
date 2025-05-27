@@ -7,6 +7,7 @@ import math
 from src.utilities.utils import rotate_vector, calculate_rotation_matrix
 from src.model.insolation import calculate_shadowing
 from src.model.view_factors import calculate_view_factors
+from joblib import Parallel, delayed
 
 class Facet:
     def __init__(self, normal, vertices, timesteps_per_day, max_days, n_layers, calculate_energy_terms):
@@ -66,12 +67,14 @@ class Facet:
                 self.sub_facets.append(subfacet)
 
         # Build canonical dome mesh once and cache it (in facet-local space)
+        # Allow configs without kernel_directional_bins by defaulting to kernel_subfacets_count
+        dome_bins = getattr(config, 'kernel_directional_bins', config.kernel_subfacets_count)
         if not hasattr(Facet, "_canonical_dome_mesh") or Facet._canonical_dome_mesh is None:
             Facet._canonical_dome_mesh = generate_canonical_spherical_cap(
-                config.kernel_directional_bins,
+                dome_bins,
                 90.0
             )
-            Facet._canonical_dome_params = config.kernel_directional_bins
+            Facet._canonical_dome_params = dome_bins
 
         # Store dome facets in facet-local coordinates
         self.dome_facets = Facet._canonical_dome_mesh
@@ -93,6 +96,9 @@ class Facet:
         # Store world->local conversion
         self.dome_rotation = R_l2w.T  # inverse of local->world
 
+        # Skip thermal data initialization if simulation lacks required attributes (e.g., in tests)
+        if not hasattr(simulation, 'timesteps_per_day'):
+            return
         # Initialize per-depression ThermalData for sub-facet conduction and self-heating
         from src.model.simulation import ThermalData
         N = len(self.sub_facets)
@@ -113,6 +119,12 @@ class Facet:
         # Set sub-facet visible indices and secondary radiation view factors
         self.depression_thermal_data.visible_facets = [np.arange(N, dtype=np.int64) for _ in range(N)]
         self.depression_thermal_data.secondary_radiation_view_factors = [F_ss[i].copy() for i in range(N)]
+
+        # Precompute and cache canonical subfacet triangles and centers for shadow tests
+        if not hasattr(Facet, '_canonical_subfacet_triangles'):
+            mesh = Facet._canonical_subfacet_mesh
+            Facet._canonical_subfacet_triangles = np.array([entry['vertices'] for entry in mesh])
+            Facet._canonical_subfacet_centers  = np.mean(Facet._canonical_subfacet_triangles, axis=1)
 
     @staticmethod
     def _compute_canonical_view_factors(config):
@@ -136,22 +148,90 @@ class Facet:
         # allocate view-factor matrices
         F_ss = np.zeros((N, N), dtype=np.float64)
         F_sd = np.zeros((N, M), dtype=np.float64)
+        # parallel compute canonical view factors
         # compute subfacet-to-subfacet view factors
-        for i in range(N):
-            subj = sub[i]
-            F_ss[i, :] = calculate_view_factors(
-                subj['vertices'], subj['normal'], subj['area'],
+        ss_results = Parallel(n_jobs=config.n_jobs)(
+            delayed(calculate_view_factors)(
+                sub[i]['vertices'], sub[i]['normal'], sub[i]['area'],
                 test_vertices_ss, test_areas_ss, config.vf_rays
-            )
+            ) for i in range(N)
+        )
+        for i, row in enumerate(ss_results):
+            F_ss[i, :] = row
         # compute subfacet-to-dome view factors
-        for i in range(N):
-            subj = sub[i]
-            F_sd[i, :] = calculate_view_factors(
-                subj['vertices'], subj['normal'], subj['area'],
+        sd_results = Parallel(n_jobs=config.n_jobs)(
+            delayed(calculate_view_factors)(
+                sub[i]['vertices'], sub[i]['normal'], sub[i]['area'],
                 test_vertices_sd, test_areas_sd, config.vf_rays
-            )
+            ) for i in range(N)
+        )
+        for i, row in enumerate(sd_results):
+            F_sd[i, :] = row
 
         return F_ss, F_sd
+
+    @staticmethod
+    def _process_incident_packet(packet, dome_rotation, aperture_area, sub_normals, sub_areas, sub_triangles, centers, albedo, emissivity):
+        """Helper to process one incident energy packet for the depression in parallel."""
+        import numpy as np
+        flux_val, dir_world, type_flag = packet
+        d_world_vec = np.array(dir_world)
+        d_local = dome_rotation.dot(d_world_vec)
+        cos_theta_aperture = d_local[2]
+        N = sub_normals.shape[0]
+        E0_vis_local = np.zeros(N, dtype=np.float64)
+        E0_th_local = np.zeros(N, dtype=np.float64)
+        absorbed_solar = 0.0
+        absorbed_thermal = 0.0
+
+        if cos_theta_aperture <= 0 or flux_val * aperture_area * cos_theta_aperture <= 1e-9:
+            return E0_vis_local, E0_th_local, absorbed_solar, absorbed_thermal
+
+        E_total = flux_val * aperture_area * cos_theta_aperture
+
+        lit_indices = []
+        contribs = []
+        total_contrib = 0.0
+        for i in range(N):
+            cos_theta_i = np.dot(sub_normals[i], d_local)
+            if cos_theta_i <= 0:
+                continue
+            # Shadow check
+            mask = np.arange(N) != i
+            triangles_for_shadow = sub_triangles[mask]
+            indices_for_shadow = np.arange(triangles_for_shadow.shape[0])
+            is_lit = calculate_shadowing(
+                centers[i:i+1],
+                d_local.reshape(1,3),
+                triangles_for_shadow,
+                indices_for_shadow
+            )
+            if is_lit == 1:
+                c = sub_areas[i] * cos_theta_i
+                lit_indices.append(i)
+                contribs.append(c)
+                total_contrib += c
+
+        if total_contrib > 1e-9:
+            for idx, c in zip(lit_indices, contribs):
+                e = E_total * (c / total_contrib)
+                if type_flag in ('solar', 'scattered_visible'):
+                    E0_vis_local[idx] = e
+                    absorbed_solar += e * (1 - albedo)
+                else:
+                    E0_th_local[idx] = e
+                    absorbed_thermal += e * (1 - emissivity)
+        else:
+            e_per = E_total / N
+            for i in range(N):
+                if type_flag in ('solar', 'scattered_visible'):
+                    E0_vis_local[i] = e_per
+                    absorbed_solar += e_per * (1 - albedo)
+                else:
+                    E0_th_local[i] = e_per
+                    absorbed_thermal += e_per * (1 - emissivity)
+
+        return E0_vis_local, E0_th_local, absorbed_solar, absorbed_thermal
 
     def process_intra_depression_energetics(self, config, simulation):
         """
@@ -183,54 +263,46 @@ class Facet:
             F_ss = Facet._canonical_F_ss
             F_sd = Facet._canonical_F_sd
 
-        # Prepare emissive power vectors
-        E0_vis = np.zeros(N, dtype=np.float64) # Emissive power vector for visible scattering, this is the total incident visible energy from the parent facet
-        E0_th  = np.zeros(N, dtype=np.float64) # Emissive power vector for thermal scattering, this is the total incident thermal energy from the parent facet
+        # Prepare emissive power vectors and absorbed flux accumulators
+        E0_vis = np.zeros(N, dtype=np.float64)
+        E0_th  = np.zeros(N, dtype=np.float64)
+        self.depression_total_absorbed_solar_flux = 0.0
+        self.depression_total_absorbed_thermal_flux = 0.0
 
-        # Gather geometry
+        # Precompute subfacet geometry arrays once
         mesh = Facet._canonical_subfacet_mesh
-        # Precompute sub-facet triangles and centers for shadow tests
-        sub_triangles = np.array([entry['vertices'] for entry in mesh])  # shape (N,3,3)
-        centers = np.mean(sub_triangles, axis=1)                         # shape (N,3)
+        normals = np.array([entry['normal'] for entry in mesh], dtype=np.float64)
+        areas = np.array([entry['area'] for entry in mesh], dtype=np.float64)
+        triangles = Facet._canonical_subfacet_triangles
+        centers = Facet._canonical_subfacet_centers
 
-        # Accumulate incident energy into E0 vectors, accounting for shadowing
-        for flux, dir_world, type_flag in self.parent_incident_energy_packets:
-            # Map direction into facet-local space
-            d_local = self.dome_rotation.dot(np.array(dir_world))
-            # Shadow test each subfacet against all *other* triangles to avoid self-shadowing
-            for i in range(N):
-                # Build list of other triangles (exclude self) for shadow test
-                other_idx = np.arange(N) != i
-                triangles_other = sub_triangles[other_idx]
-                idxs_other = np.arange(triangles_other.shape[0])
-                # Shadowing check: 1 if lit, 0 if shadowed
-                lit = calculate_shadowing(
-                    np.array([centers[i]]),  # subject position
-                    np.array([d_local]),     # ray direction
-                    triangles_other,         # other triangle vertices
-                    idxs_other               # their indices
-                )
-                if lit == 0:
-                    continue
-                entry = mesh[i]
-                n_i = entry['normal']  # local normal
-                area_i = entry['area'] * self.area  # scale canonical area
-                cos_theta = np.dot(n_i, d_local)
-                if cos_theta <= 0:
-                    continue
-                # Compute incident energy using raw flux and subfacet orientation
-                incident = flux * area_i * cos_theta
-                if type_flag in ('solar', 'scattered_visible'):
-                    # visible incident
-                    E0_vis[i] += incident
-                    self.depression_total_absorbed_solar_flux += incident * (1 - simulation.albedo)
-                elif type_flag == 'thermal':
-                    # thermal incident
-                    E0_th[i] += incident
-                    self.depression_total_absorbed_thermal_flux += incident * (1 - simulation.emissivity)
+        # Process each incident packet in parallel
+        results = Parallel(n_jobs=config.n_jobs)(
+            delayed(Facet._process_incident_packet)(
+                packet,
+                self.dome_rotation,
+                self.area,
+                normals,
+                areas,
+                triangles,
+                centers,
+                simulation.albedo,
+                simulation.emissivity
+            ) for packet in self.parent_incident_energy_packets
+        )
+        # Sum contributions from all packets
+        for E0v_loc, E0t_loc, abs_s, abs_t in results:
+            E0_vis += E0v_loc
+            E0_th  += E0t_loc
+            self.depression_total_absorbed_solar_flux += abs_s
+            self.depression_total_absorbed_thermal_flux += abs_t
+        # End parallel accumulation
 
         # Convert absorbed power E0_vis (W) into absorbed flux per subfacet area (W/m^2)
+        # Note: E0_vis contains total energy on each sub-facet.
         area_vector = np.array([entry['area'] * self.area for entry in mesh], dtype=np.float64)
+        # Normalize sub-facet areas so their sum equals the aperture area
+        area_vector *= self.area / area_vector.sum()
         absorbed = (1 - simulation.albedo) * E0_vis
         # Avoid division by zero
         self._last_absorbed_solar = np.where(area_vector > 0, absorbed / area_vector, 0.0)
