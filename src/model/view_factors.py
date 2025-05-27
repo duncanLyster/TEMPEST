@@ -7,7 +7,7 @@ TODO: Divide into more modules for better organisation.
 import os
 import time
 import numpy as np
-from numba import jit
+from numba import jit, njit, prange
 from joblib import Parallel, delayed
 from src.utilities.locations import Locations
 from src.utilities.utils import (
@@ -134,7 +134,7 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
 
     return visible_indices
 
-@jit(nopython=True)
+@njit(parallel=True)
 def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_vertices, test_areas, n_rays):
     '''
     Calculate view factors between one subject facet and multiple test vertices. The view factors are calculated by firing rays from the subject vertices to the test vertices and checking if the rays intersect with the test vertices. The view factor is calculated as the number of rays that intersect with the test vertices divided by the total number of rays fired from the subject vertices.
@@ -143,11 +143,11 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     ray_sources = random_points_in_triangle(subject_vertices[0], subject_vertices[1], subject_vertices[2], n_rays)
     
     ray_directions = np.random.randn(n_rays, 3)
-    for i in range(n_rays):
+    for i in prange(n_rays):
         ray_directions[i] = normalize_vector(ray_directions[i])
     
     valid_directions = np.zeros(n_rays, dtype=np.bool_)
-    for i in range(n_rays):
+    for i in prange(n_rays):
         valid_directions[i] = np.dot(ray_directions[i], subject_normal) > 0
     
     valid_count = np.sum(valid_directions)
@@ -165,7 +165,7 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
                     break
     
     intersections = np.zeros((n_rays, len(test_vertices)), dtype=np.bool_)
-    for i in range(n_rays):
+    for i in prange(n_rays):
         ray_origin = ray_sources[i]
         ray_dir = ray_directions[i]
         intersect, _ = rays_triangles_intersection(ray_origin, ray_dir.reshape(1, 3), test_vertices)

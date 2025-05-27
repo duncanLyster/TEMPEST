@@ -21,6 +21,7 @@ import os
 import sys
 from pathlib import Path
 import argparse
+import math  # for dome-to-parent DP scaling
 
 # Add the src directory to the Python path
 current_dir = Path(__file__).resolve().parent
@@ -294,43 +295,88 @@ def main():
     # Apply kernel-based roughness to the shape model
     if config.apply_kernel_based_roughness:
         conditional_print(config.silent_mode, f"Applying kernel-based roughness ({config.roughness_kernel}) to shape model. Original size: {len(shape_model)} facets.")
+        # Time the depression generation step
+        t_dep_start = time.time()
         # Initialize the roughness model for each facet
         for facet in shape_model:
             facet.generate_spherical_depression(config, simulation)
-        # Precompute dome-to-parent view-factors for proper roughness coupling
-        import math
-        parent_vertices = np.array([f.vertices for f in shape_model])
-        parent_areas = np.array([f.area for f in shape_model])
-        for facet in shape_model:
+        t_dep_end = time.time()
+        conditional_print(config.silent_mode, f"Depression generation time: {t_dep_end - t_dep_start:.2f} seconds")
+        # Pre-load visible parent facets for selective DP
+        positions = np.array([f.position for f in shape_model], dtype=np.float64)
+        normals = np.array([f.normal for f in shape_model], dtype=np.float64)
+        vertices = np.array([f.vertices for f in shape_model], dtype=np.float64)
+        visible_indices = calculate_and_cache_visible_facets(
+            config.silent_mode, shape_model, positions, normals, vertices, config
+        )
+        for idx, facet in enumerate(shape_model):
+            facet.visible_facets = visible_indices[idx]
+        # Precompute dome-to-parent view-factors (parallel across facets)
+        conditional_print(config.silent_mode, "Precomputing dome-to-parent view-factors for depressions...")
+        from joblib import Parallel, delayed
+        # helper to compute one facet's DP matrix
+        def _compute_dp(facet, parent_vertices, parent_areas, vf_rays, dome_radius_factor):
             M = len(facet.dome_facets)
             subj_vertices = np.zeros((M, 3, 3), dtype=np.float64)
             subj_normals = np.zeros((M, 3), dtype=np.float64)
             subj_areas = np.zeros(M, dtype=np.float64)
+            # number of parent facets
+            n_parents_local = parent_vertices.shape[0]
+            parent_radius = math.sqrt(facet.area / math.pi)
             for j, entry in enumerate(facet.dome_facets):
-                parent_radius = math.sqrt(facet.area / math.pi)
-                # Scale local dome triangle by radius factor
-                local_scaled = entry['vertices'] * (config.kernel_dome_radius_factor * parent_radius)
-                # Rotate into world and translate to facet center
+                # Scale and rotate dome patch
+                local_scaled = entry['vertices'] * (dome_radius_factor * parent_radius)
                 world_tris = (facet.dome_rotation.dot(local_scaled.T)).T + facet.position
                 subj_vertices[j] = world_tris
                 subj_normals[j] = facet.dome_rotation.dot(entry['normal'])
-                subj_areas[j] = entry['area'] * (config.kernel_dome_radius_factor * parent_radius)**2
-            # Compute view-factors from each dome patch to parent facets
-            F_dp = np.zeros((M, len(shape_model)), dtype=np.float64)
-            for j in range(M):
-                F_dp[j, :] = calculate_view_factors(
-                    subj_vertices[j], subj_normals[j], subj_areas[j],
-                    parent_vertices, parent_areas, config.vf_rays
-                )
+                subj_areas[j] = entry['area'] * (dome_radius_factor * parent_radius)**2
+            # compute view factors only for visible parent facets
+            F_dp_local = np.zeros((M, n_parents_local), dtype=np.float64)
+            vis = facet.visible_facets
+            if len(vis) > 0:
+                for j in range(M):
+                    vals = calculate_view_factors(
+                        subj_vertices[j], subj_normals[j], subj_areas[j],
+                        parent_vertices[vis], parent_areas[vis], vf_rays
+                    )
+                    F_dp_local[j, vis] = vals
+            return F_dp_local
+        # run in parallel: prepare parent arrays
+        parent_vertices = np.array([f.vertices for f in shape_model])
+        parent_areas = np.array([f.area for f in shape_model], dtype=np.float64)
+        # Time the dome-to-parent view-factor computation with progress
+        t_dp_start = time.time()
+        dp_list = []
+        # Chunk facets for DP progress display
+        facet_chunks = [shape_model[i:i+config.chunk_size] for i in range(0, len(shape_model), config.chunk_size)]
+        for chunk in conditional_tqdm(facet_chunks, config.silent_mode, desc="DP chunks"):
+            dp_chunk = Parallel(n_jobs=config.n_jobs)(
+                delayed(_compute_dp)(
+                    facet,
+                    parent_vertices,
+                    parent_areas,
+                    config.vf_rays,
+                    config.kernel_dome_radius_factor
+                ) for facet in chunk
+            )
+            dp_list.extend(dp_chunk)
+        # Assign DP results
+        for facet, F_dp in zip(shape_model, dp_list):
             facet.depression_global_F_dp = F_dp
         conditional_print(config.silent_mode, "Precomputed dome-to-parent view-factors for depressions")
+        t_dp_end = time.time()
+        conditional_print(config.silent_mode, f"DP view-factor time: {t_dp_end - t_dp_start:.2f} seconds")
 
     # Setup the model
     positions = np.array([facet.position for facet in shape_model])
     normals = np.array([facet.normal for facet in shape_model])
     vertices = np.array([facet.vertices for facet in shape_model])
     
+    # Time the visible facets loading/conversion
+    t_vis_start = time.time()
     visible_indices = calculate_and_cache_visible_facets(config.silent_mode, shape_model, positions, normals, vertices, config)
+    t_vis_end = time.time()
+    conditional_print(config.silent_mode, f"Visible facets load time: {t_vis_end - t_vis_start:.2f} seconds")
 
     thermal_data.set_visible_facets(visible_indices)
 
@@ -382,6 +428,8 @@ def main():
             config.silent_mode,
             f"Applying kernel-based roughness over {simulation.timesteps_per_day} timesteps and {n_facets} facets..."
         )
+        # Time the roughness coupling loop
+        t_coup_start = time.time()
         # Loop over timesteps
         for t in conditional_tqdm(range(simulation.timesteps_per_day), config.silent_mode, desc="Roughness timesteps"):
             # Base insolation and sun dir
@@ -406,6 +454,9 @@ def main():
             inc_th  = np.tensordot(out_th_all,  F_dp_all, axes=([0,1], [0,1]))
             # Update insolation with directional coupling
             thermal_data.insolation[:, t] += (inc_vis + inc_th) / parent_areas
+        # End of roughness coupling
+        t_coup_end = time.time()
+        conditional_print(config.silent_mode, f"Roughness coupling time: {t_coup_end - t_coup_start:.2f} seconds")
 
     if config.plot_insolation_curve and not config.silent_mode:
         fig_insolation = plt.figure(figsize=(10, 6))
