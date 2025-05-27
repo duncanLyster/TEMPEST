@@ -7,12 +7,12 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "Bennu_not_to_scale_98_facets.stl"  # Name of the shape model file in data/shape_models/
-shape_model_directory: "data/shape_models/"
+shape_model_file: "Dinkinesh_low_res.stl"  # Name of the shape model file in data/shape_models/
+shape_model_directory: "private/data/shape_models/"
 
 # Performance settings
 n_jobs:                 16          # Number of CPU cores to use for parallel processing (default: 4, max: available cores)
-chunk_size:             1000        # Number of facets to process in each parallel batch
+chunk_size:             10        # Number of facets to process in each parallel batch
 
 # Physical parameters
 emissivity:             0.5         
