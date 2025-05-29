@@ -36,6 +36,7 @@ from numba.typed import List
 from stl import mesh as stl_mesh_module
 from scipy.interpolate import interp1d
 from datetime import datetime
+import h5py  # for subfacet HDF5 export
 
 # Import modules from src
 from src.model.calculate_phase_curve import calculate_phase_curve
@@ -903,6 +904,32 @@ def main():
         df_temp = pd.DataFrame({'rotation_deg': degrees, 'temperature_K': result['final_day_temperatures'][idx]})
         df_temp.to_csv(f'temperature_data/facet_{idx}.csv', index=False)
         print(f"  facet {idx}: insolation_data/facet_{idx}.csv, temperature_data/facet_{idx}.csv")
+
+    # HDF5 export of all subfacet meshes and time-series temperatures
+    # Export subfacet geometry and temperature time series to HDF5
+    h5_path = os.path.join('outputs', 'subfacet_data.h5')
+    os.makedirs(os.path.dirname(h5_path), exist_ok=True)
+    with h5py.File(h5_path, 'w') as hf:
+        all_pts = []
+        all_faces = []
+        all_temps = []
+        pt_index = 0
+        for facet in shape_model:
+            M = len(facet.dome_facets)
+            scale = math.sqrt(facet.area)
+            R_l2w = facet.dome_rotation.T
+            temps = facet.depression_temperature_result["final_day_temperatures"]  # (M, T)
+            for j, entry in enumerate(Facet._canonical_subfacet_mesh):
+                local_tri = entry["vertices"] * scale
+                world_tri = (R_l2w.dot(local_tri.T)).T + facet.position
+                all_pts.extend(world_tri)
+                all_faces.append([3, pt_index, pt_index+1, pt_index+2])
+                pt_index += 3
+                all_temps.append(temps[j])
+        hf.create_dataset('points', data=np.array(all_pts, dtype=np.float64))
+        hf.create_dataset('faces', data=np.array(all_faces, dtype=np.int64))
+        hf.create_dataset('temps', data=np.array(all_temps, dtype=np.float64))
+    conditional_print(config.silent_mode, f"Subfacet HDF5 saved to {h5_path}")
 
 # Call the main program with interrupt handling
 if __name__ == "__main__":

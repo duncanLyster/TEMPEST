@@ -7,7 +7,7 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "67P_not_to_scale_1666_facets.stl"  # Name of the shape model file in data/shape_models/
+shape_model_file: "bennu_not_to_scale_98_facets.stl"  # Name of the shape model file in data/shape_models/
 shape_model_directory: "data/shape_models/"
 
 # Performance settings
@@ -81,7 +81,7 @@ animate_secondary_contributions: false    # 3D animation showing radiative self-
 plot_energy_terms: false                  # Plot energy balance terms
 
 # Surface Roughness Model (kernel-based)
-apply_kernel_based_roughness: false        # Master switch for kernel-based roughness
+apply_kernel_based_roughness: true        # Master switch for kernel-based roughness
 roughness_kernel: 'spherical_cap'         # Options: 'spherical_cap', 'fractal', ...
 kernel_subfacets_count: 30               # Number of sub-facets per kernel patch
 kernel_profile_angle_degrees: 90           # Controls curvature for 'spherical_cap' kernel

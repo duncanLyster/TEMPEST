@@ -24,6 +24,7 @@ import pandas as pd
 from matplotlib.widgets import Button
 from src.utilities.locations import Locations
 from src.utilities.utils import conditional_print
+import h5py
 
 class AnimationState:
     def __init__(self):
@@ -359,25 +360,31 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                   save_animation, save_animation_name, background_colour, pre_selected_facets=[1220, 845]):
 
     start_time = time.time()
-
-    try:
-        shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
-    except Exception as e:
-        print(f"Failed to load shape model: {e}")
-        return
-    
-    if shape_mesh.vectors.shape[0] != plotted_variable_array.shape[0]:
-        print("The plotted variable array must have the same number of rows as the number of cells in the shape model.")
-        return
-    
-    if np.all(plotted_variable_array == plotted_variable_array[0]):
-        print("WARNING: All points in the plotted variable array are identical. Please check the data.")
-     
-    vertices = shape_mesh.points.reshape(-1, 3)
-    faces = [[3, 3*i, 3*i+1, 3*i+2] for i in range(shape_mesh.vectors.shape[0])]
-
-    pv_mesh = pv.PolyData(vertices, faces)
-    pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
+    # Radiance mode: if HDF5 subfacet data exists, load it instead of STL
+    base, _ = os.path.splitext(path_to_shape_model_file)
+    h5_path = base + '_subfacets.h5'
+    if os.path.exists(h5_path):
+        # Load subfacet mesh and temperatures
+        with h5py.File(h5_path, 'r') as hf:
+            pts = hf['points'][:]
+            faces = hf['faces'][:]
+            temps = hf['temps'][:]
+        pv_mesh = pv.PolyData(pts, faces)
+        plotted_variable_array = temps
+    else:
+        # Default parent-facet mode
+        try:
+            shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
+        except Exception as e:
+            print(f"Failed to load shape model: {e}")
+            return
+        if shape_mesh.vectors.shape[0] != plotted_variable_array.shape[0]:
+            print("The plotted variable array must have the same number of rows as the number of cells in the shape model.")
+            return
+        vertices = shape_mesh.points.reshape(-1, 3)
+        faces = [[3, 3*i, 3*i+1, 3*i+2] for i in range(shape_mesh.vectors.shape[0])]
+        pv_mesh = pv.PolyData(vertices, faces)
+        pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
 
     # Store facet normals when loading the mesh
     facet_normals = np.zeros((shape_mesh.vectors.shape[0], 3))
