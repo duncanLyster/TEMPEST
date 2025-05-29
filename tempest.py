@@ -37,6 +37,7 @@ from stl import mesh as stl_mesh_module
 from scipy.interpolate import interp1d
 from datetime import datetime
 import h5py  # for subfacet HDF5 export
+import subprocess
 
 # Import modules from src
 from src.model.calculate_phase_curve import calculate_phase_curve
@@ -767,8 +768,49 @@ def main():
     if config.animate_final_day_temp_distribution:
         conditional_print(config.silent_mode,  f"Preparing temperature animation.\n")
 
+        # Export subfacet HDF5 for viewing precompute (overwrite with current run data)
+        h5_path = os.path.join('outputs', 'subfacet_data.h5')
+        os.makedirs(os.path.dirname(h5_path), exist_ok=True)
+        with h5py.File(h5_path, 'w') as hf:
+            all_pts, all_faces, all_temps = [], [], []
+            pt_index = 0
+            for facet in shape_model:
+                # Subfacet triangles and temps
+                scale = math.sqrt(facet.area)
+                R_l2w = facet.dome_rotation.T
+                temps_sf = facet.depression_temperature_result["final_day_temperatures"]  # (M,)
+                for j, entry in enumerate(Facet._canonical_subfacet_mesh):
+                    local_tri = entry['vertices'] * scale
+                    world_tri = (R_l2w.dot(local_tri.T)).T + facet.position
+                    all_pts.extend(world_tri)
+                    all_faces.append([3, pt_index, pt_index+1, pt_index+2])
+                    pt_index += 3
+                    all_temps.append(temps_sf[j])
+            hf.create_dataset('points', data=np.array(all_pts, dtype=np.float64))
+            hf.create_dataset('faces', data=np.array(all_faces, dtype=np.int64))
+            hf.create_dataset('temps', data=np.array(all_temps, dtype=np.float64))
+        conditional_print(config.silent_mode, f"Subfacet HDF5 updated at {h5_path}")
+        
+        # Use precomputed viewed temperatures if enabled and fixed camera angles provided
+        if config.use_precomputed_viewed_temps and config.fixed_camera_theta is not None and config.fixed_camera_phi is not None:
+            theta = config.fixed_camera_theta
+            phi   = config.fixed_camera_phi
+            out_file = f"outputs/viewed_temps_theta{theta:.3f}_phi{phi:.3f}.npz"
+            os.makedirs(os.path.dirname(out_file), exist_ok=True)
+            cmd = [sys.executable, "scripts/precompute_viewed_temps.py",
+                   "--h5", os.path.join("outputs","subfacet_data.h5"),
+                   "--stl", config.path_to_shape_model_file,
+                   "--theta", str(theta), "--phi", str(phi),
+                   "--out", out_file]
+            subprocess.run(cmd, check=True)
+            data = np.load(out_file)
+            plot_array = data["viewed_temperatures"]
+        else:
+            # Fallback: direct parent-temperatures
+            plot_array = result["final_day_temperatures"]
+
         check_remote_and_animate(config.remote, config.path_to_shape_model_file, 
-                      result["final_day_temperatures"], 
+                      plot_array, 
                       simulation.rotation_axis, 
                       simulation.sunlight_direction, 
                       simulation.timesteps_per_day,
@@ -780,7 +822,7 @@ def main():
                       animation_frames=200, 
                       save_animation=False, 
                       save_animation_name='temperature_animation.gif', 
-                      background_colour = 'black')
+                      background_colour='black')
 
     if config.plot_final_day_comparison and not config.silent_mode:
         conditional_print(config.silent_mode,  f"Saving final day temperatures for facet to CSV file.\n")

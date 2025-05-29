@@ -88,6 +88,11 @@ class Config:
         # Sub-facet temperatures animation
         self.animate_subfacets = self.config_data.get('animate_subfacets', False)
         self.subfacet_facet_index = self.config_data.get('subfacet_facet_index', 0)
+        # Fixed camera angles for precomputed viewed-temperature animation (radians)
+        self.fixed_camera_theta = self.config_data.get('fixed_camera_theta', None)
+        self.fixed_camera_phi = self.config_data.get('fixed_camera_phi', None)
+        # Toggle using the precomputed viewed-temperature animation
+        self.use_precomputed_viewed_temps = self.config_data.get('use_precomputed_viewed_temps', False)
 
         # Debugging
         self.calculate_energy_terms = self.config_data.get('calculate_energy_terms', False)
