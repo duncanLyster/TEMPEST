@@ -51,6 +51,7 @@ class Config:
         self.chunk_size = self.config_data.get('chunk_size', 100)
 
         # Modelling parameters
+        self.emissivity = self.config_data.get('emissivity')
         self.convergence_method = self.config_data.get('convergence_method', 'mean')
         self.include_shadowing = self.config_data.get('include_shadowing', True)
         self.n_scatters = self.config_data.get('n_scatters', 2)

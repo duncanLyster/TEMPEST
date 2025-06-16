@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
 Precompute viewed (apparent) temperatures for each parent facet using subfacet geometry and temperatures.
+
+TODO: Check if temp calculation is correct (adding in radiance space rather than temperature space)
 """
 import argparse
 import numpy as np

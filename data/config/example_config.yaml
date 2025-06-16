@@ -7,7 +7,7 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "67P_not_to_scale_low_res.stl"  # Name of the shape model file in data/shape_models/
+shape_model_file: "500m_ico_sphere_80_facets.stl"  # Name of the shape model file in data/shape_models/
 shape_model_directory: "data/shape_models/"
 
 # Performance settings

@@ -338,7 +338,7 @@ def main():
             if len(vis) > 0:
                 for j in range(M):
                     vals = calculate_view_factors(
-                        subj_vertices[j], subj_normals[j], subj_areas[j],
+                    subj_vertices[j], subj_normals[j], subj_areas[j],
                         parent_vertices[vis], parent_areas[vis], vf_rays
                     )
                     F_dp_local[j, vis] = vals
@@ -430,6 +430,11 @@ def main():
             config.silent_mode,
             f"Applying kernel-based roughness over {simulation.timesteps_per_day} timesteps and {n_facets} facets..."
         )
+        # Preallocate storage for dome thermal fluxes (per-facet, per-bin, per-timestep)
+        M = shape_model[0].depression_outgoing_flux_array_th.shape[0]
+        nF = len(shape_model)
+        T = simulation.timesteps_per_day
+        dome_flux_th = np.zeros((nF, M, T), dtype=np.float64)
         # Time the roughness coupling loop
         t_coup_start = time.time()
         # Loop over timesteps
@@ -451,6 +456,8 @@ def main():
             # Aggregate outgoing flux arrays across all facets
             out_vis_all = np.stack([f.depression_outgoing_flux_array_vis for f in shape_model], axis=0)
             out_th_all  = np.stack([f.depression_outgoing_flux_array_th  for f in shape_model], axis=0)
+            # Store thermal dome flux for animation
+            dome_flux_th[:, :, t] = out_th_all
             # Vectorized coupling: sum over i and dome bins j
             inc_vis = np.tensordot(out_vis_all, F_dp_all, axes=([0,1], [0,1]))
             inc_th  = np.tensordot(out_th_all,  F_dp_all, axes=([0,1], [0,1]))
@@ -459,6 +466,15 @@ def main():
         # End of roughness coupling
         t_coup_end = time.time()
         conditional_print(config.silent_mode, f"Roughness coupling time: {t_coup_end - t_coup_start:.2f} seconds")
+        # Save dome thermal flux arrays to HDF5 for animation
+        df_path = os.path.join('outputs', 'dome_fluxes.h5')
+        os.makedirs(os.path.dirname(df_path), exist_ok=True)
+        with h5py.File(df_path, 'w') as hf:
+            hf.create_dataset('dome_flux_th', data=dome_flux_th)
+            # Save canonical dome normals for bin lookup
+            dome_normals = np.array([entry['normal'] for entry in Facet._canonical_dome_mesh])
+            hf.create_dataset('dome_normals', data=dome_normals)
+        conditional_print(config.silent_mode, f"Saved dome thermal fluxes to {df_path}")
 
     if config.plot_insolation_curve and not config.silent_mode:
         fig_insolation = plt.figure(figsize=(10, 6))
@@ -513,6 +529,7 @@ def main():
                           simulation.timesteps_per_day, 
                           simulation.solar_distance_au,
                           simulation.rotation_period_hours,
+                          config.emissivity,
                           colour_map='binary_r', 
                           plot_title='Shadowing on the body', 
                           axis_label='Insolation (W/m^2)', 
@@ -572,6 +589,7 @@ def main():
                     1,               
                     simulation.solar_distance_au,              
                     simulation.rotation_period_hours,
+                    config.emissivity,
                     colour_map='viridis', 
                     plot_title=f'Contributing Facets for Facet {selected_facet}', 
                     axis_label='View Factors Value', 
@@ -592,6 +610,7 @@ def main():
                     1,               
                     simulation.solar_distance_au,              
                     simulation.rotation_period_hours,
+                    config.emissivity,
                     colour_map='viridis', 
                     plot_title='Secondary Radiation Contribution', 
                     axis_label='Sum of View Factors', 
@@ -756,6 +775,7 @@ def main():
                 simulation.timesteps_per_day,
                 simulation.solar_distance_au,
                 simulation.rotation_period_hours,
+                config.emissivity,
                 colour_map="coolwarm",
                 plot_title=f"Subfacet Temps (facet {idx})",
                 axis_label="Temperature (K)",
@@ -791,23 +811,33 @@ def main():
             hf.create_dataset('temps', data=np.array(all_temps, dtype=np.float64))
         conditional_print(config.silent_mode, f"Subfacet HDF5 updated at {h5_path}")
         
-        # Use precomputed viewed temperatures if enabled and fixed camera angles provided
-        if config.use_precomputed_viewed_temps and config.fixed_camera_theta is not None and config.fixed_camera_phi is not None:
-            theta = config.fixed_camera_theta
-            phi   = config.fixed_camera_phi
-            out_file = f"outputs/viewed_temps_theta{theta:.3f}_phi{phi:.3f}.npz"
-            os.makedirs(os.path.dirname(out_file), exist_ok=True)
-            cmd = [sys.executable, "scripts/precompute_viewed_temps.py",
-                   "--h5", os.path.join("outputs","subfacet_data.h5"),
-                   "--stl", config.path_to_shape_model_file,
-                   "--theta", str(theta), "--phi", str(phi),
-                   "--out", out_file]
-            subprocess.run(cmd, check=True)
-            data = np.load(out_file)
-            plot_array = data["viewed_temperatures"]
-        else:
-            # Fallback: direct parent-temperatures
-            plot_array = result["final_day_temperatures"]
+        # Compute and save final-day dome thermal flux arrays for animation
+        sigma = 5.670374419e-8  # Stefan-Boltzmann constant
+        submesh = Facet._canonical_dome_mesh
+        F_sd = Facet._canonical_F_sd
+        M = len(submesh)
+        nF = len(shape_model)
+        T = simulation.timesteps_per_day
+        dome_flux_th = np.zeros((nF, M, T), dtype=np.float64)
+        # Compute emissive power per subfacet and project onto dome bins
+        for i, facet in enumerate(shape_model):
+            temps_sf = facet.depression_temperature_result["final_day_temperatures"]  # shape (M, T)
+            sub_areas = np.array([entry['area'] * facet.area for entry in submesh], dtype=np.float64)
+            # Radiative power W per subfacet (use simulation.emissivity)
+            E_sub = simulation.emissivity * sigma * (temps_sf**4) * sub_areas[:, None]
+            # Project to dome bins
+            dome_flux_th[i] = F_sd.T.dot(E_sub)
+        # Save dome flux HDF5
+        dome_h5 = os.path.join('outputs', 'dome_fluxes.h5')
+        os.makedirs(os.path.dirname(dome_h5), exist_ok=True)
+        with h5py.File(dome_h5, 'w') as dfh:
+            dfh.create_dataset('dome_flux_th', data=dome_flux_th)
+            dome_normals = np.array([entry['normal'] for entry in submesh])
+            dfh.create_dataset('dome_normals', data=dome_normals)
+        conditional_print(config.silent_mode, f"Saved final-day dome thermal fluxes to {dome_h5}")
+        
+        # Always use parent mean temperatures for animation; toggling V will switch to dome shading
+        plot_array = result["final_day_temperatures"]
 
         check_remote_and_animate(config.remote, config.path_to_shape_model_file, 
                       plot_array, 
@@ -815,7 +845,8 @@ def main():
                       simulation.sunlight_direction, 
                       simulation.timesteps_per_day,
                       simulation.solar_distance_au,              
-                      simulation.rotation_period_hours,              
+                      simulation.rotation_period_hours,
+                      config.emissivity,
                       colour_map='coolwarm', 
                       plot_title='Temperature distribution', 
                       axis_label='Temperature (K)', 
