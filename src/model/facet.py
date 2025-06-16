@@ -159,7 +159,7 @@ class Facet:
                 sub[i]['vertices'], sub[i]['normal'], sub[i]['area'],
                 test_vertices_ss, test_areas_ss, config.vf_rays
             ) for i in range(N)
-        )
+            )
         for i, row in enumerate(ss_results):
             F_ss[i, :] = row
         # compute subfacet-to-dome view factors
@@ -168,7 +168,7 @@ class Facet:
                 sub[i]['vertices'], sub[i]['normal'], sub[i]['area'],
                 test_vertices_sd, test_areas_sd, config.vf_rays
             ) for i in range(N)
-        )
+            )
         for i, row in enumerate(sd_results):
             F_sd[i, :] = row
 

@@ -10,8 +10,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from src.utilities.plotting.animate_model import animate_model
 
 def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_array, rotation_axis, 
-                           sunlight_direction, timesteps_per_day, solar_distance_au, rotation_period_hr, 
-                           **kwargs):
+                           sunlight_direction, timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity, **kwargs):
     """
     Handles animation logic based on whether remote mode is enabled.
     If remote is False, calls animate_model function directly.
@@ -19,8 +18,20 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
     """
     if not remote:
         # Local mode: call animate_model as usual
+        # Extract required arguments from kwargs
+        plot_title = kwargs.pop('plot_title', 'Temperature distribution')
+        axis_label = kwargs.pop('axis_label', 'Temperature (K)')
+        animation_frames = kwargs.pop('animation_frames', 200)
+        save_animation = kwargs.pop('save_animation', False)
+        save_animation_name = kwargs.pop('save_animation_name', 'temperature_animation.gif')
+        background_colour = kwargs.pop('background_colour', 'black')
+        colour_map = kwargs.pop('colour_map', 'coolwarm')
+        
+        # Call animate_model with all required arguments
         animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction,
-                     timesteps_per_day, solar_distance_au, rotation_period_hr, **kwargs)
+                     timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity,
+                     plot_title, axis_label, animation_frames, save_animation, save_animation_name,
+                     background_colour, colour_map=colour_map)
     else:
         # Remote mode: create a directory to save the animation parameters
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
