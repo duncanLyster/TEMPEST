@@ -322,7 +322,6 @@ def main():
             subj_vertices = np.zeros((M, 3, 3), dtype=np.float64)
             subj_normals = np.zeros((M, 3), dtype=np.float64)
             subj_areas = np.zeros(M, dtype=np.float64)
-            # number of parent facets
             n_parents_local = parent_vertices.shape[0]
             parent_radius = math.sqrt(facet.area / math.pi)
             for j, entry in enumerate(facet.dome_facets):
@@ -338,7 +337,7 @@ def main():
             if len(vis) > 0:
                 for j in range(M):
                     vals = calculate_view_factors(
-                    subj_vertices[j], subj_normals[j], subj_areas[j],
+                        subj_vertices[j], subj_normals[j], subj_areas[j],
                         parent_vertices[vis], parent_areas[vis], vf_rays
                     )
                     F_dp_local[j, vis] = vals
@@ -474,6 +473,24 @@ def main():
             # Save canonical dome normals for bin lookup
             dome_normals = np.array([entry['normal'] for entry in Facet._canonical_dome_mesh])
             hf.create_dataset('dome_normals', data=dome_normals)
+            # Compute and save per-facet dome bin areas (canonical areas scaled by parent facet area and dome radius factor squared)
+            canonical_areas = np.array([entry['area'] for entry in Facet._canonical_dome_mesh])  # shape (M,)
+            parent_areas = np.array([f.area for f in shape_model])  # shape (nF,)
+            dome_bin_areas = canonical_areas[None, :] * parent_areas[:, None] * config.kernel_dome_radius_factor**2  # shape (nF, M)
+            hf.create_dataset('dome_bin_areas', data=dome_bin_areas)
+            # Compute canonical per-bin solid angles for spherical triangles
+            verts = np.array([entry['vertices'] for entry in Facet._canonical_dome_mesh])  # shape (M,3,3)
+            # Normalize to unit sphere
+            norms = np.linalg.norm(verts, axis=2)[:, :, None]
+            unit_verts = verts / norms
+            solid_angles = []
+            for tri in unit_verts:
+                u1, u2, u3 = tri
+                num = np.linalg.det(np.stack((u1, u2, u3)))
+                den = 1.0 + np.dot(u1, u2) + np.dot(u2, u3) + np.dot(u3, u1)
+                solid_angles.append(2.0 * math.atan2(num, den))
+            solid_angles = np.array(solid_angles)
+            hf.create_dataset('dome_bin_solid_angles', data=solid_angles)
         conditional_print(config.silent_mode, f"Saved dome thermal fluxes to {df_path}")
 
     if config.plot_insolation_curve and not config.silent_mode:
@@ -776,6 +793,7 @@ def main():
                 simulation.solar_distance_au,
                 simulation.rotation_period_hours,
                 config.emissivity,
+                dome_radius_factor=config.kernel_dome_radius_factor,
                 colour_map="coolwarm",
                 plot_title=f"Subfacet Temps (facet {idx})",
                 axis_label="Temperature (K)",
@@ -832,8 +850,26 @@ def main():
         os.makedirs(os.path.dirname(dome_h5), exist_ok=True)
         with h5py.File(dome_h5, 'w') as dfh:
             dfh.create_dataset('dome_flux_th', data=dome_flux_th)
+            # Save canonical dome normals for bin lookup
             dome_normals = np.array([entry['normal'] for entry in submesh])
             dfh.create_dataset('dome_normals', data=dome_normals)
+            # Compute and save per-facet dome bin areas (canonical areas scaled by parent facet area and dome radius factor squared)
+            canonical_areas = np.array([entry['area'] for entry in submesh])  # shape (M,)
+            parent_areas = np.array([facet.area for facet in shape_model])  # shape (nF,)
+            dome_bin_areas = canonical_areas[None, :] * parent_areas[:, None] * config.kernel_dome_radius_factor**2  # shape (nF, M)
+            dfh.create_dataset('dome_bin_areas', data=dome_bin_areas)
+            # Compute canonical per-bin solid angles for spherical triangles
+            verts2 = np.array([entry['vertices'] for entry in submesh])  # shape (M,3,3)
+            norms2 = np.linalg.norm(verts2, axis=2)[:, :, None]
+            unit_verts2 = verts2 / norms2
+            solid_angles2 = []
+            for tri in unit_verts2:
+                u1, u2, u3 = tri
+                num = np.linalg.det(np.stack((u1, u2, u3)))
+                den = 1.0 + np.dot(u1, u2) + np.dot(u2, u3) + np.dot(u3, u1)
+                solid_angles2.append(2.0 * math.atan2(num, den))
+            solid_angles2 = np.array(solid_angles2)
+            dfh.create_dataset('dome_bin_solid_angles', data=solid_angles2)
         conditional_print(config.silent_mode, f"Saved final-day dome thermal fluxes to {dome_h5}")
         
         # Always use parent mean temperatures for animation; toggling V will switch to dome shading
@@ -845,8 +881,9 @@ def main():
                       simulation.sunlight_direction, 
                       simulation.timesteps_per_day,
                       simulation.solar_distance_au,              
-                      simulation.rotation_period_hours,
+                      simulation.rotation_period_hours,              
                       config.emissivity,
+                      dome_radius_factor=config.kernel_dome_radius_factor,
                       colour_map='coolwarm', 
                       plot_title='Temperature distribution', 
                       axis_label='Temperature (K)', 

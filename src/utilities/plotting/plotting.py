@@ -18,6 +18,8 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
     """
     if not remote:
         # Local mode: call animate_model as usual
+        # Extract dome radius factor for scaling canonical dome areas
+        dome_radius_factor = kwargs.pop('dome_radius_factor', 1.0)
         # Extract required arguments from kwargs
         plot_title = kwargs.pop('plot_title', 'Temperature distribution')
         axis_label = kwargs.pop('axis_label', 'Temperature (K)')
@@ -31,7 +33,7 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
         animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction,
                      timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity,
                      plot_title, axis_label, animation_frames, save_animation, save_animation_name,
-                     background_colour, colour_map=colour_map)
+                     background_colour, dome_radius_factor=dome_radius_factor, colour_map=colour_map)
     else:
         # Remote mode: create a directory to save the animation parameters
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

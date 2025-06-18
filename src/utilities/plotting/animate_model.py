@@ -61,6 +61,7 @@ class AnimationState:
         self.dome_rotations = None
         self.dome_bin_areas = None
         self.simulation_emissivity = None
+        self.facet_areas = None
 
 def get_next_color(state):
     color = state.color_cycle[state.color_index % len(state.color_cycle)]
@@ -207,57 +208,8 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                         state.ax.set_xlim(0, 1)
                         state.ax.set_xticks(np.linspace(0, 1, 5))
                     state.fig.canvas.draw()
-                elif event.key == 'v':  # Toggle view-based shading
-                    state.view_mode = not state.view_mode
-                    print(f"[DEBUG] Toggled view_mode to {state.view_mode} for facets {list(state.cell_colors.keys())}")
-                    if state.dome_flux_th is not None:
-                        print(f"[DEBUG] dome_flux_th shape: {state.dome_flux_th.shape}")
-                    # Update all existing lines on the 2D plot
-                    for facet_id, line in state.cell_colors.items():
-                        # Determine new series based on mode
-                        if state.view_mode and state.dome_flux_th is not None:
-                            # Dome-based thermal flux lookup
-                            cam_pos = np.array(plotter.camera.position)
-                            focal = np.array(plotter.camera.focal_point)
-                            view_dir = focal - cam_pos
-                            view_dir /= np.linalg.norm(view_dir)
-                            # Map view vector into facet-local dome frame
-                            vd_loc = state.dome_rotations[facet_id].dot(view_dir)
-                            # Cosines with dome bin normals
-                            cosines = np.dot(state.dome_bin_normals, vd_loc)
-                            cosines = np.clip(cosines, 0, None)
-                            best_bin = np.argmax(cosines)
-                            print(f"[DEBUG] Facet {facet_id}: best_bin {best_bin}, dome_bin_normals count {state.dome_bin_normals.shape[0]}")
-                            values = state.dome_flux_th[facet_id, best_bin, :]
-                            time_steps = np.linspace(0, 1, len(values))
-                        elif state.view_mode:
-                            # Fallback to dot-weighted T curve
-                            cam_pos = np.array(plotter.camera.position)
-                            focal = np.array(plotter.camera.focal_point)
-                            view_dir = (focal - cam_pos)
-                            view_dir /= np.linalg.norm(view_dir)
-                            raw = plotted_variable_array[facet_id, :]
-                            values = convert_to_view_time(raw,
-                                                          state.facet_normals[facet_id],
-                                                          state.rotation_axis,
-                                                          view_dir)
-                            time_steps = np.linspace(0, 1, len(values))
-                        elif state.use_local_time:
-                            raw = plotted_variable_array[facet_id, :]
-                            values = convert_to_local_time(raw,
-                                                           state.facet_normals[facet_id],
-                                                           state.sunlight_direction,
-                                                           state.rotation_axis,
-                                                           facet_id)
-                            time_steps = np.linspace(0, 24, len(values))
-                        else:
-                            values = plotted_variable_array[facet_id, :]
-                            time_steps = np.linspace(0, 1, len(values))
-                        # Update line
-                        line.set_xdata(time_steps)
-                        line.set_ydata(values)
-                    state.ax.set_ylabel("Viewed Value" if state.view_mode else axis_label)
-                    state.fig.canvas.draw()
+
+                state.fig.canvas.flush_events()
 
             state.fig.canvas.mpl_connect('key_press_event', on_key)
             state.ax.set_xlabel("Fractional angle of rotation")
@@ -348,34 +300,23 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
                     focal = np.array(plotter.camera.focal_point)
                     view_dir_world = (focal - cam_pos)
                     view_dir_world /= np.linalg.norm(view_dir_world)
-                    print(f"[DEBUG] view_dir_world shape: {view_dir_world.shape}")
-                    
+                    # Project into each facet's local dome coords
                     vd_local = np.einsum('ijk,k->ij', state.dome_rotations, view_dir_world)
-                    print(f"[DEBUG] vd_local shape: {vd_local.shape}")
-                    
                     cosines = np.dot(vd_local, state.dome_bin_normals.T)
-                    print(f"[DEBUG] cosines shape: {cosines.shape}")
-                    
                     cosines = np.clip(cosines, 0, None)
                     best_bins = np.argmax(cosines, axis=1)
-                    print(f"[DEBUG] best_bins shape: {best_bins.shape}")
-                    
-                    t = state.current_frame
-                    # Convert radiance to temperature for each facet
+                    # Compute brightness temperature
                     sigma = 5.670374419e-8
-                    epsilon = state.simulation_emissivity  # Use the value we set during initialization
-                    print(f"[DEBUG] Using emissivity: {epsilon}")
-                    
-                    A = state.dome_bin_areas[best_bins]
-                    print(f"[DEBUG] A shape: {A.shape}, min: {A.min()}, max: {A.max()}")
-                    
+                    epsilon = state.simulation_emissivity
+                    t = state.current_frame
+                    # Use solid angles to get radiance: L = F / Omega
+                    Omega = state.dome_bin_solid_angles[best_bins]
                     F = state.dome_flux_th[np.arange(vd_local.shape[0]), best_bins, t]
-                    print(f"[DEBUG] F shape: {F.shape}, min: {F.min()}, max: {F.max()}")
-                    
+                    # Brightness temperature: L = F / Omega, and for Lambertian: L = epsilon * sigma * T^4 / pi
                     with np.errstate(divide='ignore', invalid='ignore'):
-                        T = np.where((epsilon * sigma * A) > 0, (F / (epsilon * sigma * A)) ** 0.25, 0.0)
-                    print(f"[DEBUG] T shape: {T.shape}, min: {T.min()}, max: {T.max()}")
-                    
+                        T = np.where(Omega > 0,
+                                     (F / (Omega * np.pi * epsilon * sigma)) ** 0.25,
+                                     0.0)
                     pv_mesh.cell_data[axis_label] = T
                     plotter.update_scalar_bar_range((T.min(), T.max()))
                 except Exception as e:
@@ -510,7 +451,7 @@ def convert_to_view_time(global_time_data, facet_normal, rotation_axis, view_dir
 
 def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
                   timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity, plot_title, axis_label, animation_frames, 
-                  save_animation, save_animation_name, background_colour, colour_map='coolwarm', pre_selected_facets=[1220, 845]):
+                  save_animation, save_animation_name, background_colour, dome_radius_factor=1.0, colour_map='coolwarm', pre_selected_facets=[1220, 845]):
     """
     Animate a 3D model with temperature or other variable data.
     
@@ -547,18 +488,19 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         plotted_variable_array = temps
     else:
         # Default parent-facet mode
-        try:
-            shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
-        except Exception as e:
-            print(f"Failed to load shape model: {e}")
-            return
-        if shape_mesh.vectors.shape[0] != plotted_variable_array.shape[0]:
-            print("The plotted variable array must have the same number of rows as the number of cells in the shape model.")
-            return
-        vertices = shape_mesh.points.reshape(-1, 3)
-        faces = [[3, 3*i, 3*i+1, 3*i+2] for i in range(shape_mesh.vectors.shape[0])]
-        pv_mesh = pv.PolyData(vertices, faces)
-        pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
+        pass
+    try:
+        shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
+    except Exception as e:
+        print(f"Failed to load shape model: {e}")
+        return
+    if shape_mesh.vectors.shape[0] != plotted_variable_array.shape[0]:
+        print("The plotted variable array must have the same number of rows as the number of cells in the shape model.")
+        return
+    vertices = shape_mesh.points.reshape(-1, 3)
+    faces = [[3, 3*i, 3*i+1, 3*i+2] for i in range(shape_mesh.vectors.shape[0])]
+    pv_mesh = pv.PolyData(vertices, faces)
+    pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
 
     # Store facet normals when loading the mesh
     facet_normals = np.zeros((shape_mesh.vectors.shape[0], 3))
@@ -567,7 +509,15 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         normal = np.cross(v2 - v1, v3 - v1)
         facet_normals[i] = normal / np.linalg.norm(normal)
     
+    # Compute parent facet areas for scaling dome bins
+    # shape_mesh.vectors has shape (n_facets,3,3): extract triangle vertices
+    tri = shape_mesh.vectors  # shape (nF,3,3)
+    # Compute triangle areas: ||(v2-v1)x(v3-v1)||/2
+    facet_areas = np.linalg.norm(np.cross(tri[:,1] - tri[:,0], tri[:,2] - tri[:,0]), axis=1) / 2
+    print(f"[DEBUG] Computed facet_areas shape: {facet_areas.shape}")
     state = AnimationState()
+    # Store facet areas on state for dome area scaling
+    state.facet_areas = facet_areas
     state.timesteps_per_day = timesteps_per_day
     state.shape_model_name = path_to_shape_model_file
     state.facet_normals = facet_normals
@@ -582,11 +532,13 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     dome_flux_path = os.path.join('outputs', 'dome_fluxes.h5')
     if os.path.exists(dome_flux_path):
         with h5py.File(dome_flux_path, 'r') as dfh:
-            state.dome_flux_th = dfh['dome_flux_th'][:]  # (n_facets, M, T)
-            state.dome_bin_normals = dfh['dome_normals'][:]      # (M, 3)
-            print(f"[DEBUG] Loaded dome_flux_th with shape {state.dome_flux_th.shape}, dome_bin_normals shape {state.dome_bin_normals.shape}")
-            print(f"[DEBUG] dome_flux_th global min {state.dome_flux_th.min()}, max {state.dome_flux_th.max()}")
-            
+            # Load precomputed arrays
+            state.dome_flux_th = dfh['dome_flux_th'][:]      # (n_facets, M, T)
+            state.dome_bin_normals = dfh['dome_normals'][:]  # (M, 3)
+            state.dome_bin_areas = dfh['dome_bin_areas'][:]  # (n_facets, M)
+            # Load canonical per-bin solid angles (patch area on unit sphere)
+            state.dome_bin_solid_angles = dfh['dome_bin_solid_angles'][:]  # (M,)
+            print(f"[DEBUG] Loaded dome_flux_th with shape {state.dome_flux_th.shape}, dome_bin_normals shape {state.dome_bin_normals.shape}, dome_bin_areas shape {state.dome_bin_areas.shape}")
             # Compute world->local rotation matrices for each facet
             up = np.array([0.0, 0.0, 1.0])
             nF = facet_normals.shape[0]
@@ -595,11 +547,8 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                 nvec = facet_normals[i]
                 axis = np.cross(up, nvec)
                 if np.linalg.norm(axis) < 1e-8:
-                    # aligned or opposite
-                    if np.dot(up, nvec) > 0:
-                        R_l2w = np.eye(3)
-                    else:
-                        R_l2w = np.array(rotation_matrix(np.array([1.0, 0.0, 0.0]), math.pi))
+                    R_l2w = np.eye(3) if np.dot(up, nvec) > 0 else \
+                             np.array(rotation_matrix(np.array([1.0, 0.0, 0.0]), math.pi))
                 else:
                     axis_norm = axis / np.linalg.norm(axis)
                     angle = math.acos(np.clip(np.dot(up, nvec), -1.0, 1.0))
@@ -607,14 +556,6 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                 dome_rots[i] = R_l2w.T
             state.dome_rotations = dome_rots
             print(f"[DEBUG] Initialized dome_rotations with shape {state.dome_rotations.shape}")
-            
-            # Load dome bin areas from canonical dome mesh
-            try:
-                state.dome_bin_areas = np.array([entry['area'] for entry in Facet._canonical_dome_mesh])
-                print(f"[DEBUG] Initialized dome_bin_areas with shape {state.dome_bin_areas.shape}")
-            except Exception as e:
-                print(f"[DEBUG] Error initializing dome_bin_areas: {e}")
-                state.dome_bin_areas = None
     else:
         print("[DEBUG] No dome_fluxes.h5 found, setting all dome-related arrays to None")
         state.dome_flux_th = None
@@ -637,8 +578,66 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.add_key_event('Right', lambda: move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
     plotter.add_key_event('c', lambda: clear_selections(state, plotter))
     plotter.add_key_event('r', lambda: reset_camera(state, plotter))  # Add the new key event for camera reset
-    plotter.add_key_event('v', lambda: (setattr(state, 'view_mode', not state.view_mode), update(None, None, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label), print(f"[DEBUG] Toggled view_mode to {state.view_mode}")))  # Toggle view-based shading and update mesh
-
+    # Unified view-mode toggle: update both 3D mesh shading and 2D diurnal plot
+    def _toggle_view_event():
+        state.view_mode = not state.view_mode
+        print(f"[DEBUG] Toggled view_mode to {state.view_mode}")
+        # Save current mesh geometry to preserve orientation relative to the camera
+        saved_points = pv_mesh.points.copy()
+        # Update 3D mesh shading for new view mode (this may overwrite points)
+        update(None, None, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
+        # Restore geometry so the mesh doesn't rotate under the camera
+        pv_mesh.points = saved_points
+        plotter.render()
+        # Also update 2D diurnal plot if open
+        if state.fig and hasattr(state, 'ax'):
+            print("[DEBUG] Updating diurnal plot from _toggle_view_event")
+            # Compute time-series lines depending on view_mode
+            if state.view_mode and state.dome_flux_th is not None:
+                # Dome-based temperatures across full rotation
+                # Compute fixed view direction in world coords
+                cam_pos = np.array(plotter.camera.position)
+                focal = np.array(plotter.camera.focal_point)
+                view_dir_world = focal - cam_pos
+                view_dir_world /= np.linalg.norm(view_dir_world)
+                # Project into each facet's local dome coords
+                vd_local = np.einsum('ijk,k->ij', state.dome_rotations, view_dir_world)
+                cosines = np.dot(vd_local, state.dome_bin_normals.T)
+                cosines = np.clip(cosines, 0, None)
+                best_bins = np.argmax(cosines, axis=1)
+                # Prepare time axis
+                sigma = 5.670374419e-8
+                epsilon = state.simulation_emissivity
+                n_t = state.dome_flux_th.shape[2]
+                x = np.linspace(0, 1, n_t)
+                # Update each selected facet's diurnal line
+                for facet_id, line in state.cell_colors.items():
+                    b = best_bins[facet_id]
+                    F = state.dome_flux_th[facet_id, b, :]
+                    # Convert flux W -> radiance W/sr using canonical solid angles
+                    Omega_bin = state.dome_bin_solid_angles[b]
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        # brightness temperature: L = F / Omega, L = epsilon*sigma*T^4/pi
+                        y = np.where(Omega_bin > 0,
+                                     (F / (Omega_bin * np.pi * epsilon * sigma)) ** 0.25,
+                                     np.nan)
+                    line.set_xdata(x)
+                    line.set_ydata(y)
+            else:
+                # Parent facet temperatures
+                n_t = plotted_variable_array.shape[1]
+                x = np.linspace(0, 1, n_t)
+                for facet_id, line in state.cell_colors.items():
+                    y = plotted_variable_array[facet_id, :]
+                    line.set_xdata(x)
+                    line.set_ydata(y)
+            # Common update for axes
+            state.ax.relim()
+            state.ax.autoscale_view()
+            state.ax.set_ylabel("Viewed Temperature (K)" if state.view_mode else axis_label)
+            state.fig.canvas.draw()
+            state.fig.canvas.flush_events()
+    plotter.add_key_event('v', _toggle_view_event)
 
     cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
     plotter.add_mesh(cylinder, color='green')
@@ -740,7 +739,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     )
 
     plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
-    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'L/R Arrow keys' - Rotate\n'R' - Reset camera", position='upper_left', font_size=10, color=text_color)
+    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'L/R Arrow keys' - Rotate\n'R' - Reset camera\n'V' - Toggle view mode", position='upper_left', font_size=10, color=text_color)
 
     info_text = f"Solar Distance: {solar_distance_au} AU\nRotation Period: {rotation_period_hr} hours"
     plotter.add_text(info_text, position='upper_right', font_size=10, color=text_color)
@@ -761,7 +760,44 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         end_time = time.time()
         print(f'Animation setup took {end_time - start_time:.2f} seconds.')
         
-        # Set up the timer for live animation
+        # Print camera position after any interactive camera movement
+        plotter.iren.add_observer('EndInteractionEvent', lambda caller, event: print(f"[DEBUG] Camera pos: {plotter.camera.position}, focal: {plotter.camera.focal_point}, up: {plotter.camera.up}"))
+        # Update 2D diurnal plot on camera move when in view_mode
+        def _camera_moved_event(caller, event):
+            if state.view_mode and state.fig and hasattr(state, 'ax'):
+                print("[DEBUG] Camera moved event: updating diurnal plot")
+                sigma = 5.670374419e-8
+                epsilon = state.simulation_emissivity
+                # Compute fixed view direction in world coords
+                cam_pos = np.array(plotter.camera.position)
+                focal = np.array(plotter.camera.focal_point)
+                view_dir_world = focal - cam_pos
+                view_dir_world /= np.linalg.norm(view_dir_world)
+                # Project into each facet's local dome coords
+                vd_local = np.einsum('ijk,k->ij', state.dome_rotations, view_dir_world)
+                cosines = np.dot(vd_local, state.dome_bin_normals.T)
+                cosines = np.clip(cosines, 0, None)
+                best_bins = np.argmax(cosines, axis=1)
+                # Prepare time axis
+                n_t = state.dome_flux_th.shape[2]
+                x = np.linspace(0, 1, n_t)
+                # Update each selected facet's diurnal line
+                for facet_id, line in state.cell_colors.items():
+                    b = best_bins[facet_id]
+                    F = state.dome_flux_th[facet_id, b, :]
+                    Omega_bin = state.dome_bin_solid_angles[b]
+                    with np.errstate(divide='ignore', invalid='ignore'):
+                        y = np.where(Omega_bin > 0,
+                                     (F / (Omega_bin * np.pi * epsilon * sigma)) ** 0.25,
+                                     np.nan)
+                    line.set_xdata(x)
+                    line.set_ydata(y)
+                # Refresh plot
+                state.ax.relim()
+                state.ax.autoscale_view()
+                state.fig.canvas.draw()
+                state.fig.canvas.flush_events()
+        plotter.iren.add_observer('EndInteractionEvent', _camera_moved_event)
         plotter.iren.add_observer('TimerEvent', update_callback)
         plotter.iren.create_timer(100)  # Creates a repeating timer that triggers every 100 ms
         
