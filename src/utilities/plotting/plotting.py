@@ -60,6 +60,7 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
                 'timesteps_per_day': timesteps_per_day,
                 'solar_distance_au': solar_distance_au,
                 'rotation_period_hr': rotation_period_hr,
+                'emissivity': emissivity,   # Save emissivity for animate_model
                 'rotation_axis': None,  # Placeholder for rotation_axis (stored in NPZ)
                 'sunlight_direction': None,  # Placeholder for sunlight_direction (stored in NPZ)
                 # Additional keyword arguments

@@ -15,14 +15,16 @@ def get_output_folders(base_dir):
 def get_user_confirmation(default_folder, available_folders):
     """Ask the user if they want to use the default most recent folder or choose another."""
     print(f"The most recent folder is: {default_folder}")
-    use_default = input("Do you want to use this folder? (y/n): ").strip().lower()
+    use_default = 'y' #input("Do you want to use this folder? (y/n): ").strip().lower()
 
     if use_default == 'y':
         return default_folder
-    else:
-        print("\nAvailable folders:")
-        for i, folder in enumerate(available_folders):
-            print(f"{i}: {folder}")
+
+    # return default_folder
+    # else:
+    #     print("\nAvailable folders:")
+    #     for i, folder in enumerate(available_folders):
+    #         print(f"{i}: {folder}")
         
         # Get the user's choice
         while True:
@@ -58,12 +60,24 @@ def run_saved_animation(json_file, npz_file):
     
     # Extract required positional arguments
     kwargs = json_data['kwargs']
+    # Positional scalar parameters including emissivity
     args.extend([
         kwargs.pop('timesteps_per_day'),
         kwargs.pop('solar_distance_au'),
-        kwargs.pop('rotation_period_hr')
+        kwargs.pop('rotation_period_hr'),
+        kwargs.pop('emissivity', 0.5)  # Default emissivity for old files
     ])
     
+    # Extract remaining required positional arguments from kwargs
+    plot_title = kwargs.pop('plot_title', 'Temperature distribution')
+    axis_label = kwargs.pop('axis_label', 'Temperature (K)')
+    animation_frames = kwargs.pop('animation_frames', 200)
+    save_animation = kwargs.pop('save_animation', False)
+    save_animation_name = kwargs.pop('save_animation_name', 'temperature_animation.gif')
+    background_colour = kwargs.pop('background_colour', 'black')
+    
+    args.extend([plot_title, axis_label, animation_frames, save_animation, save_animation_name, background_colour])
+
     # Remove placeholder entries from kwargs
     kwargs.pop('rotation_axis', None)
     kwargs.pop('sunlight_direction', None)
@@ -77,22 +91,14 @@ def run_saved_animation(json_file, npz_file):
     print("Running animation...")
     animate_model(*args, **kwargs)
     print("Animation complete.")
-    
-    # Print debugging information
-    print("Loaded arguments:")
-    print(f"Positional args count: {len(args)}")
-    print(f"Keyword args: {list(kwargs.keys())}")
-    
-    # Call the animate_model function with the correct arguments
-    print(f"Running animation with parameters from {json_file} and {npz_file}...")
-    animate_model(*args, **kwargs)
-    print("Animation complete.")
 
 
 def main():
-    # Set the base directory for output folders
-    base_dir = 'outputs/remote_outputs/'
-    
+    # Determine base directory for saved animations relative to project root
+    script_dir = os.path.abspath(os.path.dirname(__file__))
+    project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
+    base_dir = os.path.join(project_root, 'outputs', 'remote_outputs')
+
     # Check if base directory exists
     if not os.path.exists(base_dir):
         print(f"Directory {base_dir} does not exist. Exiting.")
