@@ -831,35 +831,35 @@ def main():
         
         # Compute and save final-day dome thermal flux arrays for animation
         sigma = 5.670374419e-8  # Stefan-Boltzmann constant
-        submesh = Facet._canonical_dome_mesh
+        submesh = Facet._canonical_subfacet_mesh
         F_sd = Facet._canonical_F_sd
         M = len(submesh)
         nF = len(shape_model)
         T = simulation.timesteps_per_day
-        dome_flux_th = np.zeros((nF, M, T), dtype=np.float64)
+        dome_flux_th = np.zeros((nF, len(Facet._canonical_dome_mesh), T), dtype=np.float64)
         # Compute emissive power per subfacet and project onto dome bins
         for i, facet in enumerate(shape_model):
-            temps_sf = facet.depression_temperature_result["final_day_temperatures"]  # shape (M, T)
+            temps_sf = facet.depression_temperature_result["final_day_temperatures"]  # shape (N_subfacets, T)
             sub_areas = np.array([entry['area'] * facet.area for entry in submesh], dtype=np.float64)
             # Radiative power W per subfacet (use simulation.emissivity)
             E_sub = simulation.emissivity * sigma * (temps_sf**4) * sub_areas[:, None]
             # Project to dome bins
             dome_flux_th[i] = F_sd.T.dot(E_sub)
-        # Save dome flux HDF5
+        # Save dome flux HDF5 - use dome mesh for metadata
         dome_h5 = os.path.join('outputs', 'dome_fluxes.h5')
         os.makedirs(os.path.dirname(dome_h5), exist_ok=True)
         with h5py.File(dome_h5, 'w') as dfh:
             dfh.create_dataset('dome_flux_th', data=dome_flux_th)
             # Save canonical dome normals for bin lookup
-            dome_normals = np.array([entry['normal'] for entry in submesh])
+            dome_normals = np.array([entry['normal'] for entry in Facet._canonical_dome_mesh])
             dfh.create_dataset('dome_normals', data=dome_normals)
             # Compute and save per-facet dome bin areas (canonical areas scaled by parent facet area and dome radius factor squared)
-            canonical_areas = np.array([entry['area'] for entry in submesh])  # shape (M,)
-            parent_areas = np.array([facet.area for facet in shape_model])  # shape (nF,)
-            dome_bin_areas = canonical_areas[None, :] * parent_areas[:, None] * config.kernel_dome_radius_factor**2  # shape (nF, M)
+            canonical_areas = np.array([entry['area'] for entry in Facet._canonical_dome_mesh])
+            parent_areas = np.array([facet.area for facet in shape_model])
+            dome_bin_areas = canonical_areas[None, :] * parent_areas[:, None] * config.kernel_dome_radius_factor**2
             dfh.create_dataset('dome_bin_areas', data=dome_bin_areas)
             # Compute canonical per-bin solid angles for spherical triangles
-            verts2 = np.array([entry['vertices'] for entry in submesh])  # shape (M,3,3)
+            verts2 = np.array([entry['vertices'] for entry in Facet._canonical_dome_mesh])
             norms2 = np.linalg.norm(verts2, axis=2)[:, :, None]
             unit_verts2 = verts2 / norms2
             solid_angles2 = []
