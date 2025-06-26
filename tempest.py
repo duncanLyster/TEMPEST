@@ -767,8 +767,8 @@ def main():
             parent_t_final[i, :] = np.power((area_vec[:, None] * np.power(sub_temps, 4)).sum(axis=0) / area_vec.sum(), 0.25)
         result["final_day_temperatures"] = parent_t_final
         result["final_timestep_temperatures"] = parent_t_final[:, -1]
-        # Sub-facet temperature animation
-        if config.animate_subfacets:
+        # Sub-facet temperature animation (only available with kernel-based roughness)
+        if config.animate_subfacets and config.apply_kernel_based_roughness:
             idx = config.subfacet_facet_index
             facet = shape_model[idx]
             N_sub = len(facet.sub_facets)
@@ -802,75 +802,79 @@ def main():
                 save_animation_name=f"subfacet_{idx}_temps.gif",
                 background_colour="white"
             )
+        elif config.animate_subfacets and not config.apply_kernel_based_roughness:
+            conditional_print(config.silent_mode, "Warning: Subfacet animation requires kernel-based roughness to be enabled.")
 
     if config.animate_final_day_temp_distribution:
         conditional_print(config.silent_mode,  f"Preparing temperature animation.\n")
 
-        # Export subfacet HDF5 for viewing precompute (overwrite with current run data)
-        h5_path = os.path.join('outputs', 'subfacet_data.h5')
-        os.makedirs(os.path.dirname(h5_path), exist_ok=True)
-        with h5py.File(h5_path, 'w') as hf:
-            all_pts, all_faces, all_temps = [], [], []
-            pt_index = 0
-            for facet in shape_model:
-                # Subfacet triangles and temps
-                scale = math.sqrt(facet.area)
-                R_l2w = facet.dome_rotation.T
-                temps_sf = facet.depression_temperature_result["final_day_temperatures"]  # (M,)
-                for j, entry in enumerate(Facet._canonical_subfacet_mesh):
-                    local_tri = entry['vertices'] * scale
-                    world_tri = (R_l2w.dot(local_tri.T)).T + facet.position
-                    all_pts.extend(world_tri)
-                    all_faces.append([3, pt_index, pt_index+1, pt_index+2])
-                    pt_index += 3
-                    all_temps.append(temps_sf[j])
-            hf.create_dataset('points', data=np.array(all_pts, dtype=np.float64))
-            hf.create_dataset('faces', data=np.array(all_faces, dtype=np.int64))
-            hf.create_dataset('temps', data=np.array(all_temps, dtype=np.float64))
-        conditional_print(config.silent_mode, f"Subfacet HDF5 updated at {h5_path}")
-        
-        # Compute and save final-day dome thermal flux arrays for animation
-        sigma = 5.670374419e-8  # Stefan-Boltzmann constant
-        submesh = Facet._canonical_subfacet_mesh
-        F_sd = Facet._canonical_F_sd
-        M = len(submesh)
-        nF = len(shape_model)
-        T = simulation.timesteps_per_day
-        dome_flux_th = np.zeros((nF, len(Facet._canonical_dome_mesh), T), dtype=np.float64)
-        # Compute emissive power per subfacet and project onto dome bins
-        for i, facet in enumerate(shape_model):
-            temps_sf = facet.depression_temperature_result["final_day_temperatures"]  # shape (N_subfacets, T)
-            sub_areas = np.array([entry['area'] * facet.area for entry in submesh], dtype=np.float64)
-            # Radiative power W per subfacet (use simulation.emissivity)
-            E_sub = simulation.emissivity * sigma * (temps_sf**4) * sub_areas[:, None]
-            # Project to dome bins
-            dome_flux_th[i] = F_sd.T.dot(E_sub)
-        # Save dome flux HDF5 - use dome mesh for metadata
-        dome_h5 = os.path.join('outputs', 'dome_fluxes.h5')
-        os.makedirs(os.path.dirname(dome_h5), exist_ok=True)
-        with h5py.File(dome_h5, 'w') as dfh:
-            dfh.create_dataset('dome_flux_th', data=dome_flux_th)
-            # Save canonical dome normals for bin lookup
-            dome_normals = np.array([entry['normal'] for entry in Facet._canonical_dome_mesh])
-            dfh.create_dataset('dome_normals', data=dome_normals)
-            # Compute and save per-facet dome bin areas (canonical areas scaled by parent facet area and dome radius factor squared)
-            canonical_areas = np.array([entry['area'] for entry in Facet._canonical_dome_mesh])
-            parent_areas = np.array([facet.area for facet in shape_model])
-            dome_bin_areas = canonical_areas[None, :] * parent_areas[:, None] * config.kernel_dome_radius_factor**2
-            dfh.create_dataset('dome_bin_areas', data=dome_bin_areas)
-            # Compute canonical per-bin solid angles for spherical triangles
-            verts2 = np.array([entry['vertices'] for entry in Facet._canonical_dome_mesh])
-            norms2 = np.linalg.norm(verts2, axis=2)[:, :, None]
-            unit_verts2 = verts2 / norms2
-            solid_angles2 = []
-            for tri in unit_verts2:
-                u1, u2, u3 = tri
-                num = np.linalg.det(np.stack((u1, u2, u3)))
-                den = 1.0 + np.dot(u1, u2) + np.dot(u2, u3) + np.dot(u3, u1)
-                solid_angles2.append(2.0 * math.atan2(num, den))
-            solid_angles2 = np.array(solid_angles2)
-            dfh.create_dataset('dome_bin_solid_angles', data=solid_angles2)
-        conditional_print(config.silent_mode, f"Saved final-day dome thermal fluxes to {dome_h5}")
+        # Export subfacet HDF5 and dome flux data only if kernel-based roughness is enabled
+        if config.apply_kernel_based_roughness:
+            # Export subfacet HDF5 for viewing precompute (overwrite with current run data)
+            h5_path = os.path.join('outputs', 'subfacet_data.h5')
+            os.makedirs(os.path.dirname(h5_path), exist_ok=True)
+            with h5py.File(h5_path, 'w') as hf:
+                all_pts, all_faces, all_temps = [], [], []
+                pt_index = 0
+                for facet in shape_model:
+                    # Subfacet triangles and temps
+                    scale = math.sqrt(facet.area)
+                    R_l2w = facet.dome_rotation.T
+                    temps_sf = facet.depression_temperature_result["final_day_temperatures"]  # (M,)
+                    for j, entry in enumerate(Facet._canonical_subfacet_mesh):
+                        local_tri = entry['vertices'] * scale
+                        world_tri = (R_l2w.dot(local_tri.T)).T + facet.position
+                        all_pts.extend(world_tri)
+                        all_faces.append([3, pt_index, pt_index+1, pt_index+2])
+                        pt_index += 3
+                        all_temps.append(temps_sf[j])
+                hf.create_dataset('points', data=np.array(all_pts, dtype=np.float64))
+                hf.create_dataset('faces', data=np.array(all_faces, dtype=np.int64))
+                hf.create_dataset('temps', data=np.array(all_temps, dtype=np.float64))
+            conditional_print(config.silent_mode, f"Subfacet HDF5 updated at {h5_path}")
+            
+            # Compute and save final-day dome thermal flux arrays for animation
+            sigma = 5.670374419e-8  # Stefan-Boltzmann constant
+            submesh = Facet._canonical_subfacet_mesh
+            F_sd = Facet._canonical_F_sd
+            M = len(submesh)
+            nF = len(shape_model)
+            T = simulation.timesteps_per_day
+            dome_flux_th = np.zeros((nF, len(Facet._canonical_dome_mesh), T), dtype=np.float64)
+            # Compute emissive power per subfacet and project onto dome bins
+            for i, facet in enumerate(shape_model):
+                temps_sf = facet.depression_temperature_result["final_day_temperatures"]  # shape (N_subfacets, T)
+                sub_areas = np.array([entry['area'] * facet.area for entry in submesh], dtype=np.float64)
+                # Radiative power W per subfacet (use simulation.emissivity)
+                E_sub = simulation.emissivity * sigma * (temps_sf**4) * sub_areas[:, None]
+                # Project to dome bins
+                dome_flux_th[i] = F_sd.T.dot(E_sub)
+            # Save dome flux HDF5 - use dome mesh for metadata
+            dome_h5 = os.path.join('outputs', 'dome_fluxes.h5')
+            os.makedirs(os.path.dirname(dome_h5), exist_ok=True)
+            with h5py.File(dome_h5, 'w') as dfh:
+                dfh.create_dataset('dome_flux_th', data=dome_flux_th)
+                # Save canonical dome normals for bin lookup
+                dome_normals = np.array([entry['normal'] for entry in Facet._canonical_dome_mesh])
+                dfh.create_dataset('dome_normals', data=dome_normals)
+                # Compute and save per-facet dome bin areas (canonical areas scaled by parent facet area and dome radius factor squared)
+                canonical_areas = np.array([entry['area'] for entry in Facet._canonical_dome_mesh])
+                parent_areas = np.array([facet.area for facet in shape_model])
+                dome_bin_areas = canonical_areas[None, :] * parent_areas[:, None] * config.kernel_dome_radius_factor**2
+                dfh.create_dataset('dome_bin_areas', data=dome_bin_areas)
+                # Compute canonical per-bin solid angles for spherical triangles
+                verts2 = np.array([entry['vertices'] for entry in Facet._canonical_dome_mesh])
+                norms2 = np.linalg.norm(verts2, axis=2)[:, :, None]
+                unit_verts2 = verts2 / norms2
+                solid_angles2 = []
+                for tri in unit_verts2:
+                    u1, u2, u3 = tri
+                    num = np.linalg.det(np.stack((u1, u2, u3)))
+                    den = 1.0 + np.dot(u1, u2) + np.dot(u2, u3) + np.dot(u3, u1)
+                    solid_angles2.append(2.0 * math.atan2(num, den))
+                solid_angles2 = np.array(solid_angles2)
+                dfh.create_dataset('dome_bin_solid_angles', data=solid_angles2)
+            conditional_print(config.silent_mode, f"Saved final-day dome thermal fluxes to {dome_h5}")
         
         # Always use parent mean temperatures for animation; toggling V will switch to dome shading
         plot_array = result["final_day_temperatures"]
@@ -937,9 +941,10 @@ def main():
     # Save the visible phase curve data to a CSV file
     if config.save_visible_phase_curve_data:
         locations = Locations()
-        # Create name using shape model name, roughness parameters, and time
+        locations.ensure_directories_exist()  # Ensure output directories exist
+        # Create name using shape model name and time
         filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
-        output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_{config.subdivision_levels}_{config.displacement_factors}_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+        output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_visible_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
         df = pd.DataFrame({
             'Phase Angle (degrees)': phase_angles,
             'Brightness Value': brightness_values
@@ -976,9 +981,10 @@ def main():
     # Save the thermal phase curve data to a CSV file
     if config.save_thermal_phase_curve_data:
         locations = Locations()
-        # Create name using shape model name, roughness parameters, and time
+        locations.ensure_directories_exist()  # Ensure output directories exist
+        # Create name using shape model name and time
         filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
-        output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_{config.subdivision_levels}_{config.displacement_factors}_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+        output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_thermal_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
         df = pd.DataFrame({
             'Phase Angle (degrees)': phase_angles,
             'Brightness Value': brightness_values
@@ -1015,31 +1021,32 @@ def main():
         df_temp.to_csv(f'temperature_data/facet_{idx}.csv', index=False)
         print(f"  facet {idx}: insolation_data/facet_{idx}.csv, temperature_data/facet_{idx}.csv")
 
-    # HDF5 export of all subfacet meshes and time-series temperatures
-    # Export subfacet geometry and temperature time series to HDF5
-    h5_path = os.path.join('outputs', 'subfacet_data.h5')
-    os.makedirs(os.path.dirname(h5_path), exist_ok=True)
-    with h5py.File(h5_path, 'w') as hf:
-        all_pts = []
-        all_faces = []
-        all_temps = []
-        pt_index = 0
-        for facet in shape_model:
-            M = len(facet.dome_facets)
-            scale = math.sqrt(facet.area)
-            R_l2w = facet.dome_rotation.T
-            temps = facet.depression_temperature_result["final_day_temperatures"]  # (M, T)
-            for j, entry in enumerate(Facet._canonical_subfacet_mesh):
-                local_tri = entry["vertices"] * scale
-                world_tri = (R_l2w.dot(local_tri.T)).T + facet.position
-                all_pts.extend(world_tri)
-                all_faces.append([3, pt_index, pt_index+1, pt_index+2])
-                pt_index += 3
-                all_temps.append(temps[j])
-        hf.create_dataset('points', data=np.array(all_pts, dtype=np.float64))
-        hf.create_dataset('faces', data=np.array(all_faces, dtype=np.int64))
-        hf.create_dataset('temps', data=np.array(all_temps, dtype=np.float64))
-    conditional_print(config.silent_mode, f"Subfacet HDF5 saved to {h5_path}")
+    # HDF5 export of all subfacet meshes and time-series temperatures (only for roughness models)
+    if config.apply_kernel_based_roughness:
+        # Export subfacet geometry and temperature time series to HDF5
+        h5_path = os.path.join('outputs', 'subfacet_data.h5')
+        os.makedirs(os.path.dirname(h5_path), exist_ok=True)
+        with h5py.File(h5_path, 'w') as hf:
+            all_pts = []
+            all_faces = []
+            all_temps = []
+            pt_index = 0
+            for facet in shape_model:
+                M = len(facet.dome_facets)
+                scale = math.sqrt(facet.area)
+                R_l2w = facet.dome_rotation.T
+                temps = facet.depression_temperature_result["final_day_temperatures"]  # (M, T)
+                for j, entry in enumerate(Facet._canonical_subfacet_mesh):
+                    local_tri = entry["vertices"] * scale
+                    world_tri = (R_l2w.dot(local_tri.T)).T + facet.position
+                    all_pts.extend(world_tri)
+                    all_faces.append([3, pt_index, pt_index+1, pt_index+2])
+                    pt_index += 3
+                    all_temps.append(temps[j])
+            hf.create_dataset('points', data=np.array(all_pts, dtype=np.float64))
+            hf.create_dataset('faces', data=np.array(all_faces, dtype=np.int64))
+            hf.create_dataset('temps', data=np.array(all_temps, dtype=np.float64))
+        conditional_print(config.silent_mode, f"Subfacet HDF5 saved to {h5_path}")
 
 # Call the main program with interrupt handling
 if __name__ == "__main__":

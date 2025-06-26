@@ -52,11 +52,26 @@ class Config:
 
         # Modelling parameters
         self.emissivity = self.config_data.get('emissivity')
+        self.albedo = self.config_data.get('albedo', 0.5)
         self.convergence_method = self.config_data.get('convergence_method', 'mean')
+        self.convergence_target = self.config_data.get('convergence_target', 0.1)
+        self.max_days = self.config_data.get('max_days', 20)
+        self.min_days = self.config_data.get('min_days', 1)
+        self.n_layers = self.config_data.get('n_layers', 45)
         self.include_shadowing = self.config_data.get('include_shadowing', True)
         self.n_scatters = self.config_data.get('n_scatters', 2)
         self.include_self_heating = self.config_data.get('include_self_heating', False)
         self.vf_rays = self.config_data.get('vf_rays', 1000)
+        self.scattering_lut = self.config_data.get('scattering_lut', 'lambertian.npy')
+        self.emission_lut = self.config_data.get('emission_lut', 'lambertian_epf.npy')
+        
+        # Orbital and rotational parameters
+        self.solar_distance_au = self.config_data.get('solar_distance_au', 1.0)
+        self.solar_luminosity = self.config_data.get('solar_luminosity', 3.86420167e+26)
+        self.sunlight_direction = self.config_data.get('sunlight_direction', [1, 0, 0])
+        self.rotation_period_hours = self.config_data.get('rotation_period_hours', 24)
+        self.ra_degrees = self.config_data.get('ra_degrees', 0)
+        self.dec_degrees = self.config_data.get('dec_degrees', 90)
         
         # Surface Roughness Model settings (kernel-based)
         self.apply_kernel_based_roughness = self.config_data.get('apply_kernel_based_roughness', False)
