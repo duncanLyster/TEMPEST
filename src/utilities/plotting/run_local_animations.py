@@ -15,16 +15,15 @@ def get_output_folders(base_dir):
 def get_user_confirmation(default_folder, available_folders):
     """Ask the user if they want to use the default most recent folder or choose another."""
     print(f"The most recent folder is: {default_folder}")
-    use_default = 'y' #input("Do you want to use this folder? (y/n): ").strip().lower()
+    use_default = input("Do you want to use this folder? (y/n): ").strip().lower()
 
     if use_default == 'y':
         return default_folder
 
-    # return default_folder
-    # else:
-    #     print("\nAvailable folders:")
-    #     for i, folder in enumerate(available_folders):
-    #         print(f"{i}: {folder}")
+    else:
+        print("\nAvailable folders:")
+        for i, folder in enumerate(available_folders):
+            print(f"{i}: {folder}")
         
         # Get the user's choice
         while True:

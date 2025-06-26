@@ -2,8 +2,11 @@
 
 import numpy as np
 import matplotlib.pyplot as plt
+import os
+import h5py
+import math
 from typing import Tuple
-from src.utilities.utils import rotate_vector
+from src.utilities.utils import rotate_vector, calculate_rotation_matrix
 from src.model.scattering import BRDFLookupTable
 from src.model.emission import EPFLookupTable
 
@@ -33,9 +36,16 @@ def calculate_phase_curve(
     elif phase_curve_type == 'thermal':
         epf_lut = EPFLookupTable(config.emission_lut)
 
+    # Load dome flux data for thermal calculations if available
+    dome_flux_data = None
+    if phase_curve_type == 'thermal':
+        dome_flux_data = load_dome_flux_data()
+
     for phase_angle in phase_angles_rad:
+        # Shift phase curve by 90 degrees
+        shifted_phase_angle = phase_angle + np.pi/2
         observer_direction = compute_observer_direction(
-            simulation.sunlight_direction, simulation.rotation_axis, phase_angle
+            simulation.sunlight_direction, simulation.rotation_axis, shifted_phase_angle
         )
         observer_position = observer_direction * observer_distance
 
@@ -57,9 +67,17 @@ def calculate_phase_curve(
                     brdf_lut, idx, config
                 ) * projected_area
             else:  # thermal
-                total_brightness += compute_thermal_brightness(
-                    thermal_data, shape_model, simulation, idx, 0, observer_direction
-                ) * projected_area
+                if dome_flux_data is not None:
+                    # Use advanced dome-based thermal calculation
+                    total_brightness += compute_advanced_thermal_brightness(
+                        facet, observer_position, simulation, thermal_data,
+                        epf_lut, idx, config, dome_flux_data
+                    ) * projected_area
+                else:
+                    # Fallback to simple thermal calculation
+                    total_brightness += compute_thermal_brightness(
+                        thermal_data, shape_model, simulation, idx, 0, observer_direction
+                    ) * projected_area
 
         brightness_values.append(total_brightness)
 
@@ -71,6 +89,79 @@ def calculate_phase_curve(
         plot_phase_curve(phase_angles, brightness_values, phase_curve_type)
 
     return phase_angles, brightness_values
+
+def load_dome_flux_data():
+    """Load dome flux data for advanced thermal calculations."""
+    dome_flux_path = os.path.join('outputs', 'dome_fluxes.h5')
+    if not os.path.exists(dome_flux_path):
+        return None
+    
+    try:
+        with h5py.File(dome_flux_path, 'r') as dfh:
+            dome_flux_data = {
+                'dome_flux_th': dfh['dome_flux_th'][:],      # (n_facets, M, T)
+                'dome_bin_normals': dfh['dome_normals'][:],  # (M, 3)
+                'dome_bin_areas': dfh['dome_bin_areas'][:],  # (n_facets, M)
+                'dome_bin_solid_angles': dfh['dome_bin_solid_angles'][:]  # (M,)
+            }
+        return dome_flux_data
+    except Exception as e:
+        print(f"Warning: Could not load dome flux data: {e}")
+        return None
+
+def compute_advanced_thermal_brightness(facet, observer_position, simulation, thermal_data,
+                                      epf_lut, idx, config, dome_flux_data):
+    """
+    Compute thermal brightness using advanced dome flux calculations.
+    This integrates with the existing roughness and sub-facet thermal modeling.
+    """
+    # Calculate observer direction
+    observer_direction = (observer_position - facet.position)
+    observer_direction /= np.linalg.norm(observer_direction)
+    
+    # Get emission angle for EPF lookup
+    cos_emission = np.dot(facet.normal, observer_direction)
+    if cos_emission <= 0:
+        return 0.0
+    
+    emission_angle = np.degrees(np.arccos(np.clip(cos_emission, 0, 1)))
+    epf_value = epf_lut.query(emission_angle)
+    
+    # Use dome flux data if available and dome_rotation exists (accounts for sub-facet structure)
+    if (dome_flux_data is not None and 
+        hasattr(facet, 'dome_rotation') and 
+        facet.dome_rotation is not None):
+        
+        # Transform observer direction to local facet coordinates
+        local_observer = facet.dome_rotation.dot(observer_direction)
+        
+        # Find best dome bin for this viewing direction
+        dome_cosines = np.dot(local_observer, dome_flux_data['dome_bin_normals'].T)
+        dome_cosines = np.clip(dome_cosines, 0, None)
+        
+        if np.max(dome_cosines) > 1e-6:  # Check if any bin is visible
+            best_bin = np.argmax(dome_cosines)
+            
+            # Get thermal flux from this bin (average over rotation)
+            flux_values = dome_flux_data['dome_flux_th'][idx, best_bin, :]
+            avg_flux = np.mean(flux_values)
+            
+            # Get bin area
+            bin_area = dome_flux_data['dome_bin_areas'][idx, best_bin]
+            
+            if bin_area > 0:
+                # Calculate observed thermal brightness with EPF
+                # Scale by dome radius factor
+                scale = config.kernel_dome_radius_factor ** 2
+                thermal_brightness = (avg_flux / bin_area * scale) * epf_value * cos_emission
+                return thermal_brightness
+    
+    # Fallback to simple thermal calculation
+    temperature = np.mean(thermal_data.temperatures[idx, :])
+    sigma = 5.670374419e-8
+    thermal_emission = simulation.emissivity * sigma * (temperature**4)
+    
+    return thermal_emission * epf_value * cos_emission
 
 def compute_observer_direction(sunlight_direction, rotation_axis, phase_angle):
     """
@@ -125,7 +216,7 @@ def compute_projected_area(facet, observer_position):
 
 def compute_thermal_brightness(thermal_data, shape_model, simulation, idx, time_step, observer_direction):
     """
-    Compute the thermal brightness contribution from a single facet
+    Compute the thermal brightness contribution from a single facet (simple version)
     """
     # Get surface temperature (now from 2D array)
     temperature = thermal_data.temperatures[idx, time_step]  
@@ -190,7 +281,7 @@ def compute_visible_brightness(facet, observer_position, simulation, thermal_dat
 def compute_thermal_emission(facet, observer_position, thermal_data, epf_lut, idx, config):
     """Calculate thermal emission from a facet towards an observer."""
     # Calculate emission angle
-    direction_to_observer = normalize_vector(observer_position - facet.center)
+    direction_to_observer = normalize_vector(observer_position - facet.position)
     cos_emission = np.dot(direction_to_observer, facet.normal)
     
     if cos_emission <= 0:
@@ -202,7 +293,8 @@ def compute_thermal_emission(facet, observer_position, thermal_data, epf_lut, id
     epf = epf_lut.query(emission_angle)
     
     # Calculate thermal emission with directional dependence
-    temperature = thermal_data.temperatures[idx, 0, 0]  # surface temperature
+    # Use average temperature over the day
+    temperature = np.mean(thermal_data.temperatures[idx, :])
     thermal_emission = config.emissivity * 5.670374419e-8 * (temperature**4)
     
     return thermal_emission * epf * cos_emission
@@ -219,4 +311,11 @@ def plot_phase_curve(phase_angles, brightness_values, phase_curve_type):
     plt.legend()
     plt.grid(True)
     plt.show()
+
+def normalize_vector(vector):
+    """Normalize a vector to unit length."""
+    norm = np.linalg.norm(vector)
+    if norm == 0:
+        return vector
+    return vector / norm
 
