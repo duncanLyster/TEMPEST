@@ -74,7 +74,8 @@ def main(config_path, facet_index):
         animation_frames=T,
         save_animation=False,
         save_animation_name=f"facet_{facet_index}_subfacets.gif",
-        background_colour="white"
+        background_colour="white",
+        animation_debug_mode=True
     )
 
 if __name__ == "__main__":

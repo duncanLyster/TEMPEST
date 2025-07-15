@@ -36,10 +36,11 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
                      timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity,
                      plot_title, axis_label, animation_frames, save_animation, save_animation_name,
                      background_colour, dome_radius_factor=dome_radius_factor, colour_map=colour_map,
-                     apply_kernel_based_roughness=apply_kernel_based_roughness)
+                     apply_kernel_based_roughness=apply_kernel_based_roughness,
+                     animation_debug_mode=False)
     else:
         # Remote mode: create a directory to save the animation parameters
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-% M-%S")
         output_dir = f"outputs/remote_outputs/animation_outputs_{timestamp}" # TODO: include in locations class
         os.makedirs(output_dir, exist_ok=True)
 

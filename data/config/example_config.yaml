@@ -1,5 +1,5 @@
 # To run the model, run the following command:
-# python3 tempest.py --config data/config/example_config.yaml
+# python tempest.py --config data/config/example_config.yaml
 # This config file is used for testing the model and can be saved as a template for your own objects.
 
 # General settings
