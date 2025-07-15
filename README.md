@@ -9,6 +9,22 @@ This Python script simulates diurnal temperature variations of a solar system bo
 - Visualises results and saves for further analysis.
 - SI units are standard, exceptions are clearly stated.
 
+## How to Get Started
+1. Download this repository as a .zip file by clicking on the `<>Code` button above. Expand the .zip. 
+1. Open a terminal window and navigate to the TEMPEST folder you have downloaded.
+2. Ensure you have Python 3 installed and selected (you can download at `https://www.python.org/` then check this using `python --version`) 
+3. Ensure all dependencies are installed `pip install -r requirements.txt`
+5. Run the script with Python: `python thermophysical_body_model.py`
+
+TEMPEST will then proceed by:
+1. Calculating insolation and temperature arrays.
+2. Iterating through the model until convergence is reached.
+3. Saving and visualising results for further analysis.
+
+To adapt the model to your own purposes start by updating settings including material, model parameters and shape model selection in data/config/example_config.yaml
+
+Tip: If your shape model is not in ASCII .stl format, you can use Blender to convert it.
+
 ## Requirements
 Ensure the following Python packages are installed:
 
@@ -25,32 +41,11 @@ Ensure the following Python packages are installed:
 - pyvista
 - vtk
 - pyyaml
-
-You can install these dependencies using:
-`pip install -r requirements.txt`
+- h5py
 
 Additionally, ensure you have:
-- Python 3.x installed
+- Python 3.x installed (you can check this using `python --version`)
 - An STL file of the body shape in ASCII format
-
-## Usage
-1. Ensure all dependencies are installed.
-2. Update settings in `config.yaml`
-3. Run the script with Python: `python thermophysical_body_model.py`
-
-## Known issues and limitations
-Please carefully read header notes in thermophysical_body_model.py for known bugs and limitations.
-
-## Getting Started
-The script workflow involves:
-
-1. Reading the provided shape model.
-2. Setting up material and model parameters.
-3. Calculating insolation and temperature arrays.
-4. Iterating through the model until convergence.
-5. Saving and visualising results for further analysis.
-
-Tip: If your shape model is not in ASCII .stl format, you can use Blender to convert it.
 
 ## Contribution
 Feel free to fork the project for custom enhancements or issue tracking on GitHub: https://github.com/duncanLyster/comet_nucleus_model
@@ -62,5 +57,3 @@ With contributions from: Joe Penn, Maisie Rashman, and Bea Chikani
 
 ## Licence
 This project is open-source and available under the MIT License - see the License.md file for details.
-
-
