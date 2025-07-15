@@ -18,6 +18,8 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
     """
     if not remote:
         # Local mode: call animate_model as usual
+        # Pop apply_kernel_based_roughness flag if provided
+        apply_kernel_based_roughness = kwargs.pop('apply_kernel_based_roughness', False)
         # Extract dome radius factor for scaling canonical dome areas
         dome_radius_factor = kwargs.pop('dome_radius_factor', 1.0)
         # Extract required arguments from kwargs
@@ -29,11 +31,12 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
         background_colour = kwargs.pop('background_colour', 'black')
         colour_map = kwargs.pop('colour_map', 'coolwarm')
         
-        # Call animate_model with all required arguments
+        # Call animate_model with all required arguments, including roughness flag
         animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction,
                      timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity,
                      plot_title, axis_label, animation_frames, save_animation, save_animation_name,
-                     background_colour, dome_radius_factor=dome_radius_factor, colour_map=colour_map)
+                     background_colour, dome_radius_factor=dome_radius_factor, colour_map=colour_map,
+                     apply_kernel_based_roughness=apply_kernel_based_roughness)
     else:
         # Remote mode: create a directory to save the animation parameters
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
