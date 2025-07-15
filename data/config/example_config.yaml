@@ -85,7 +85,7 @@ plot_energy_terms: false                  # Plot energy balance terms
 
 # Surface Roughness Model (kernel-based)
 apply_kernel_based_roughness: false        # Master switch for kernel-based roughness
-roughness_kernel: 'spherical_cap'         # Options: 'spherical_cap', 'fractal', ...
+roughness_kernel: 'spherical_cap'         # 'spherical_cap' is the only option currently supported
 kernel_subfacets_count: 100               # Number of sub-facets per kernel patch
 kernel_profile_angle_degrees: 90           # Controls curvature for 'spherical_cap' kernel
 kernel_directional_bins: 100               # Number of dome directional bins for emission/scatter
