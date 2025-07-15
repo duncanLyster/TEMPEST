@@ -12,9 +12,9 @@ This Python script simulates diurnal temperature variations of a solar system bo
 ## How to Get Started
 1. Download this repository as a .zip file by clicking on the `<>Code` button above. Expand the .zip. 
 2. Open a terminal window and navigate to the TEMPEST folder you have downloaded (this may trigger a package update that could take a few minutes)
-3. Ensure you have Python 3 installed and selected (you can download at https://www.python.org/ then check this using `python --version`) 
+3. Ensure you have Python 3 installed and selected (you can download at https://www.python.org/ then check this using `python3 --version`) 
 4. Ensure all dependencies are installed `pip install -r requirements.txt`
-5. Run the script with Python: `python tempest.py --config data/config/example_config.yaml`
+5. Run the script with Python: `python3 tempest.py --config data/config/example_config.yaml`
 
 TEMPEST will then:
 1. Calculate insolation and temperature arrays.

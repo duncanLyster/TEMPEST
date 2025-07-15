@@ -1,5 +1,5 @@
 # To run the model, run the following command:
-# python tempest.py --config data/config/example_config.yaml
+# python3 tempest.py --config data/config/example_config.yaml
 # This config file is used for testing the model and can be saved as a template for your own objects.
 
 # General settings
@@ -12,7 +12,7 @@ shape_model_directory: "data/shape_models/"
 
 # Performance settings
 n_jobs:                 16          # Number of CPU cores to use for parallel processing (default: 4, max: available cores)
-chunk_size:             10        # Number of facets to process in each parallel batch
+chunk_size:             10          # Number of facets to process in each parallel batch
 
 # Physical parameters
 emissivity:             0.5         
@@ -52,7 +52,7 @@ temp_solver: "tempest_standard"     # Options: "tempest_standard" or "thermprojr
 vf_rays: 1000                       # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
 
 # Extra analysis options
-calculate_visible_phase_curve: false   # Whether to calculate visible light phase curve (not thoroughly validated)
+calculate_visible_phase_curve: false    # Whether to calculate visible light phase curve (not thoroughly validated)
 calculate_thermal_phase_curve: false    # Whether to calculate thermal phase curve (now with advanced dome flux integration)
 
 # Animation settings
