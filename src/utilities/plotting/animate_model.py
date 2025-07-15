@@ -668,7 +668,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     )
 
     plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
-    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'R' - Reset camera\n'V' - Toggle view mode", position='upper_left', font_size=10, color=text_color)
+    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'R' - Reset camera\n'V' - Toggle view mode\n(rough models only)", position='upper_left', font_size=10, color=text_color)
 
     info_text = f"Solar Distance: {solar_distance_au} AU\nRotation Period: {rotation_period_hr} hours"
     plotter.add_text(info_text, position='upper_right', font_size=10, color=text_color)
