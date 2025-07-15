@@ -1,5 +1,5 @@
 # To run the model, run the following command:
-# python tempest.py --config /Users/duncan/Desktop/DPhil/TEMPEST/data/config/example_config.yaml
+# python tempest.py --config data/config/example_config.yaml
 # This config file is used for testing the model and can be saved as a template for your own objects.
 
 # General settings
@@ -84,7 +84,7 @@ animate_secondary_contributions: false    # 3D animation showing radiative self-
 plot_energy_terms: false                  # Plot energy balance terms
 
 # Surface Roughness Model (kernel-based)
-apply_kernel_based_roughness: true        # Master switch for kernel-based roughness
+apply_kernel_based_roughness: false        # Master switch for kernel-based roughness
 roughness_kernel: 'spherical_cap'         # Options: 'spherical_cap', 'fractal', ...
 kernel_subfacets_count: 100               # Number of sub-facets per kernel patch
 kernel_profile_angle_degrees: 90           # Controls curvature for 'spherical_cap' kernel
