@@ -61,7 +61,5 @@ Feel free to fork the project for custom enhancements or issue tracking on GitHu
 Duncan Lyster | Started: 15 Feb 2024
 With contributions from: Joe Penn, Maisie Rashman, and Bea Chikani
 
-Further reading 
-
 ## Licence
 This project is open-source and available under the MIT License - see the License.md file for details.
