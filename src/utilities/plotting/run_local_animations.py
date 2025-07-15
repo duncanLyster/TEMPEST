@@ -88,7 +88,7 @@ def run_saved_animation(json_file, npz_file):
     
     # Call the animate_model function
     print("Running animation...")
-    animate_model(*args, **kwargs)
+    animate_model(*args, animation_debug_mode=True, **kwargs)
     print("Animation complete.")
 
 

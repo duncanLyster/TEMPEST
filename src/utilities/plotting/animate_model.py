@@ -27,6 +27,11 @@ from src.utilities.utils import conditional_print
 import h5py
 from src.model.facet import Facet
 
+def debug_print(state, *args, **kwargs):
+    """Print debug messages only if animation_debug_mode is enabled."""
+    if getattr(state, 'animation_debug_mode', False):
+        print(*args, **kwargs)
+
 class AnimationState:
     def __init__(self):
         self.is_paused = False
@@ -75,7 +80,7 @@ def get_next_color(state):
 def on_press(state):
     state.is_paused = not state.is_paused
     state.pause_time = state.current_frame / state.timesteps_per_day if state.is_paused else None
-    print(f"[DEBUG] Toggled pause to {state.is_paused}")
+    debug_print(state, f"[DEBUG] Toggled pause to {state.is_paused}")
 
 def move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
     state.current_frame = (state.current_frame + 1) % state.timesteps_per_day
@@ -315,7 +320,7 @@ def convert_to_local_time(global_time_data, facet_normal, sunlight_direction, ro
     # Calculate shift needed to center on maximum alignment
     shift = (timesteps // 2) - noon_frame  # Shift to put noon at middle of day
     
-    conditional_print(False, f"Facet {facet_id} shifted by {shift} timesteps ({(shift/timesteps * 360):.1f} degrees)")
+    debug_print(state, f"Facet {facet_id} shifted by {shift} timesteps ({(shift/timesteps * 360):.1f} degrees)")
     
     return np.roll(global_time_data, shift)
 
@@ -333,7 +338,7 @@ def convert_to_view_time(global_time_data, facet_normal, rotation_axis, view_dir
 
 def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
                   timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity, plot_title, axis_label, animation_frames, 
-                  save_animation, save_animation_name, background_colour, dome_radius_factor=1.0, colour_map='coolwarm', apply_kernel_based_roughness=False, pre_selected_facets=[1220, 845]):
+                  save_animation, save_animation_name, background_colour, dome_radius_factor=1.0, colour_map='coolwarm', apply_kernel_based_roughness=False, pre_selected_facets=[1220, 845], animation_debug_mode=False):
     """
     Animate a 3D model with temperature or other variable data.
     
@@ -396,8 +401,10 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     tri = shape_mesh.vectors  # shape (nF,3,3)
     # Compute triangle areas: ||(v2-v1)x(v3-v1)||/2
     facet_areas = np.linalg.norm(np.cross(tri[:,1] - tri[:,0], tri[:,2] - tri[:,0]), axis=1) / 2
-    print(f"[DEBUG] Computed facet_areas shape: {facet_areas.shape}")
+    # Initialize state before any debug prints
     state = AnimationState()
+    state.animation_debug_mode = animation_debug_mode
+    debug_print(state, f"[DEBUG] Computed facet_areas shape: {facet_areas.shape}")
     state.dome_radius_factor = dome_radius_factor  # store scale factor for exitance calculation
     # Store facet areas on state for dome area scaling
     state.facet_areas = facet_areas
@@ -409,7 +416,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     if emissivity is None:
         raise ValueError("emissivity must be specified - it is a critical physical parameter")
     state.simulation_emissivity = emissivity
-    print(f"[DEBUG] Using emissivity: {state.simulation_emissivity}")
+    debug_print(state, f"[DEBUG] Using emissivity: {state.simulation_emissivity}")
 
     # Load precomputed dome thermal flux arrays only if roughness is enabled
     if apply_kernel_based_roughness:
@@ -422,7 +429,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                 state.dome_bin_areas = dfh['dome_bin_areas'][:]  # (n_facets, M)
                 # Load canonical per-bin solid angles (patch area on unit sphere)
                 state.dome_bin_solid_angles = dfh['dome_bin_solid_angles'][:]  # (M,)
-                print(f"[DEBUG] Loaded dome_flux_th with shape {state.dome_flux_th.shape}, dome_bin_normals shape {state.dome_bin_normals.shape}, dome_bin_areas shape {state.dome_bin_areas.shape}")
+                debug_print(state, f"[DEBUG] Loaded dome_flux_th with shape {state.dome_flux_th.shape}, dome_bin_normals shape {state.dome_bin_normals.shape}, dome_bin_areas shape {state.dome_bin_areas.shape}")
                 # Compute world->local rotation matrices for each facet
                 up = np.array([0.0, 0.0, 1.0])
                 nF = facet_normals.shape[0]
@@ -439,9 +446,9 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                         R_l2w = np.array(rotation_matrix(axis_norm, angle))
                     dome_rots[i] = R_l2w.T
                 state.dome_rotations = dome_rots
-                print(f"[DEBUG] Initialized dome_rotations with shape {state.dome_rotations.shape}")
+                debug_print(state, f"[DEBUG] Initialized dome_rotations with shape {state.dome_rotations.shape}")
         else:
-            print("[DEBUG] No dome_fluxes.h5 found, setting all dome-related arrays to None")
+            debug_print(state, "[DEBUG] No dome_fluxes.h5 found, setting all dome-related arrays to None")
             state.dome_flux_th = None
             state.dome_bin_normals = None
             state.dome_bin_solid_angles = None
@@ -449,7 +456,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
             state.dome_bin_areas = None
     else:
         # Roughness disabled: skip loading any dome-related data
-        print("[DEBUG] Roughness disabled, skipping dome data loading")
+        debug_print(state, "[DEBUG] Roughness disabled, skipping dome data loading")
         state.dome_flux_th = None
         state.dome_bin_normals = None
         state.dome_bin_solid_angles = None
@@ -466,7 +473,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter = pv.Plotter()
     plotter.enable_anti_aliasing()
     plotter.enable_lightkit()  # Enable dynamic lighting for shading
-    plotter.add_key_event('space', lambda: (setattr(state, 'is_paused', not state.is_paused), setattr(state, 'pause_time', (state.current_frame / state.timesteps_per_day) if state.is_paused else None), print(f"[DEBUG] Toggled pause to {state.is_paused}")))
+    plotter.add_key_event('space', lambda: (setattr(state, 'is_paused', not state.is_paused), setattr(state, 'pause_time', (state.current_frame / state.timesteps_per_day) if state.is_paused else None), debug_print(state, f"[DEBUG] Toggled pause to {state.is_paused}")))
     plotter.add_key_event('Left', lambda: move_backward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
     plotter.add_key_event('Right', lambda: move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
     plotter.add_key_event('c', lambda: clear_selections(state, plotter))
@@ -474,7 +481,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     # Unified view-mode toggle: update both 3D mesh shading and 2D diurnal plot
     def _toggle_view_event():
         state.view_mode = not state.view_mode
-        print(f"[DEBUG] Toggled view_mode to {state.view_mode}")
+        debug_print(state, f"[DEBUG] Toggled view_mode to {state.view_mode}")
         # Save current mesh geometry to preserve orientation relative to the camera
         saved_points = pv_mesh.points.copy()
         # Update 3D mesh shading for new view mode (this may overwrite points)
@@ -484,7 +491,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         plotter.render()
         # Also update 2D diurnal plot if open
         if state.fig and hasattr(state, 'ax'):
-            print("[DEBUG] Updating diurnal plot from _toggle_view_event")
+            debug_print(state, "[DEBUG] Updating diurnal plot from _toggle_view_event")
             # Compute time-series lines depending on view_mode
             if state.view_mode and state.dome_flux_th is not None:
                 # Dome-based temperatures across full rotation
@@ -497,7 +504,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                 theta = math.acos(np.clip(view_dir_world[2], -1.0, 1.0))
                 phi = math.atan2(view_dir_world[1], view_dir_world[0])
                 if state.last_camera_angles is None or abs(theta - state.last_camera_angles[0]) > 1e-3 or abs(phi - state.last_camera_angles[1]) > 1e-3:
-                    print(f"[DEBUG] Camera direction angles: theta={theta:.3f}, phi={phi:.3f}")
+                    debug_print(state, f"[DEBUG] Camera direction angles: theta={theta:.3f}, phi={phi:.3f}")
                     state.last_camera_angles = (theta, phi)
                 # Compute global rotation for facet normals
                 rot_mat = np.array(rotation_matrix(state.rotation_axis, state.cumulative_rotation))
@@ -683,11 +690,11 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         print(f'Animation setup took {end_time - start_time:.2f} seconds.')
         
         # Print camera position after any interactive camera movement
-        plotter.iren.add_observer('EndInteractionEvent', lambda caller, event: print(f"[DEBUG] Camera pos: {plotter.camera.position}, focal: {plotter.camera.focal_point}, up: {plotter.camera.up}"))
+        plotter.iren.add_observer('EndInteractionEvent', lambda caller, event: debug_print(state, f"[DEBUG] Camera pos: {plotter.camera.position}, focal: {plotter.camera.focal_point}, up: {plotter.camera.up}"))
         # Update 2D diurnal plot on camera move when in view_mode
         def _camera_moved_event(caller, event):
             if state.view_mode and state.fig and hasattr(state, 'ax'):
-                print("[DEBUG] Camera moved event: updating diurnal plot")
+                debug_print(state, "[DEBUG] Camera moved event: updating diurnal plot")
                 sigma = 5.670374419e-8
                 epsilon = state.simulation_emissivity
                 # Compute fixed view direction in world coords
@@ -699,7 +706,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                 theta = math.acos(np.clip(view_dir_world[2], -1.0, 1.0))
                 phi = math.atan2(view_dir_world[1], view_dir_world[0])
                 if state.last_camera_angles is None or abs(theta - state.last_camera_angles[0]) > 1e-3 or abs(phi - state.last_camera_angles[1]) > 1e-3:
-                    print(f"[DEBUG] Camera direction angles: theta={theta:.3f}, phi={phi:.3f}")
+                    debug_print(state, f"[DEBUG] Camera direction angles: theta={theta:.3f}, phi={phi:.3f}")
                     state.last_camera_angles = (theta, phi)
                 # Compute global rotation for facet normals
                 rot_mat = np.array(rotation_matrix(state.rotation_axis, state.cumulative_rotation))
@@ -757,21 +764,21 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                         plotted_val = ydata[state.current_frame]
                         
                         # Print comprehensive debug info for selected facets
-                        print(f"\n[FACET DEBUG] Facet {facet_id} at Frame {state.current_frame}:")
-                        print(f"  3D Shading: {shading_val:.2f}K, 2D Plot: {plotted_val:.2f}K, Diff: {abs(shading_val - plotted_val):.2f}K")
+                        debug_print(state, f"\n[FACET DEBUG] Facet {facet_id} at Frame {state.current_frame}:")
+                        debug_print(state, f"  3D Shading: {shading_val:.2f}K, 2D Plot: {plotted_val:.2f}K, Diff: {abs(shading_val - plotted_val):.2f}K")
                         
                         # Camera info
                         cam_pos = np.array(plotter.camera.position)
                         focal = np.array(plotter.camera.focal_point)
                         view_dir_world = (focal - cam_pos) / np.linalg.norm(focal - cam_pos)
-                        print(f"  View Direction: [{view_dir_world[0]:.3f}, {view_dir_world[1]:.3f}, {view_dir_world[2]:.3f}]")
+                        debug_print(state, f"  View Direction: [{view_dir_world[0]:.3f}, {view_dir_world[1]:.3f}, {view_dir_world[2]:.3f}]")
                         
                         # Facet info
                         current_rot_mat = np.array(rotation_matrix(state.rotation_axis, state.cumulative_rotation))
                         facet_normal_rotated = state.facet_normals[facet_id].dot(current_rot_mat.T)
                         horizon_val = np.dot(facet_normal_rotated, view_dir_world)
-                        print(f"  Facet Normal: [{facet_normal_rotated[0]:.3f}, {facet_normal_rotated[1]:.3f}, {facet_normal_rotated[2]:.3f}]")
-                        print(f"  Horizon Value: {horizon_val:.6f} (front-facing: {horizon_val < 0})")
+                        debug_print(state, f"  Facet Normal: [{facet_normal_rotated[0]:.3f}, {facet_normal_rotated[1]:.3f}, {facet_normal_rotated[2]:.3f}]")
+                        debug_print(state, f"  Horizon Value: {horizon_val:.6f} (front-facing: {horizon_val < 0})")
                         
                         # View mode dome analysis
                         if state.view_mode and state.dome_flux_th is not None:
@@ -780,11 +787,11 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                             dome_cosines = np.dot(view_dir_body, state.dome_bin_normals.T)
                             positive_bins = np.sum(dome_cosines > 0)
                             best_bin = np.argmax(np.clip(dome_cosines, 0, None))
-                            print(f"  View Dir (body): [{view_dir_body[0]:.3f}, {view_dir_body[1]:.3f}, {view_dir_body[2]:.3f}]")
-                            print(f"  Dome cosines: min={dome_cosines.min():.6f}, max={dome_cosines.max():.6f}")
-                            print(f"  Positive bins: {positive_bins}/{len(dome_cosines)}, Best bin: {best_bin}")
+                            debug_print(state, f"  View Dir (body): [{view_dir_body[0]:.3f}, {view_dir_body[1]:.3f}, {view_dir_body[2]:.3f}]")
+                            debug_print(state, f"  Dome cosines: min={dome_cosines.min():.6f}, max={dome_cosines.max():.6f}")
+                            debug_print(state, f"  Positive bins: {positive_bins}/{len(dome_cosines)}, Best bin: {best_bin}")
                     else:
-                        print(f"[ERROR] Frame {state.current_frame} out of bounds for facet {facet_id}")
+                        debug_print(state, f"[ERROR] Frame {state.current_frame} out of bounds for facet {facet_id}")
 
         plotter.iren.add_observer('EndInteractionEvent', _camera_moved_event)
         plotter.iren.add_observer('TimerEvent', update_callback)
@@ -958,43 +965,43 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
                     
                     if np.any(problematic):
                         prob_count = np.sum(problematic)
-                        print(f"\n[ERROR] DOME COVERAGE ISSUE - Frame {state.current_frame}:")
-                        print(f"  {prob_count} front-facing facets have no suitable dome bins")
+                        debug_print(state, f"\n[ERROR] DOME COVERAGE ISSUE - Frame {state.current_frame}:")
+                        debug_print(state, f"  {prob_count} front-facing facets have no suitable dome bins")
                         
                         prob_ids = np.where(problematic)[0]
                         for pid in prob_ids[:2]:  # Show details for first 2 problematic facets
-                            print(f"  Facet {pid}:")
-                            print(f"    facet_horizon={facet_horizons[pid]:.6f} (front-facing: {front_facing[pid]})")
-                            print(f"    selected_bin={best_bins[pid]}, selected_cosine={selected_cosines[pid]:.6f}")
-                            print(f"    T_raw={T_raw[pid]:.1f}K -> will show 0K")
-                            print(f"    view_dir_body={view_dir_body}")
-                            print(f"    unclipped_dome_cosines: min={selected_cosines[pid]:.6f}, max={selected_cosines[pid]:.6f}")
+                            debug_print(state, f"  Facet {pid}:")
+                            debug_print(state, f"    facet_horizon={facet_horizons[pid]:.6f} (front-facing: {front_facing[pid]})")
+                            debug_print(state, f"    selected_bin={best_bins[pid]}, selected_cosine={selected_cosines[pid]:.6f}")
+                            debug_print(state, f"    T_raw={T_raw[pid]:.1f}K -> will show 0K")
+                            debug_print(state, f"    view_dir_body={view_dir_body}")
+                            debug_print(state, f"    unclipped_dome_cosines: min={selected_cosines[pid]:.6f}, max={selected_cosines[pid]:.6f}")
                             
                             # Check unclipped cosines to see if dome actually covers the hemisphere
                             unclipped_cosines = np.dot(view_dir_body, state.dome_bin_normals.T)
-                            print(f"    unclipped_dome_cosines: min={unclipped_cosines.min():.6f}, max={unclipped_cosines.max():.6f}")
+                            debug_print(state, f"    unclipped_dome_cosines: min={unclipped_cosines.min():.6f}, max={unclipped_cosines.max():.6f}")
                             
                             positive_bins = np.sum(unclipped_cosines > 0)
-                            print(f"    {positive_bins}/{len(unclipped_cosines)} dome bins have positive unclipped cosines")
+                            debug_print(state, f"    {positive_bins}/{len(unclipped_cosines)} dome bins have positive unclipped cosines")
                             
                             if positive_bins == 0:
-                                print(f"    ERROR: No dome bins face the view direction - dome coverage incomplete!")
+                                debug_print(state, f"    ERROR: No dome bins face the view direction - dome coverage incomplete!")
                             else:
-                                print(f"    ERROR: Dome bins exist but being incorrectly filtered out!")
+                                debug_print(state, f"    ERROR: Dome bins exist but being incorrectly filtered out!")
                     
                     # Also check for the reverse: dome visible but facet not front-facing  
                     reverse_problematic = ~front_facing & dome_visible & (T_raw > 100)
                     if np.any(reverse_problematic):
                         rev_count = np.sum(reverse_problematic)
-                        print(f"[DEBUG] Frame {state.current_frame}: {rev_count} back-facing facets with visible dome patches")
+                        debug_print(state, f"[DEBUG] Frame {state.current_frame}: {rev_count} back-facing facets with visible dome patches")
                 
                 pv_mesh.cell_data[axis_label] = T
                 plotter.update_scalar_bar_range((T.min(), T.max()))
             except Exception as e:
-                print(f"[DEBUG] Error in dome-based shading: {e}")
-                print(f"[DEBUG] Error occurred at line: {e.__traceback__.tb_lineno}")
+                debug_print(state, f"[DEBUG] Error in dome-based shading: {e}")
+                debug_print(state, f"[DEBUG] Error occurred at line: {e.__traceback__.tb_lineno}")
                 import traceback
-                print(f"[DEBUG] Full traceback:\n{traceback.format_exc()}")
+                debug_print(state, f"[DEBUG] Full traceback:\n{traceback.format_exc()}")
                 # Fall back to default view-based shading
                 state.view_mode = False
                 pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame]
@@ -1044,8 +1051,8 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
             state.highlights_need_update = False
 
     except Exception as e:
-        print(f"Error updating mesh: {e}")
-        print(f"Debug info: current_frame={state.current_frame}, shape of plotted_variable_array={plotted_variable_array.shape}")
+        debug_print(state, f"Error updating mesh: {e}")
+        debug_print(state, f"Debug info: current_frame={state.current_frame}, shape of plotted_variable_array={plotted_variable_array.shape}")
         # Don't return here, just fall back to raw data
         try:
             pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame]
@@ -1063,7 +1070,7 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
             state.fig.canvas.draw()
             state.fig.canvas.flush_events()
         except Exception as e:
-            print(f"[WARNING] Matplotlib update failed: {e}")
+            debug_print(state, f"[WARNING] Matplotlib update failed: {e}")
 
     # Comprehensive debugging for all selected facets at every frame
     for facet_id, line in state.cell_colors.items():
@@ -1073,41 +1080,41 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
             plotted_val = ydata[state.current_frame]
             
             # Always print debug info for selected facets, regardless of mismatch
-            print(f"\n[FACET DEBUG] Facet {facet_id} at Frame {state.current_frame}:")
-            print(f"  3D Shading Value: {shading_val:.2f}K")
-            print(f"  2D Plotted Value: {plotted_val:.2f}K")
-            print(f"  Difference: {abs(shading_val - plotted_val):.2f}K")
+            debug_print(state, f"\n[FACET DEBUG] Facet {facet_id} at Frame {state.current_frame}:")
+            debug_print(state, f"  3D Shading Value: {shading_val:.2f}K")
+            debug_print(state, f"  2D Plotted Value: {plotted_val:.2f}K")
+            debug_print(state, f"  Difference: {abs(shading_val - plotted_val):.2f}K")
             
             # Get camera and view information
             cam_pos = np.array(plotter.camera.position)
             focal = np.array(plotter.camera.focal_point)
             view_dir_world = (focal - cam_pos)
             view_dir_world /= np.linalg.norm(view_dir_world)
-            print(f"  Camera Position: [{cam_pos[0]:.1f}, {cam_pos[1]:.1f}, {cam_pos[2]:.1f}]")
-            print(f"  View Direction (world): [{view_dir_world[0]:.3f}, {view_dir_world[1]:.3f}, {view_dir_world[2]:.3f}]")
+            debug_print(state, f"  Camera Position: [{cam_pos[0]:.1f}, {cam_pos[1]:.1f}, {cam_pos[2]:.1f}]")
+            debug_print(state, f"  View Direction (world): [{view_dir_world[0]:.3f}, {view_dir_world[1]:.3f}, {view_dir_world[2]:.3f}]")
             
             # Current rotation information
             current_rot_mat = np.array(rotation_matrix(state.rotation_axis, state.cumulative_rotation))
-            print(f"  Body Rotation Angle: {state.cumulative_rotation:.3f} rad ({np.degrees(state.cumulative_rotation):.1f}°)")
+            debug_print(state, f"  Body Rotation Angle: {state.cumulative_rotation:.3f} rad ({np.degrees(state.cumulative_rotation):.1f}°)")
             
             # Facet information
             facet_normal_world = state.facet_normals[facet_id]
             facet_normal_rotated = facet_normal_world.dot(current_rot_mat.T)
-            print(f"  Facet Normal (world): [{facet_normal_world[0]:.3f}, {facet_normal_world[1]:.3f}, {facet_normal_world[2]:.3f}]")
-            print(f"  Facet Normal (rotated): [{facet_normal_rotated[0]:.3f}, {facet_normal_rotated[1]:.3f}, {facet_normal_rotated[2]:.3f}]")
+            debug_print(state, f"  Facet Normal (world): [{facet_normal_world[0]:.3f}, {facet_normal_world[1]:.3f}, {facet_normal_world[2]:.3f}]")
+            debug_print(state, f"  Facet Normal (rotated): [{facet_normal_rotated[0]:.3f}, {facet_normal_rotated[1]:.3f}, {facet_normal_rotated[2]:.3f}]")
             
             # Horizon test
             horizon_val = np.dot(facet_normal_rotated, view_dir_world)
             front_facing = horizon_val < 0
-            print(f"  Horizon Value: {horizon_val:.6f} (front-facing: {front_facing})")
+            debug_print(state, f"  Horizon Value: {horizon_val:.6f} (front-facing: {front_facing})")
             
             # View mode specific debugging
             if state.view_mode and state.dome_flux_th is not None:
-                print(f"  === VIEW MODE DEBUGGING ===")
+                debug_print(state, f"  === VIEW MODE DEBUGGING ===")
                 
                 # Transform view direction to body frame (world coordinates)
                 view_dir_body = current_rot_mat.T.dot(view_dir_world)
-                print(f"  View Direction (body): [{view_dir_body[0]:.3f}, {view_dir_body[1]:.3f}, {view_dir_body[2]:.3f}]")
+                debug_print(state, f"  View Direction (body): [{view_dir_body[0]:.3f}, {view_dir_body[1]:.3f}, {view_dir_body[2]:.3f}]")
                 
                 # Dome bin analysis - FIXED: Use same calculation as 3D mesh (both in world coordinates)
                 dome_cosines_unclipped = np.dot(view_dir_body, state.dome_bin_normals.T)
@@ -1115,15 +1122,15 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
                 best_bin = np.argmax(dome_cosines_clipped)
                 selected_cosine = dome_cosines_clipped[best_bin]
                 
-                print(f"  Dome Cosines (unclipped): min={dome_cosines_unclipped.min():.6f}, max={dome_cosines_unclipped.max():.6f}")
-                print(f"  Positive Bins: {np.sum(dome_cosines_unclipped > 0)}/{len(dome_cosines_unclipped)}")
-                print(f"  Selected Bin: {best_bin}, Cosine: {selected_cosine:.6f}")
-                print(f"  Selected Bin Normal: [{state.dome_bin_normals[best_bin][0]:.3f}, {state.dome_bin_normals[best_bin][1]:.3f}, {state.dome_bin_normals[best_bin][2]:.3f}]")
+                debug_print(state, f"  Dome Cosines (unclipped): min={dome_cosines_unclipped.min():.6f}, max={dome_cosines_unclipped.max():.6f}")
+                debug_print(state, f"  Positive Bins: {np.sum(dome_cosines_unclipped > 0)}/{len(dome_cosines_unclipped)}")
+                debug_print(state, f"  Selected Bin: {best_bin}, Cosine: {selected_cosine:.6f}")
+                debug_print(state, f"  Selected Bin Normal: [{state.dome_bin_normals[best_bin][0]:.3f}, {state.dome_bin_normals[best_bin][1]:.3f}, {state.dome_bin_normals[best_bin][2]:.3f}]")
                 
                 # Flux and area information
                 F_val = state.dome_flux_th[facet_id, best_bin, state.current_frame]
                 area_val = state.dome_bin_areas[facet_id, best_bin]
-                print(f"  Flux: {F_val:.3e}, Area: {area_val:.6f}")
+                debug_print(state, f"  Flux: {F_val:.3e}, Area: {area_val:.6f}")
                 
                 # Final temperature calculation
                 scale = state.dome_radius_factor ** 2
@@ -1137,18 +1144,18 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
                 else:
                     T_calc = 0.0
                 
-                print(f"  Mask Dome Visible: {mask_dome}, Mask Facet Front: {mask_facet}, Combined: {mask_combined}")
-                print(f"  Calculated Temperature: {T_calc:.2f}K")
-                print(f"  Raw Temperature (no masking): {((F_val / area_val * scale) / (state.simulation_emissivity * 5.670374419e-8)) ** 0.25 if area_val > 0 else 0.0:.2f}K")
+                debug_print(state, f"  Mask Dome Visible: {mask_dome}, Mask Facet Front: {mask_facet}, Combined: {mask_combined}")
+                debug_print(state, f"  Calculated Temperature: {T_calc:.2f}K")
+                debug_print(state, f"  Raw Temperature (no masking): {((F_val / area_val * scale) / (state.simulation_emissivity * 5.670374419e-8)) ** 0.25 if area_val > 0 else 0.0:.2f}K")
                 
                 if not np.isclose(shading_val, T_calc, atol=1e-6):
-                    print(f"  *** CALCULATION MISMATCH: Expected {T_calc:.2f}K, Got {shading_val:.2f}K ***")
+                    debug_print(state, f"  *** CALCULATION MISMATCH: Expected {T_calc:.2f}K, Got {shading_val:.2f}K ***")
                 
             else:
-                print(f"  === NORMAL MODE (non-view-dependent) ===")
-                print(f"  Using raw temperature data from simulation")
+                debug_print(state, "  === NORMAL MODE (non-view-dependent) ===")
+                debug_print(state, "  Using raw temperature data from simulation")
                 
         else:
-            print(f"[ERROR] Frame {state.current_frame} out of bounds for plotted data length {len(ydata)} (facet {facet_id})")
+            debug_print(state, f"[ERROR] Frame {state.current_frame} out of bounds for plotted data length {len(ydata)} (facet {facet_id})")
 
     plotter.render()
