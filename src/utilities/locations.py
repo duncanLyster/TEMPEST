@@ -27,12 +27,20 @@ class Locations:
         self.thermal_view_factors = os.path.join(self.data, 'thermal_view_factors')
 
     def _find_project_root(self):
-        """Find the project root directory by looking for .git folder"""
+        """Find the project root directory by looking for .git folder or fallback to parent of src directory or current working directory"""
         current = os.path.abspath(os.path.dirname(__file__))
-        while current != '/':
+        while True:
+            # If .git folder exists, this is the project root.
             if os.path.exists(os.path.join(current, '.git')):
                 return current
-            current = os.path.dirname(current)
+            # If we're at the src directory, project root is its parent.
+            if os.path.basename(current) == "src":
+                return os.path.dirname(current)
+            parent = os.path.dirname(current)
+            # If we've reached the filesystem root or cannot move up further, fallback to cwd.
+            if parent == current:
+                return os.getcwd()
+            current = parent
         raise RuntimeError("Could not find project root directory")
 
     def get_shape_model_path(self, filename):
