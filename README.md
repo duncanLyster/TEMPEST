@@ -12,7 +12,7 @@ This Python script simulates diurnal temperature variations of a solar system bo
 ## How to Get Started
 1. Download this repository as a .zip file by clicking on the `<>Code` button above. Expand the .zip. 
 2. Open a terminal window and navigate to the TEMPEST folder you have downloaded (this may trigger a package update that could take a few minutes)
-3. Ensure you have Python 3 installed and selected (you can download at `https://www.python.org/` then check this using `python --version`) 
+3. Ensure you have Python 3 installed and selected (you can download at https://www.python.org/ then check this using `python --version`) 
 4. Ensure all dependencies are installed `pip install -r requirements.txt`
 5. Run the script with Python: `python tempest.py --config data/config/example_config.yaml`
 
@@ -24,8 +24,8 @@ TEMPEST will then:
 To adapt the model to your own purposes start by updating settings including material, model parameters and shape model selection in data/config/example_config.yaml
 
 Tips:
-Use and Integrated Development Environment (IDE) for example VS Code (download at `https://code.visualstudio.com/`) for editing your config.yaml file, and to inspect/edit any of the source code. 
-If your shape model is not in ASCII .stl format, you can use Blender (download at `https://www.blender.org/`) to convert it.
+Use and Integrated Development Environment (IDE) for example VS Code (download at https://code.visualstudio.com/) for editing your config.yaml file, and to inspect/edit any of the source code. 
+If your shape model is not in ASCII .stl format, you can use Blender (download at https://www.blender.org/) to convert it.
 
 ## Requirements
 Ensure the following Python packages are installed:
@@ -50,7 +50,7 @@ Additionally, ensure you have:
 - An STL file of the body shape in ASCII format
 
 ## Model Architecture
-See below flowchart from `https://presentations.copernicus.org/EPSC2024/EPSC2024-1121_presentation.pdf` which gives more detail on the model architecture. 
+See below flowchart from my 2024 EPSC poster presentation (https://presentations.copernicus.org/EPSC2024/EPSC2024-1121_presentation.pdf) which gives more detail on the model architecture. 
 
 ![TEMPEST Flowchart](resources/documentation/flowchart.jpg)
 
