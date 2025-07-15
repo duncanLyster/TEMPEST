@@ -218,7 +218,7 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                     for facet_id, line in state.cell_colors.items():
                         values = plotted_variable_array[facet_id, :]
                         if state.use_local_time:
-                            values = convert_to_local_time(values, 
+                            values = convert_to_local_time(state, values, 
                                                          state.facet_normals[facet_id],
                                                          state.sunlight_direction, 
                                                          state.rotation_axis,
@@ -247,7 +247,7 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
 
         values_over_time = plotted_variable_array[cell_id, :]
         if state.use_local_time:
-            values_over_time = convert_to_local_time(values_over_time, 
+            values_over_time = convert_to_local_time(state, values_over_time, 
                                                    state.facet_normals[cell_id],
                                                    state.sunlight_direction, 
                                                    state.rotation_axis,
@@ -270,7 +270,7 @@ def on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_l
         cell_id = picked_mesh['vtkOriginalCellIds'][0]
         plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variable_array, axis_label)
 
-def convert_to_local_time(global_time_data, facet_normal, sunlight_direction, rotation_axis, facet_id):
+def convert_to_local_time(state, global_time_data, facet_normal, sunlight_direction, rotation_axis, facet_id):
     """
     Converts global time data to local time by finding when the facet normal is most aligned with the sun.
     
@@ -668,7 +668,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     )
 
     plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
-    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'L/R Arrow keys' - Rotate\n'R' - Reset camera\n'V' - Toggle view mode", position='upper_left', font_size=10, color=text_color)
+    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'R' - Reset camera\n'V' - Toggle view mode", position='upper_left', font_size=10, color=text_color)
 
     info_text = f"Solar Distance: {solar_distance_au} AU\nRotation Period: {rotation_period_hr} hours"
     plotter.add_text(info_text, position='upper_right', font_size=10, color=text_color)
