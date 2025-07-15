@@ -887,6 +887,8 @@ def main():
                       simulation.solar_distance_au,              
                       simulation.rotation_period_hours,              
                       config.emissivity,
+                      # Pass roughness flag to animation
+                      apply_kernel_based_roughness=config.apply_kernel_based_roughness,
                       dome_radius_factor=config.kernel_dome_radius_factor,
                       colour_map='coolwarm', 
                       plot_title='Temperature distribution', 

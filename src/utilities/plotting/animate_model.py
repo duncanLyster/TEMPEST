@@ -58,8 +58,9 @@ class AnimationState:
         self.view_mode = False  # Toggle between raw and view-based shading (default off)
         self.dome_flux_th = None
         self.dome_bin_normals = None
-        self.dome_rotations = None
         self.dome_bin_areas = None
+        self.dome_bin_solid_angles = None
+        self.dome_rotations = None
         self.simulation_emissivity = None
         self.facet_areas = None
         self.last_camera_angles = None  # Only print camera direction when it changes
@@ -332,7 +333,7 @@ def convert_to_view_time(global_time_data, facet_normal, rotation_axis, view_dir
 
 def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
                   timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity, plot_title, axis_label, animation_frames, 
-                  save_animation, save_animation_name, background_colour, dome_radius_factor=1.0, colour_map='coolwarm', pre_selected_facets=[1220, 845]):
+                  save_animation, save_animation_name, background_colour, dome_radius_factor=1.0, colour_map='coolwarm', apply_kernel_based_roughness=False, pre_selected_facets=[1220, 845]):
     """
     Animate a 3D model with temperature or other variable data.
     
@@ -410,38 +411,48 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     state.simulation_emissivity = emissivity
     print(f"[DEBUG] Using emissivity: {state.simulation_emissivity}")
 
-    # Load precomputed dome thermal flux arrays if available
-    dome_flux_path = os.path.join('outputs', 'dome_fluxes.h5')
-    if os.path.exists(dome_flux_path):
-        with h5py.File(dome_flux_path, 'r') as dfh:
-            # Load precomputed arrays
-            state.dome_flux_th = dfh['dome_flux_th'][:]      # (n_facets, M, T)
-            state.dome_bin_normals = dfh['dome_normals'][:]  # (M, 3)
-            state.dome_bin_areas = dfh['dome_bin_areas'][:]  # (n_facets, M)
-            # Load canonical per-bin solid angles (patch area on unit sphere)
-            state.dome_bin_solid_angles = dfh['dome_bin_solid_angles'][:]  # (M,)
-            print(f"[DEBUG] Loaded dome_flux_th with shape {state.dome_flux_th.shape}, dome_bin_normals shape {state.dome_bin_normals.shape}, dome_bin_areas shape {state.dome_bin_areas.shape}")
-            # Compute world->local rotation matrices for each facet
-            up = np.array([0.0, 0.0, 1.0])
-            nF = facet_normals.shape[0]
-            dome_rots = np.zeros((nF, 3, 3))
-            for i in range(nF):
-                nvec = facet_normals[i]
-                axis = np.cross(up, nvec)
-                if np.linalg.norm(axis) < 1e-8:
-                    R_l2w = np.eye(3) if np.dot(up, nvec) > 0 else \
-                             np.array(rotation_matrix(np.array([1.0, 0.0, 0.0]), math.pi))
-                else:
-                    axis_norm = axis / np.linalg.norm(axis)
-                    angle = math.acos(np.clip(np.dot(up, nvec), -1.0, 1.0))
-                    R_l2w = np.array(rotation_matrix(axis_norm, angle))
-                dome_rots[i] = R_l2w.T
-            state.dome_rotations = dome_rots
-            print(f"[DEBUG] Initialized dome_rotations with shape {state.dome_rotations.shape}")
+    # Load precomputed dome thermal flux arrays only if roughness is enabled
+    if apply_kernel_based_roughness:
+        dome_flux_path = os.path.join('outputs', 'dome_fluxes.h5')
+        if os.path.exists(dome_flux_path):
+            with h5py.File(dome_flux_path, 'r') as dfh:
+                # Load precomputed arrays
+                state.dome_flux_th = dfh['dome_flux_th'][:]      # (n_facets, M, T)
+                state.dome_bin_normals = dfh['dome_normals'][:]  # (M, 3)
+                state.dome_bin_areas = dfh['dome_bin_areas'][:]  # (n_facets, M)
+                # Load canonical per-bin solid angles (patch area on unit sphere)
+                state.dome_bin_solid_angles = dfh['dome_bin_solid_angles'][:]  # (M,)
+                print(f"[DEBUG] Loaded dome_flux_th with shape {state.dome_flux_th.shape}, dome_bin_normals shape {state.dome_bin_normals.shape}, dome_bin_areas shape {state.dome_bin_areas.shape}")
+                # Compute world->local rotation matrices for each facet
+                up = np.array([0.0, 0.0, 1.0])
+                nF = facet_normals.shape[0]
+                dome_rots = np.zeros((nF, 3, 3))
+                for i in range(nF):
+                    nvec = facet_normals[i]
+                    axis = np.cross(up, nvec)
+                    if np.linalg.norm(axis) < 1e-8:
+                        R_l2w = np.eye(3) if np.dot(up, nvec) > 0 else \
+                                 np.array(rotation_matrix(np.array([1.0, 0.0, 0.0]), math.pi))
+                    else:
+                        axis_norm = axis / np.linalg.norm(axis)
+                        angle = math.acos(np.clip(np.dot(up, nvec), -1.0, 1.0))
+                        R_l2w = np.array(rotation_matrix(axis_norm, angle))
+                    dome_rots[i] = R_l2w.T
+                state.dome_rotations = dome_rots
+                print(f"[DEBUG] Initialized dome_rotations with shape {state.dome_rotations.shape}")
+        else:
+            print("[DEBUG] No dome_fluxes.h5 found, setting all dome-related arrays to None")
+            state.dome_flux_th = None
+            state.dome_bin_normals = None
+            state.dome_bin_solid_angles = None
+            state.dome_rotations = None
+            state.dome_bin_areas = None
     else:
-        print("[DEBUG] No dome_fluxes.h5 found, setting all dome-related arrays to None")
+        # Roughness disabled: skip loading any dome-related data
+        print("[DEBUG] Roughness disabled, skipping dome data loading")
         state.dome_flux_th = None
         state.dome_bin_normals = None
+        state.dome_bin_solid_angles = None
         state.dome_rotations = None
         state.dome_bin_areas = None
 

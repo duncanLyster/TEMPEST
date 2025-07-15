@@ -152,26 +152,84 @@ class Facet:
         # allocate view-factor matrices
         F_ss = np.zeros((N, N), dtype=np.float64)
         F_sd = np.zeros((N, M), dtype=np.float64)
-        # parallel compute canonical view factors
-        # compute subfacet-to-subfacet view factors
-        ss_results = Parallel(n_jobs=config.n_jobs)(
-            delayed(calculate_view_factors)(
-                sub[i]['vertices'], sub[i]['normal'], sub[i]['area'],
-                test_vertices_ss, test_areas_ss, config.vf_rays
-            ) for i in range(N)
-            )
-        for i, row in enumerate(ss_results):
-            F_ss[i, :] = row
-        # compute subfacet-to-dome view factors
-        sd_results = Parallel(n_jobs=config.n_jobs)(
-            delayed(calculate_view_factors)(
-                sub[i]['vertices'], sub[i]['normal'], sub[i]['area'],
-                test_vertices_sd, test_areas_sd, config.vf_rays
-            ) for i in range(N)
-            )
-        for i, row in enumerate(sd_results):
-            F_sd[i, :] = row
 
+        #########################################################
+        # Monte-Carlo view-factor computation
+        #########################################################
+
+        # # parallel compute canonical view factors
+        # # compute subfacet-to-subfacet view factors
+        # ss_results = Parallel(n_jobs=config.n_jobs)(
+        #     delayed(calculate_view_factors)(
+        #         sub[i]['vertices'], sub[i]['normal'], sub[i]['area'],
+        #         test_vertices_ss, test_areas_ss, config.vf_rays
+        #     ) for i in range(N)
+        #     )
+        # for i, row in enumerate(ss_results):
+        #     F_ss[i, :] = row
+        # # compute subfacet-to-dome view factors
+        # sd_results = Parallel(n_jobs=config.n_jobs)(
+        #     delayed(calculate_view_factors)(
+        #         sub[i]['vertices'], sub[i]['normal'], sub[i]['area'],
+        #         test_vertices_sd, test_areas_sd, config.vf_rays
+        #     ) for i in range(N)
+        #     )
+        # for i, row in enumerate(sd_results):
+        #     F_sd[i, :] = row
+
+        #########################################################
+        # Geometric centroid-based view-factor computation
+        #########################################################
+        # Extract normals, centroids, and areas
+        normals_ss = np.array([entry['normal'] for entry in sub], dtype=np.float64)
+        centroids_ss = np.array([np.mean(entry['vertices'], axis=0) for entry in sub], dtype=np.float64)
+        normals_sd = np.array([entry['normal'] for entry in dome], dtype=np.float64)
+        centroids_sd = np.array([np.mean(entry['vertices'], axis=0) for entry in dome], dtype=np.float64)
+        areas_ss = test_areas_ss
+        areas_sd = test_areas_sd
+
+        # Compute centroid-based view factors between subfacets
+        for i in range(N):
+            for j in range(N):
+                vec_ij = centroids_ss[j] - centroids_ss[i]
+                dist2 = np.dot(vec_ij, vec_ij)
+                if dist2 <= 0:
+                    continue
+                r = np.sqrt(dist2)
+                dir_ij = vec_ij / r
+                cos_i = np.dot(normals_ss[i], dir_ij)
+                cos_j = np.dot(normals_ss[j], -dir_ij)
+                if cos_i <= 0 or cos_j <= 0:
+                    continue
+                F_ss[i, j] = cos_i * cos_j * areas_ss[j] / (np.pi * dist2)
+
+        # Compute centroid-based view factors between subfacets and dome facets
+        for i in range(N):
+            for j in range(M):
+                vec_ij = centroids_sd[j] - centroids_ss[i]
+                dist2 = np.dot(vec_ij, vec_ij)
+                if dist2 <= 0:
+                    continue
+                r = np.sqrt(dist2)
+                dir_ij = vec_ij / r
+                cos_i = np.dot(normals_ss[i], dir_ij)
+                cos_j = np.dot(normals_sd[j], -dir_ij)
+                if cos_i <= 0 or cos_j <= 0:
+                    continue
+                F_sd[i, j] = cos_i * cos_j * areas_sd[j] / (np.pi * dist2)
+
+        # Print the sum of subfacet to dome view factors for each subfacet
+        for i in range(N):
+            print(f"Subfacet {i} to dome view factors: {F_sd[i, :].sum()}") 
+
+        # Normalize the S-D view factors to conserve energy
+        for i in range(N):
+            F_sd[i, :] /= F_sd[i, :].sum()
+
+        # Normalize the S-S view factors to conserve energy
+        for i in range(N):
+            F_ss[i, :] /= F_ss[i, :].sum()
+    
         return F_ss, F_sd
 
     @staticmethod
