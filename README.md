@@ -10,6 +10,8 @@ This Python script simulates diurnal temperature variations of a solar system bo
 - SI units are standard, exceptions are clearly stated.
 
 ## How to Get Started
+You can watch this video which takes you through from download to running TEMPEST on your own computer: https://youtu.be/0_YJEAbp2vQ
+
 1. Download this repository as a .zip file by clicking on the `<>Code` button above. Expand the .zip. 
 2. Open a terminal window and navigate to the TEMPEST folder you have downloaded (this may trigger a package update that could take a few minutes)
 3. Ensure you have Python 3.x installed and selected (you can download at https://www.python.org/ then check this using `python --version`) 
