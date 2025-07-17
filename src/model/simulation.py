@@ -13,7 +13,7 @@ class Simulation:
 
     def load_configuration(self):
         """
-        Load configuration directly from the Config object. TODO: Only initialise parameters that aren't already set in the config file.
+        Load configuration directly from the Config object.
         """
         # Assign configuration to attributes, converting lists to numpy arrays as needed
         for key, value in self.config.config_data.items():
@@ -25,8 +25,8 @@ class Simulation:
         self.solar_distance_m = self.solar_distance_au * 1.496e11  # Convert AU to meters
         self.rotation_period_s = self.rotation_period_hours * 3600  # Convert hours to seconds
         self.angular_velocity = (2 * np.pi) / self.rotation_period_s
-        self.skin_depth = (self.thermal_conductivity / (self.density * self.specific_heat_capacity * self.angular_velocity))**0.5
-        self.thermal_inertia = (self.density * self.specific_heat_capacity * self.thermal_conductivity)**0.5
+        self.thermal_conductivity = (self.thermal_inertia**2 / (self.density * self.specific_heat_capacity))
+        self.skin_depth = (self.thermal_conductivity / (self.density * self.specific_heat_capacity * self.angular_velocity)) ** 0.5
         self.layer_thickness = 8 * self.skin_depth / self.n_layers
         self.thermal_diffusivity = self.thermal_conductivity / (self.density * self.specific_heat_capacity)
         self.timesteps_per_day = int(round(self.rotation_period_s / (self.layer_thickness**2 / (2 * self.thermal_diffusivity)))) # Set using CFL condition
