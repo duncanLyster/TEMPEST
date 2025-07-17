@@ -41,5 +41,17 @@ Feel free to fork the project for custom enhancements or issue tracking on GitHu
 Duncan Lyster | Started: 15 Feb 2024
 With contributions from: Joe Penn, Maisie Rashman, and Bea Chikani
 
+## Citation and Attribution
+
+If you use TEMPEST in any academic publication, presentation, or public derivative work, please cite:
+
+> Lyster, D., Howett, C., & Penn, J. (2025).  
+> *TEMPEST: A Modular Thermophysical Model for Airless Bodies with Support for Surface Roughness and Non-Periodic Heating.*  
+> Submitted to EPSC-DPS Joint Meeting 2025.
+
+Please also include the copyright notice and license file in any redistributed form.
+
 ## Licence
-This project is open-source and available under the MIT License - see the License.md file for details.
+
+This project is open-source under a modified MIT License that requires attribution in academic and public use.  
+See the [LICENSE](LICENSE) file for full terms.
