@@ -61,3 +61,4 @@ dist/
 # Local generated files
 .requirements_hash
 .venv_initialized
+.direnv/.direnv/
