@@ -6,6 +6,7 @@ import math
 from stl import mesh
 from datetime import datetime
 import h5py
+from src.utilities.locations import Locations
 
 def rotation_matrix(axis, theta):
     """Create rotation matrix around given axis by angle theta."""
@@ -318,10 +319,9 @@ def plot_viewing_angle_analysis(json_file, npz_file, facet_id, n_positions=36,
 
 def interactive_analysis():
     """Interactive function to select facet and run viewing angle analysis."""
-    # Get available animation folders
-    script_dir = os.path.abspath(os.path.dirname(__file__))
-    project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
-    base_dir = os.path.join(project_root, 'outputs', 'remote_outputs')
+    # Get available animation folders from data output directory
+    loc = Locations()
+    base_dir = loc.remote_outputs
     
     if not os.path.exists(base_dir):
         print(f"Directory {base_dir} does not exist.")
@@ -394,7 +394,7 @@ def interactive_analysis():
             print("Please enter a valid number.")
     
     # Run analysis
-    output_dir = os.path.join(project_root, 'plots')
+    output_dir = os.path.join(loc.project_root, 'plots')
     os.makedirs(output_dir, exist_ok=True)
     
     plot_viewing_angle_analysis(json_file, npz_file, facet_id, n_pos, phase, output_dir)

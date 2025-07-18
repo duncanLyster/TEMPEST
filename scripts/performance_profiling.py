@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Performance profiling script for TEMPEST: runs parameter sweeps, records runtime and insolation noise,
-handles errors gracefully, and generates CSV of results and diagnostic plots.
+and generates CSV of results and diagnostic plots.
 """
 import os
 import sys

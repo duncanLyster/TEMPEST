@@ -3,6 +3,8 @@
 Compute free-precession rotation matrices for an arbitrary ASCII STL shape,
 ensuring a rational number of spin and precession cycles.
 
+This is a rough work in progress and TEMPEST does not currently support tumbling bodies.
+
 Dependencies:
     pip install numpy-stl numpy
 """

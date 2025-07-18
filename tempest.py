@@ -1,5 +1,5 @@
 ''' 
-This Python script simulates diurnal temperature variations of a solar system body based on
+This model simulates diurnal temperature variations of a solar system body based on
 a given shape model. It reads in the shape model, sets material and model properties, calculates 
 insolation and temperature arrays, and iterates until the model converges. The results are saved and 
 visualized.
@@ -19,32 +19,38 @@ Author: Duncan Lyster
 
 import os
 import sys
-from pathlib import Path
+import math
 import argparse
-import math  # for dome-to-parent DP scaling
-
-# Add the src directory to the Python path
-current_dir = Path(__file__).resolve().parent
-src_dir = current_dir.parent / "src"
-sys.path.append(str(src_dir))
+import time
+from pathlib import Path
+from datetime import datetime
 
 import numpy as np
 import matplotlib.pyplot as plt
-import time
 import pandas as pd
 from numba.typed import List
 from stl import mesh as stl_mesh_module
 from scipy.interpolate import interp1d
-from datetime import datetime
-import h5py  # for subfacet HDF5 export
-import subprocess
+import h5py
 
-# Import modules from src
+# Ensure src directory is in the Python path
+current_dir = Path(__file__).resolve().parent
+src_dir = current_dir.parent / "src"
+sys.path.append(str(src_dir))
+
+# Imports from src modules
 from src.model.calculate_phase_curve import calculate_phase_curve
-from src.utilities.locations import Locations
 from src.model.insolation import calculate_insolation
 from src.model.simulation import Simulation, ThermalData
 from src.model.facet import Facet
+from src.model.solvers import TemperatureSolverFactory
+from src.model.view_factors import (
+    calculate_and_cache_visible_facets,
+    calculate_all_view_factors,
+    calculate_thermal_view_factors,
+    calculate_view_factors
+)
+from src.utilities.locations import Locations
 from src.utilities.config import Config
 from src.utilities.utils import (
     calculate_black_body_temp,
@@ -52,14 +58,7 @@ from src.utilities.utils import (
     calculate_rotation_matrix,
     conditional_tqdm
 )
-from src.model.view_factors import (
-    calculate_and_cache_visible_facets,
-    calculate_all_view_factors,
-    calculate_thermal_view_factors
-)
 from src.utilities.plotting.plotting import check_remote_and_animate
-from src.model.solvers import TemperatureSolverFactory
-from src.model.view_factors import calculate_view_factors
 
 def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
     ''' 
@@ -116,104 +115,6 @@ def save_shape_model(shape_model, filename, config):
         f.write("endsolid model\n")
     
     conditional_print(config.silent_mode, f"Shape model saved to {filename}")
-
-def apply_roughness(shape_model, simulation, config, subdivision_levels, displacement_factors=None):
-    """
-    Apply roughness to the shape model using iterative sub-facet division and displacement.
-    
-    Parameters:
-    - shape_model: List of Facet objects
-    - simulation: Simulation object
-    - subdivision_levels: Number of times to perform the subdivision and adjustment process
-    - displacement_factors: List of displacement factors for each subdivision level
-    
-    Returns:
-    - new_shape_model: List of new Facet objects with applied roughness
-    """
-    
-    if displacement_factors is None:
-        displacement_factors = [0.2] * subdivision_levels
-    elif len(displacement_factors) != subdivision_levels:
-        raise ValueError(f"The number of displacement factors ({len(displacement_factors)}) must match the number of subdivision levels ({subdivision_levels})")
-    
-    def get_vertex_id(vertex):
-        return tuple(np.round(vertex, decimals=6))  # Round to avoid float precision issues
-
-    def midpoint_displacement(v1, v2, max_displacement):
-        mid = (v1 + v2) / 2
-        displacement = np.random.uniform(-max_displacement, max_displacement)
-        normal = np.cross(v2 - v1, np.random.randn(3))
-        normal /= np.linalg.norm(normal)
-        return mid + displacement * normal
-
-    def subdivide_triangle(vertices, max_displacement, vertex_dict):
-        v1, v2, v3 = vertices
-        
-        m1_id = get_vertex_id((v1 + v2) / 2)
-        m2_id = get_vertex_id((v2 + v3) / 2)
-        m3_id = get_vertex_id((v3 + v1) / 2)
-        
-        if m1_id in vertex_dict:
-            m1 = vertex_dict[m1_id]
-        else:
-            m1 = midpoint_displacement(v1, v2, max_displacement)
-            vertex_dict[m1_id] = m1
-
-        if m2_id in vertex_dict:
-            m2 = vertex_dict[m2_id]
-        else:
-            m2 = midpoint_displacement(v2, v3, max_displacement)
-            vertex_dict[m2_id] = m2
-
-        if m3_id in vertex_dict:
-            m3 = vertex_dict[m3_id]
-        else:
-            m3 = midpoint_displacement(v3, v1, max_displacement)
-            vertex_dict[m3_id] = m3
-        
-        return [
-            [v1, m1, m3],
-            [m1, v2, m2],
-            [m3, m2, v3],
-            [m1, m2, m3]
-        ]
-    
-    for level in range(subdivision_levels):
-        new_shape_model = []
-        vertex_dict = {}  # Reset vertex_dict for each level
-        
-        # First, add all current vertices to the vertex_dict
-        for facet in shape_model:
-            for vertex in facet.vertices:
-                vertex_id = get_vertex_id(vertex)
-                if vertex_id not in vertex_dict:
-                    vertex_dict[vertex_id] = vertex
-
-        for facet in shape_model:
-            # Calculate max edge length
-            edges = [np.linalg.norm(facet.vertices[i] - facet.vertices[(i+1)%3]) for i in range(3)]
-            max_edge_length = max(edges)
-            max_displacement = max_edge_length * displacement_factors[level]
-            
-            # Use the vertex_dict to get the potentially updated vertices
-            current_vertices = [vertex_dict[get_vertex_id(v)] for v in facet.vertices]
-            
-            subdivided = subdivide_triangle(current_vertices, max_displacement, vertex_dict)
-            
-            for sub_vertices in subdivided:
-                # Calculate sub-facet properties
-                sub_normal = np.cross(sub_vertices[1] - sub_vertices[0], sub_vertices[2] - sub_vertices[0])
-                sub_normal /= np.linalg.norm(sub_normal)
-                sub_position = np.mean(sub_vertices, axis=0)
-                
-                # Create new Facet object
-                new_facet = Facet(sub_normal, sub_vertices, simulation.timesteps_per_day, simulation.max_days, simulation.n_layers, config.calculate_energy_terms)
-                new_shape_model.append(new_facet)
-        
-        # Update shape_model for the next iteration
-        shape_model = new_shape_model
-    
-    return new_shape_model
 
 def export_results(shape_model_name, config, temperature_array):
     ''' 
