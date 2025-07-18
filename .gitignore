@@ -15,6 +15,7 @@ __pycache__/
 # Ignore output and temporary files
 output/
 outputs/
+plots/
 
 # Ignore private data
 private/
@@ -49,6 +50,8 @@ scripts/flyby_sim/
 *.env
 *.virtualenv
 *.tox/
+.requirements_hash
+.venv_initialized
 node_modules/
 build/
 dist/
@@ -56,3 +59,6 @@ dist/
 # Ignore any large datasets or generated CSVs that might clutter the repo
 *.csv
 *.npz
+# Local generated files
+.requirements_hash
+.venv_initialized
