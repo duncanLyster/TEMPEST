@@ -62,3 +62,4 @@ dist/
 .requirements_hash
 .venv_initialized
 .direnv/
+.direnv/
