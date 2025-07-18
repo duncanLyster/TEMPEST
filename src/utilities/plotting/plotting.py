@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from mpl_toolkits.mplot3d import Axes3D
 from src.utilities.plotting.animate_model import animate_model
+from src.utilities.locations import Locations
 
 def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_array, rotation_axis, 
                            sunlight_direction, timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity, **kwargs):
@@ -41,7 +42,8 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
     else:
         # Remote mode: create a directory to save the animation parameters
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-% M-%S")
-        output_dir = f"outputs/remote_outputs/animation_outputs_{timestamp}" # TODO: include in locations class
+        loc = Locations()
+        output_dir = os.path.join(loc.remote_outputs, f"animation_outputs_{timestamp}")
         os.makedirs(output_dir, exist_ok=True)
 
         # Save numpy arrays to NPZ file

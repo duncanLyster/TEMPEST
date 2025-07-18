@@ -1,6 +1,6 @@
 # To run the model, run the following command:
 # python tempest.py --config data/config/example_config.yaml
-# This config file is used for testing the model and can be saved as a template for your own objects.
+# This config file is set up as a straightforward example and can be saved as a template for your own objects.
 
 # General settings
 silent_mode: false                  # Set to true when running batch jobs (suppresses most console output)
@@ -8,17 +8,13 @@ remote: false                       # Set to true when running on a remote serve
 
 # File paths
 shape_model_file: "500m_ico_sphere_80_facets.stl"  # Name of the shape model file in data/shape_models/
-shape_model_directory: "data/shape_models/"
-
-# Performance settings
-n_jobs:                 16          # Number of CPU cores to use for parallel processing (default: 4, max: available cores)
-chunk_size:             10          # Number of facets to process in each parallel batch
+shape_model_directory: "data/shape_models/"    
 
 # Physical parameters
+thermal_inertia:        50    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
 emissivity:             0.5         
 albedo:                 0.5              
 beaming_factor:         1.0
-thermal_inertia:        50    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
 
 # Model structure parameters
 n_layers:               45          # Number of depth layers in thermal model - try increasing this if the model doesn't converge
@@ -36,8 +32,10 @@ ra_degrees:             0           # Right ascension of the object's pole (0 is
 dec_degrees:            90          # Declination of the object's pole (90 is the north pole)
 
 # Advanced modelling options
-include_shadowing:      true                 # Recommended to keep this as True for most cases
-n_scatters:             0                    # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
+n_jobs:                 16          # Number of CPU cores to use for parallel processing (if set higher than available cores, the model will run on the available cores)
+chunk_size:             10          # Number of facets to process in each parallel batch
+include_shadowing:      true        # Recommended to keep this as True for most cases
+n_scatters:             0           # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
 include_self_heating:   false                # Whether to include thermal radiation between facets
 scattering_lut:         "lambertian.npy"     # Lambertian is the only option currently supported
 emission_lut:           "lambertian_epf.npy" # Lambertian or Lommel-Seeliger are the only options currently supported
@@ -45,12 +43,8 @@ temp_solver:            "tempest_standard"   # Options: "tempest_standard" or "t
 vf_rays:                1000                 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
 
 # TEMPEST Solver parameters: Used with TI and specific_heat_capacity to derive layer depth and skin depth. These should not affect the final temperature distribution once the model has converged.
-density: 1000    # kg/m³
+density: 1000                   # kg/m³
 specific_heat_capacity: 1000    # J/kg·K
-
-# Extra analysis options
-calculate_visible_phase_curve: false    # Whether to calculate visible light phase curve (not thoroughly validated)
-calculate_thermal_phase_curve: false    # Whether to calculate thermal phase curve (now with advanced dome flux integration)
 
 # Animation settings
 animate_final_day_temp_distribution: true  # 3D animation of final day temperatures
@@ -68,17 +62,15 @@ plot_initial_temp_histogram: false        # Plot initial temperature distributio
 plot_final_day_all_layers_temp_distribution: false # Plot final day temperature distribution for all layers including subsurface
 plot_final_day_comparison: false          # Plot final day temperature distribution against the same from previous run (if it exists)
 
+# Extra analysis options
+calculate_visible_phase_curve: false    # Whether to calculate visible light phase curve (not thoroughly validated)
+calculate_thermal_phase_curve: false    # Whether to calculate thermal phase curve (now with advanced dome flux integration)
+
 # Plotting settings for phase curves
 show_visible_phase_curve: false
 save_visible_phase_curve_data: false
 show_thermal_phase_curve: false
 save_thermal_phase_curve_data: false
-
-# Debugging
-calculate_energy_terms: false             # Whether to calculate and store detailed energy balance terms (not thoroughly validated - very slow to run)
-animate_secondary_radiation_view_factors: false # 3D animation showing secondary radiation view factors
-animate_secondary_contributions: false    # 3D animation showing radiative self-heating contributions
-plot_energy_terms: false                  # Plot energy balance terms
 
 # Surface Roughness Model (kernel-based)
 apply_kernel_based_roughness: false        # Master switch for kernel-based roughness
@@ -88,3 +80,9 @@ kernel_profile_angle_degrees: 90           # Controls curvature for 'spherical_c
 kernel_directional_bins: 100               # Number of dome directional bins for emission/scatter
 kernel_dome_radius_factor: 100.0           # Scale factor for dome radius relative to parent facet
 intra_facet_scatters: 2                    # Number of internal scattering iterations per depression
+
+# Debugging
+calculate_energy_terms: false                   # Whether to calculate and store detailed energy balance terms (not thoroughly validated - very slow to run)
+animate_secondary_radiation_view_factors: false # 3D animation showing secondary radiation view factors
+animate_secondary_contributions: false          # 3D animation showing radiative self-heating contributions
+plot_energy_terms: false                        # Plot energy balance terms
