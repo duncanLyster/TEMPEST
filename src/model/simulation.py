@@ -29,7 +29,7 @@ class Simulation:
         self.skin_depth = (self.thermal_conductivity / (self.density * self.specific_heat_capacity * self.angular_velocity)) ** 0.5
         self.layer_thickness = 8 * self.skin_depth / self.n_layers
         self.thermal_diffusivity = self.thermal_conductivity / (self.density * self.specific_heat_capacity)
-        self.timesteps_per_day = int(round(self.rotation_period_s / (self.layer_thickness**2 / (2 * self.thermal_diffusivity)))) # Set using CFL condition
+        self.timesteps_per_day = self.calculate_adaptive_timesteps() # Adaptive timestep for low thermal inertia stability
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
         
         # Compute unit vector from RA and Dec
@@ -38,6 +38,38 @@ class Simulation:
         self.rotation_axis = np.array([np.cos(ra_radians) * np.cos(dec_radians), 
                                        np.sin(ra_radians) * np.cos(dec_radians), 
                                        np.sin(dec_radians)])
+
+    def calculate_adaptive_timesteps(self):
+        """
+        Calculate timesteps with stability constraints for low thermal inertia.
+        
+        This method adds an adaptive constraint that limits const1 to reasonable
+        values, ensuring stability for low thermal inertia materials.
+        """
+        # Original CFL calculation
+        cfl_denominator = self.layer_thickness**2 / (2 * self.thermal_diffusivity)
+        timesteps_cfl = int(round(self.rotation_period_s / cfl_denominator))
+        delta_t_cfl = self.rotation_period_s / timesteps_cfl
+        
+        # Calculate insolation coefficient with CFL timestep
+        const1_cfl = delta_t_cfl / (self.layer_thickness * self.density * self.specific_heat_capacity)
+        
+        # Adaptive constraint: limit const1 for stability
+        max_const1 = 0.1  # Maximum allowed insolation coefficient
+        
+        if const1_cfl > max_const1:
+            # Calculate timestep that keeps const1 reasonable
+            required_delta_t = max_const1 * self.layer_thickness * self.density * self.specific_heat_capacity
+            adaptive_timesteps = int(np.ceil(self.rotation_period_s / required_delta_t))
+            
+            # Apply additional safety factor for very low thermal inertia
+            if self.thermal_inertia < 100:
+                safety_factor = 0.5
+                adaptive_timesteps = int(adaptive_timesteps / safety_factor)
+            
+            return adaptive_timesteps
+        else:
+            return timesteps_cfl
 
 class ThermalData:
     def __init__(self, n_facets, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
