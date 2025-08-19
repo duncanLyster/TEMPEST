@@ -420,7 +420,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     # Load precomputed dome thermal flux arrays only if roughness is enabled
     if apply_kernel_based_roughness:
-        dome_flux_path = os.path.join('outputs', 'dome_fluxes.h5')
+        dome_flux_path = os.path.join('data', 'output', 'dome_fluxes.h5') # NOTE: update this to work with correct Locations() class
         if os.path.exists(dome_flux_path):
             with h5py.File(dome_flux_path, 'r') as dfh:
                 # Load precomputed arrays

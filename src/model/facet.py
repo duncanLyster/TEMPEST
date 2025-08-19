@@ -218,10 +218,6 @@ class Facet:
                     continue
                 F_sd[i, j] = cos_i * cos_j * areas_sd[j] / (np.pi * dist2)
 
-        # Print the sum of subfacet to dome view factors for each subfacet
-        for i in range(N):
-            print(f"Subfacet {i} to dome view factors: {F_sd[i, :].sum()}") 
-
         # Normalize the S-D view factors to conserve energy
         for i in range(N):
             F_sd[i, :] /= F_sd[i, :].sum()
