@@ -62,3 +62,7 @@ dist/
 .requirements_hash
 .venv_initialized
 .direnv/
+
+# Ignore auto-generated config files
+data/config/*_TI_*.yaml
+data/config/optimiser_runs/
