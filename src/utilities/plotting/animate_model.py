@@ -196,8 +196,27 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                         data = {}
                         time_steps = [i / state.timesteps_per_day for i in range(plotted_variable_array.shape[1])]
                         
-                        for facet_id in state.highlighted_cell_ids:
-                            data[f'Facet_{facet_id}'] = plotted_variable_array[facet_id, :]
+                        # Check if we need to calculate view-dependent temperatures
+                        if state.view_mode and state.dome_flux_th is not None:
+                            print("Calculating view-dependent temperatures for all timesteps...")
+                            # Calculate view-dependent temperatures for all timesteps
+                            view_dependent_temps = calculate_view_dependent_temperatures_all_timesteps(
+                                state, plotter, rotation_matrix, state.rotation_axis)
+                            
+                            if view_dependent_temps is not None:
+                                for facet_id in state.highlighted_cell_ids:
+                                    data[f'Facet_{facet_id}_view_dependent'] = view_dependent_temps[facet_id, :]
+                                property_suffix = "_view_dependent"
+                            else:
+                                # Fallback to regular data
+                                for facet_id in state.highlighted_cell_ids:
+                                    data[f'Facet_{facet_id}'] = plotted_variable_array[facet_id, :]
+                                property_suffix = ""
+                        else:
+                            # Save regular temperature data
+                            for facet_id in state.highlighted_cell_ids:
+                                data[f'Facet_{facet_id}'] = plotted_variable_array[facet_id, :]
+                            property_suffix = ""
                         
                         # Create DataFrame
                         df = pd.DataFrame(data, index=time_steps)
@@ -206,7 +225,7 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                         # Create a valid filename from the axis label
                         property_name = axis_label.lower().replace(' ', '_')
                         timestamp = datetime.datetime.now().strftime("%H%M%S")
-                        filename = os.path.join(run_dir, f'{property_name}_vs_timestep_{timestamp}.csv')
+                        filename = os.path.join(run_dir, f'{property_name}{property_suffix}_vs_timestep_{timestamp}.csv')
                         df.to_csv(filename)
                         conditional_print(False, f"Data saved to {filename}")
                         
@@ -320,9 +339,70 @@ def convert_to_local_time(state, global_time_data, facet_normal, sunlight_direct
     # Calculate shift needed to center on maximum alignment
     shift = (timesteps // 2) - noon_frame  # Shift to put noon at middle of day
     
-    debug_print(state, f"Facet {facet_id} shifted by {shift} timesteps ({(shift/timesteps * 360):.1f} degrees)")
+    print(f"Facet {facet_id} shifted by {shift} timesteps ({(shift/timesteps * 360):.1f} degrees)")
     
     return np.roll(global_time_data, shift)
+
+def calculate_view_dependent_temperatures_all_timesteps(state, plotter, rot_mat_func, rotation_axis):
+    """Calculate view-dependent temperatures for all timesteps given current viewing direction."""
+    if not state.view_mode or state.dome_flux_th is None:
+        return None
+        
+    # Get current camera viewing direction
+    cam_pos = np.array(plotter.camera.position)
+    focal = np.array(plotter.camera.focal_point)
+    view_dir_world = (focal - cam_pos)
+    view_dir_world /= np.linalg.norm(view_dir_world)
+    
+    n_facets = len(state.facet_normals)
+    n_timesteps = state.dome_flux_th.shape[2]
+    view_dependent_temps = np.zeros((n_facets, n_timesteps))
+    
+    # Constants for temperature calculation
+    scale = state.dome_radius_factor ** 2
+    sigma = 5.670374419e-8
+    epsilon = state.simulation_emissivity
+    
+    for timestep in range(n_timesteps):
+        # Calculate rotation matrix for this timestep
+        rotation_angle = (timestep / state.timesteps_per_day) * 2 * math.pi
+        rot_mat = np.array(rot_mat_func(rotation_axis, rotation_angle))
+        
+        # Transform view direction to body coordinates for this timestep
+        view_dir_body = rot_mat.T.dot(view_dir_world)
+        
+        # Find best dome bins for each facet
+        cosines = np.dot(view_dir_body, state.dome_bin_normals.T).reshape(1, -1)
+        cosines = np.broadcast_to(cosines, (n_facets, len(state.dome_bin_normals)))
+        cosines = np.clip(cosines, 0, None)
+        best_bins = np.argmax(cosines, axis=1)
+        selected_cosines = cosines[np.arange(len(best_bins)), best_bins]
+        
+        # Compute facet horizon test
+        normals_t = np.dot(state.facet_normals, rot_mat.T)
+        facet_horizons = np.dot(normals_t, view_dir_world)
+        
+        # Extract flux and area data for selected bins
+        F_values = state.dome_flux_th[np.arange(len(best_bins)), best_bins, timestep]
+        area_values = state.dome_bin_areas[np.arange(len(best_bins)), best_bins]
+        
+        # Compute temperatures
+        T_raw = np.zeros(n_facets)
+        valid_areas = area_values > 0
+        T_raw[valid_areas] = ((F_values[valid_areas] / area_values[valid_areas] * scale) / (epsilon * sigma)) ** 0.25
+        
+        # Apply horizon and dome visibility masks (same logic as real-time rendering)
+        horizon_tolerance = 1e-6
+        mask_dome = selected_cosines > horizon_tolerance  # Dome patch visible
+        mask_facet = facet_horizons < -horizon_tolerance  # Facet front-facing
+        mask_combined = mask_dome & mask_facet
+        
+        # Set final temperatures: 0K if not visible, raw temperature if visible
+        T_final = np.where(mask_combined, T_raw, 0.0)
+        
+        view_dependent_temps[:, timestep] = T_final
+    
+    return view_dependent_temps
 
 def convert_to_view_time(global_time_data, facet_normal, rotation_axis, view_dir):
     """Convert global time data to view-based apparent data over one rotation."""
@@ -420,15 +500,36 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     # Load precomputed dome thermal flux arrays only if roughness is enabled
     if apply_kernel_based_roughness:
-        dome_flux_path = os.path.join('data', 'output', 'dome_fluxes.h5') # NOTE: update this to work with correct Locations() class
+        # Look for dome flux data in the most recent animation output
+        from src.utilities.locations import Locations
+        loc = Locations()
+        remote_outputs_dir = loc.remote_outputs
+        
+        # Find the most recent animation output directory
+        animation_dirs = [d for d in os.listdir(remote_outputs_dir) if d.startswith('animation_outputs_')]
+        if animation_dirs:
+            latest_dir = max(animation_dirs)
+            dome_flux_file = [f for f in os.listdir(os.path.join(remote_outputs_dir, latest_dir)) 
+                             if f.startswith('combined_animation_data_rough_')][0]
+            dome_flux_path = os.path.join(remote_outputs_dir, latest_dir, dome_flux_file)
+        else:
+            dome_flux_path = os.path.join('data', 'output', 'dome_fluxes.h5')  # Fallback to old path
+            
         if os.path.exists(dome_flux_path):
             with h5py.File(dome_flux_path, 'r') as dfh:
-                # Load precomputed arrays
-                state.dome_flux_th = dfh['dome_flux_th'][:]      # (n_facets, M, T)
-                state.dome_bin_normals = dfh['dome_normals'][:]  # (M, 3)
-                state.dome_bin_areas = dfh['dome_bin_areas'][:]  # (n_facets, M)
-                # Load canonical per-bin solid angles (patch area on unit sphere)
-                state.dome_bin_solid_angles = dfh['dome_bin_solid_angles'][:]  # (M,)
+                # Try to load from dome_fluxes group first (new format), then root level (old format)
+                if 'dome_fluxes' in dfh:
+                    dome_group = dfh['dome_fluxes']
+                    state.dome_flux_th = dome_group['dome_flux_th'][:]
+                    state.dome_bin_normals = dome_group['dome_normals'][:]
+                    state.dome_bin_areas = dome_group['dome_bin_areas'][:]
+                    state.dome_bin_solid_angles = dome_group['dome_bin_solid_angles'][:]
+                else:
+                    # Fallback to old root-level format
+                    state.dome_flux_th = dfh['dome_flux_th'][:]
+                    state.dome_bin_normals = dfh['dome_normals'][:]
+                    state.dome_bin_areas = dfh['dome_bin_areas'][:]
+                    state.dome_bin_solid_angles = dfh['dome_bin_solid_angles'][:]
                 debug_print(state, f"[DEBUG] Loaded dome_flux_th with shape {state.dome_flux_th.shape}, dome_bin_normals shape {state.dome_bin_normals.shape}, dome_bin_areas shape {state.dome_bin_areas.shape}")
                 # Compute world->local rotation matrices for each facet
                 up = np.array([0.0, 0.0, 1.0])
