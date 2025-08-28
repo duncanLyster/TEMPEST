@@ -433,7 +433,7 @@ def main():
 
     initial_temperatures_start = time.time()
     solver = TemperatureSolverFactory.create(config.temp_solver)
-    thermal_data = solver.initialize_temperatures(thermal_data, simulation, config)
+    thermal_data = solver.initialize_temperatures(thermal_data, simulation, config, shape_model)
     initial_temperatures_end = time.time()
 
     conditional_print(config.silent_mode,  f"Time taken to calculate initial temperatures: {initial_temperatures_end - initial_temperatures_start:.2f} seconds")
@@ -622,7 +622,7 @@ def main():
         old_silent = config.silent_mode
         config.silent_mode = True
         for facet in shape_model:
-            sub_solver.initialize_temperatures(facet.depression_thermal_data, simulation, config)
+            sub_solver.initialize_temperatures(facet.depression_thermal_data, simulation, config, facet.sub_facets)
             facet.depression_temperature_result = sub_solver.solve(
                 facet.depression_thermal_data,
                 facet.sub_facets,
