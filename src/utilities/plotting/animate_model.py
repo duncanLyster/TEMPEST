@@ -669,8 +669,8 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
             state.fig.canvas.flush_events()
     plotter.add_key_event('v', _toggle_view_event)
 
-    cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
-    plotter.add_mesh(cylinder, color='green')
+    # cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
+    # plotter.add_mesh(cylinder, color='green')
 
     sunlight_start = [sunlight_direction[i] * max_dimension for i in range(3)]
     sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], scale=max_dimension * 0.3)
