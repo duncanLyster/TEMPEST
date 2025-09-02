@@ -220,11 +220,17 @@ class Facet:
 
         # Normalize the S-D view factors to conserve energy
         for i in range(N):
-            F_sd[i, :] /= F_sd[i, :].sum()
+            sum_sd = F_sd[i, :].sum()
+            if sum_sd > 0:
+                F_sd[i, :] /= sum_sd
+            # If sum is zero, leave F_sd[i, :] as zeros (no view factors to dome)
 
         # Normalize the S-S view factors to conserve energy
         for i in range(N):
-            F_ss[i, :] /= F_ss[i, :].sum()
+            sum_ss = F_ss[i, :].sum()
+            if sum_ss > 0:
+                F_ss[i, :] /= sum_ss
+            # If sum is zero, leave F_ss[i, :] as zeros (no view factors to other subfacets)
     
         return F_ss, F_sd
 

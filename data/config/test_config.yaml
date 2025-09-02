@@ -74,7 +74,7 @@ show_thermal_phase_curve: false
 save_thermal_phase_curve_data: false
 
 # Surface Roughness Model (kernel-based)
-apply_kernel_based_roughness: false        # Master switch for kernel-based roughness
+apply_kernel_based_roughness: true        # Master switch for kernel-based roughness
 roughness_kernel: 'spherical_cap'          # 'spherical_cap' is the only option currently supported
 kernel_subfacets_count: 20                # Number of sub-facets per kernel patch
 kernel_profile_angle_degrees: 0           # Controls curvature for 'spherical_cap' kernel
