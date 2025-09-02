@@ -14,15 +14,15 @@ shape_model_directory: "data/shape_models/"
 # Physical parameters
 thermal_inertia:        100    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
 emissivity:             0.9         
-albedo:                 0.27              
+albedo:                 0.15              
 beaming_factor:         1.0 
 
 # Model structure parameters
 n_layers:               45          # Number of depth layers in thermal model - try increasing this if the model doesn't converge
 convergence_method:     "mean"      # Method to determine convergence: 'mean' or 'max' temperature difference between days
-convergence_target:     0.01         # Target temperature difference between days for convergence in K. Higher values will converge faster.
+convergence_target:     0.1         # Target temperature difference between days for convergence in K. Higher values will converge faster.
 max_days:               20          # Maximum number of days to run simulation
-min_days:               1           # Minimum number of days to run simulation
+min_days:               3           # Minimum number of days to run simulation
 
 # Orbital and rotational parameters
 solar_distance_au:      2.264           # TEMPEST treats the object as having a perfect circular orbit
@@ -76,9 +76,9 @@ save_thermal_phase_curve_data: false
 # Surface Roughness Model (kernel-based)
 apply_kernel_based_roughness: true        # Master switch for kernel-based roughness
 roughness_kernel: 'spherical_cap'          # 'spherical_cap' is the only option currently supported
-kernel_subfacets_count: 100                # Number of sub-facets per kernel patch
-kernel_profile_angle_degrees: 90           # Controls curvature for 'spherical_cap' kernel
-kernel_directional_bins: 100               # Number of dome directional bins for emission/scatter
+kernel_subfacets_count: 20                # Number of sub-facets per kernel patch
+kernel_profile_angle_degrees: 0           # Controls curvature for 'spherical_cap' kernel
+kernel_directional_bins: 20               # Number of dome directional bins for emission/scatter
 kernel_dome_radius_factor: 100.0           # Scale factor for dome radius relative to parent facet
 intra_facet_scatters: 2                    # Number of internal scattering iterations per depression
 
