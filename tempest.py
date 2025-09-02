@@ -695,10 +695,29 @@ def main():
                 for j, entry in enumerate(Facet._canonical_subfacet_mesh):
                     local_tri = entry['vertices'] * scale
                     world_tri = (R_l2w.dot(local_tri.T)).T + facet.position
+                    
+                    # FIX: Check normal orientation after transformation
+                    v1, v2, v3 = world_tri[0], world_tri[1], world_tri[2]
+                    edge1 = v2 - v1
+                    edge2 = v3 - v1
+                    actual_normal = np.cross(edge1, edge2)
+                    norm_mag = np.linalg.norm(actual_normal)
+                    
+                    if norm_mag > 1e-12:
+                        actual_normal = actual_normal / norm_mag
+                        
+                        # Expected normal should align with parent facet normal
+                        expected_normal = facet.normal
+                        alignment = np.dot(actual_normal, expected_normal)
+                        
+                        # If normal is backwards, flip vertex order
+                        if alignment < 0:
+                            world_tri = np.array([world_tri[0], world_tri[2], world_tri[1]])  # Swap v2 and v3
+                    
                     all_pts.extend(world_tri)
                     all_faces.append([3, pt_index, pt_index+1, pt_index+2])
                     pt_index += 3
-                    all_temps.append(temps_sf[j])
+                    all_temps.append(temps_sf[j])   
 
             # Compute final-day dome thermal flux arrays for animation (kept in memory)
             sigma = 5.670374419e-8  # Stefan-Boltzmann constant

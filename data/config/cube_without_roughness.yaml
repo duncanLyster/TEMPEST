@@ -1,14 +1,15 @@
 # To run the model, run the following command:
-# python tempest.py --config data/config/dinkinesh_base.yaml
+# python tempest.py --config data/config/cube_without_roughness.yaml
 
-# This config file has been set up for the Dinkinesh model using parameters from the Nature paper.
+# This config file has been set up for cube shape model for fast roughness comparison.
+# This version has roughness DISABLED for comparison study.
 
 # General settings
 silent_mode: false                  # Set to true when running batch jobs (suppresses most console output)
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "dinkinesh.stl"  # Name of the shape model file in data/shape_models/
+shape_model_file: "500m_cube.stl"  # Name of the shape model file in data/shape_models/
 shape_model_directory: "data/shape_models/"    
 
 # Physical parameters
@@ -48,7 +49,7 @@ density: 1000                   # kg/m³
 specific_heat_capacity: 1000    # J/kg·K
 
 # Animation settings
-animate_final_day_temp_distribution: true  # 3D animation of final day temperatures
+animate_final_day_temp_distribution: true  # 3D animation of final day temperatures (disabled for comparison)
 animate_subfacets: false                   # Animate temperatures for sub-facets
 subfacet_facet_index: 37                   # Parent facet index for sub-facet visualization
 animate_shadowing: false                   # 3D animation showing insolation and shadowing
@@ -57,7 +58,7 @@ fixed_camera_phi: 0.7854                   # Azimuth angle (radians) of camera d
 use_precomputed_viewed_temps: true         # Whether to use precomputed viewed-temperature per facet based on viewing geometry (phase effects of thermal emission)
 
 # Plotting settings for individual facet properties 
-plotted_facet_index: 1220                 # Index of facet to plot detailed temperature evolution
+plotted_facet_index: 5                     # Index of facet to plot detailed temperature evolution (cube has fewer facets)
 plot_insolation_curve: false              # Plot insolation for a facet
 plot_initial_temp_histogram: false        # Plot initial temperature distribution of all facets
 plot_final_day_all_layers_temp_distribution: false # Plot final day temperature distribution for all layers including subsurface
@@ -74,7 +75,7 @@ show_thermal_phase_curve: false
 save_thermal_phase_curve_data: false
 
 # Surface Roughness Model (kernel-based)
-apply_kernel_based_roughness: true        # Master switch for kernel-based roughness
+apply_kernel_based_roughness: false       # Master switch for kernel-based roughness - DISABLED for comparison
 roughness_kernel: 'spherical_cap'          # 'spherical_cap' is the only option currently supported
 kernel_subfacets_count: 100                # Number of sub-facets per kernel patch
 kernel_profile_angle_degrees: 90           # Controls curvature for 'spherical_cap' kernel
