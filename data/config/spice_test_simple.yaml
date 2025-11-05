@@ -1,0 +1,70 @@
+# Simple SPICE test configuration
+# Uses minimal setup for quick validation
+
+# General settings
+silent_mode: false
+remote: false
+
+# SPICE Configuration - Minimal setup
+use_spice: true
+spice_kernels:
+  - "kernels/naif0012.tls"    # Leap seconds
+  - "kernels/pck00010.tpc"    # Planetary constants
+  - "kernels/de430.bsp"        # Planetary ephemeris
+spice_target_body: "EARTH"     # Use Earth as test target (simple)
+spice_observer: "SUN"          # Observe from Sun
+spice_start_time: "2024-01-01T00:00:00"
+spice_duration_hours: 24       # One Earth day
+spice_update_frequency: "per_day"  # Fast: only update once
+spice_illumination_aberration: "NONE"  # Faster: no aberration
+
+# File paths - Use small shape model
+shape_model_file: "500m_ico_sphere_80_facets.stl"
+shape_model_directory: "data/shape_models/"
+
+# Physical parameters - Simple values for testing
+thermal_inertia: 50
+emissivity: 0.9
+albedo: 0.1
+beaming_factor: 1.0
+
+# Model structure - Minimal for speed
+n_layers: 20
+convergence_method: "mean"
+convergence_target: 0.5  # Relaxed for quick convergence
+max_days: 3              # Just 3 days
+min_days: 1
+
+# Orbital parameters (will be overridden by SPICE)
+solar_luminosity: 3.8642e+26
+rotation_period_hours: 24
+solar_distance_au: 1.0
+ra_degrees: 0       # Not used in SPICE mode but required
+dec_degrees: 90     # Not used in SPICE mode but required
+sunlight_direction: [1, 0, 0]  # Not used in SPICE mode but required
+
+# Fast computation settings
+n_jobs: 4
+chunk_size: 20
+include_shadowing: true
+n_scatters: 0            # Disable scattering for speed
+include_self_heating: false
+scattering_lut: "lambertian.npy"
+emission_lut: "lambertian_epf.npy"
+temp_solver: "tempest_standard"
+vf_rays: 100             # Reduced for speed
+
+# Solver parameters
+density: 1200
+specific_heat_capacity: 750
+
+# Disable animations/plotting
+animate_final_day_temp_distribution: false
+animate_subfacets: false
+animate_shadowing: false
+plot_insolation_curve: false
+calculate_visible_phase_curve: false
+calculate_thermal_phase_curve: false
+apply_kernel_based_roughness: false
+calculate_energy_terms: false
+

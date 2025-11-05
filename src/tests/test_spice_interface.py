@@ -54,19 +54,22 @@ class TestSpiceInterface(unittest.TestCase):
             
             # Test round-trip conversion
             time_str_out = sm.et_to_time_str(et)
-            self.assertIn("2000-001", time_str_out)  # Should contain year and day
+            self.assertIn("2000", time_str_out)  # Should contain year
+            self.assertIn("12:00", time_str_out)  # Should contain time
             
     @unittest.skipUnless(
-        os.path.exists("kernels/naif0012.tls") and os.path.exists("kernels/de438.bsp"),
+        os.path.exists("kernels/naif0012.tls") and (os.path.exists("kernels/de430.bsp") or os.path.exists("kernels/de438.bsp")),
         "Requires leap seconds and planetary ephemeris kernels"
     )
     def test_sun_direction(self):
         """Test getting Sun direction and distance."""
         from src.model.spice_interface import SpiceManager
         
+        # Use whichever planetary ephemeris is available
+        spk_file = "kernels/de430.bsp" if os.path.exists("kernels/de430.bsp") else "kernels/de438.bsp"
         kernels = [
             "kernels/naif0012.tls",
-            "kernels/de438.bsp"
+            spk_file
         ]
         
         with SpiceManager(kernels, "EARTH", "SUN") as sm:

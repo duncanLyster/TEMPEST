@@ -65,4 +65,9 @@ dist/
 
 # Ignore auto-generated config files
 data/config/*_TI_*.yaml
-data/config/optimiser_runs/
+data/config/optimiser_runs/# SPICE kernels - download from NAIF
+kernels/*.bsp
+kernels/*.bc
+kernels/*.tls
+kernels/*.tpc
+*.png

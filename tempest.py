@@ -884,34 +884,34 @@ def main():
             normalized=True,
             plot=True
         )
+    
+        # Save the visible phase curve data to a CSV file
+        if config.save_visible_phase_curve_data:
+            locations = Locations()
+            locations.ensure_directories_exist()  # Ensure output directories exist
+            # Create name using shape model name and time
+            filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
+            output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_visible_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+            df = pd.DataFrame({
+                'Phase Angle (degrees)': phase_angles,
+                'Brightness Value': brightness_values
+            })
+            df.to_csv(output_csv_path, index=False)
 
-    # Save the visible phase curve data to a CSV file
-    if config.save_visible_phase_curve_data:
-        locations = Locations()
-        locations.ensure_directories_exist()  # Ensure output directories exist
-        # Create name using shape model name and time
-        filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
-        output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_visible_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
-        df = pd.DataFrame({
-            'Phase Angle (degrees)': phase_angles,
-            'Brightness Value': brightness_values
-        })
-        df.to_csv(output_csv_path, index=False)
+            # Create and save the phase curve plot
+            plt.figure()  # Create a new figure
+            plt.plot(phase_angles, brightness_values, label='Brightness vs Phase Angle')  # Plot the data
+            plt.xlabel('Phase Angle (degrees)')
+            plt.ylabel('Brightness Value')
+            plt.title('Visible Phase Curve')
+            plt.legend()
+            
+            # Save the plot
+            output_image_path = output_csv_path.replace('.csv', '.png')
+            plt.savefig(output_image_path)  # Save the figure as a .png file
+            plt.close()  # Close the figure after saving to avoid displaying it in non-interactive environments
 
-        # Create and save the phase curve plot
-        plt.figure()  # Create a new figure
-        plt.plot(phase_angles, brightness_values, label='Brightness vs Phase Angle')  # Plot the data
-        plt.xlabel('Phase Angle (degrees)')
-        plt.ylabel('Brightness Value')
-        plt.title('Visible Phase Curve')
-        plt.legend()
-        
-        # Save the plot
-        output_image_path = output_csv_path.replace('.csv', '.png')
-        plt.savefig(output_image_path)  # Save the figure as a .png file
-        plt.close()  # Close the figure after saving to avoid displaying it in non-interactive environments
-
-        conditional_print(config.silent_mode,  f"Visible phase curve data exported to {output_csv_path}")
+            conditional_print(config.silent_mode,  f"Visible phase curve data exported to {output_csv_path}")
 
     if config.calculate_thermal_phase_curve:
         phase_angles, brightness_values = calculate_phase_curve(
@@ -924,35 +924,35 @@ def main():
             normalized=False,
             plot=config.show_thermal_phase_curve
         )
-
-    # Save the thermal phase curve data to a CSV file
-    if config.save_thermal_phase_curve_data:
-        locations = Locations()
-        locations.ensure_directories_exist()  # Ensure output directories exist
-        # Create name using shape model name and time
-        filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
-        output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_thermal_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
-        df = pd.DataFrame({
-            'Phase Angle (degrees)': phase_angles,
-            'Brightness Value': brightness_values
-        })
-        df.to_csv(output_csv_path, index=False)
         
-        # Create and save the thermal phase curve plot
-        plt.figure()  # Create a new figure
-        plt.plot(phase_angles, brightness_values, label='Thermal Brightness vs Phase Angle')
-        plt.xlabel('Phase Angle (degrees)')
-        plt.ylabel('Thermal Brightness Value')
-        plt.title('Thermal Phase Curve')
-        plt.legend()
-        
-        # Save the plot
-        output_image_path = output_csv_path.replace('.csv', '.png')
-        plt.savefig(output_image_path)  # Save the figure as a .png file
-        plt.close()  # Close the figure after saving to avoid displaying it in non-interactive environments
+        # Save the thermal phase curve data to a CSV file
+        if config.save_thermal_phase_curve_data:
+            locations = Locations()
+            locations.ensure_directories_exist()  # Ensure output directories exist
+            # Create name using shape model name and time
+            filename = os.path.basename(config.path_to_shape_model_file).replace('.stl', '')
+            output_csv_path = os.path.join(locations.phase_curve_data, f'{filename}_thermal_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.csv')
+            df = pd.DataFrame({
+                'Phase Angle (degrees)': phase_angles,
+                'Brightness Value': brightness_values
+            })
+            df.to_csv(output_csv_path, index=False)
+            
+            # Create and save the thermal phase curve plot
+            plt.figure()  # Create a new figure
+            plt.plot(phase_angles, brightness_values, label='Thermal Brightness vs Phase Angle')
+            plt.xlabel('Phase Angle (degrees)')
+            plt.ylabel('Thermal Brightness Value')
+            plt.title('Thermal Phase Curve')
+            plt.legend()
+            
+            # Save the plot
+            output_image_path = output_csv_path.replace('.csv', '.png')
+            plt.savefig(output_image_path)  # Save the figure as a .png file
+            plt.close()  # Close the figure after saving to avoid displaying it in non-interactive environments
 
-        # Notify user
-        conditional_print(config.silent_mode, f"Thermal phase curve data exported to {output_csv_path}")
+            # Notify user
+            conditional_print(config.silent_mode, f"Thermal phase curve data exported to {output_csv_path}")
 
     conditional_print(config.silent_mode,  f"Model run complete.\n")
     
@@ -1003,6 +1003,9 @@ def main():
         simulation.cleanup_spice()
 
     # Export insolation and temperature data for specific facets with local time shifts
+    # NOTE: This section is user-specific and should be removed or adapted for your model
+    # Commented out to avoid index errors with different shape models
+    """
     print("Exporting insolation and temperature data for facets 451, 186, 498 with local time shifts...")
     
     # Define facets and their local time shifts in degrees
@@ -1050,6 +1053,7 @@ def main():
     print(f"\nData exported successfully:")
     print(f"  Insolation: {insolation_csv}")
     print(f"  Temperature: {temperature_csv}")
+    """
 
 # Call the main program with interrupt handling
 if __name__ == "__main__":
