@@ -12,3 +12,4 @@ pyvista
 vtk
 pyyaml
 h5py
+spiceypy

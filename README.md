@@ -8,6 +8,7 @@ This Python script simulates diurnal temperature variations of a solar system bo
 - Calculates insolation and temperature arrays for each model facet, iterating until model convergence.
 - Visualises results and saves for further analysis.
 - SI units are standard, exceptions are clearly stated.
+- **NEW**: SPICE integration for realistic mission scenarios with time-varying geometry and observer viewing angles.
 
 ## How to Get Started
 You can watch this video which takes you through from download to running TEMPEST on your own computer: https://youtu.be/0_YJEAbp2vQ
@@ -28,6 +29,31 @@ To adapt the model to your own purposes start by updating settings including mat
 Tips:
 Use and Integrated Development Environment (IDE) for example VS Code (download at https://code.visualstudio.com/) for editing your config.yaml file, and to inspect/edit any of the source code. 
 If your shape model is not in ASCII .stl format, you can use Blender (download at https://www.blender.org/) to convert it.
+
+## SPICE Integration (New!)
+
+TEMPEST now supports NASA's SPICE toolkit for realistic mission modeling:
+
+- **Time-varying solar illumination**: Account for orbital eccentricity and varying solar distance
+- **Body rotation from kernels**: Use actual rotation states including tumbling and precession
+- **Observer geometry**: Calculate radiances as seen by spacecraft or telescopes
+- **Mission-specific scenarios**: Model real observations with spacecraft trajectories
+
+### Quick Start with SPICE
+
+```bash
+# 1. Install SpiceyPy (included in requirements.txt)
+pip install spiceypy
+
+# 2. Download SPICE kernels from NAIF (see documentation/SPICE_GUIDE.md)
+# 3. Run with a SPICE-enabled config
+python tempest.py --config data/config/bennu_spice_example.yaml
+
+# 4. Validate SPICE setup
+python scripts/validate_spice_geometry.py --config data/config/bennu_spice_example.yaml
+```
+
+**Full documentation**: See [SPICE Integration Guide](documentation/SPICE_GUIDE.md) for detailed instructions, kernel sources, and examples.
 
 ## Model Architecture
 See below flowchart from my 2024 EPSC poster presentation (https://presentations.copernicus.org/EPSC2024/EPSC2024-1121_presentation.pdf) which gives more detail on the model architecture. 

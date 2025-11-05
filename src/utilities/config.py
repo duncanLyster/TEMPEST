@@ -73,6 +73,18 @@ class Config:
         self.ra_degrees = self.config_data.get('ra_degrees', 0)
         self.dec_degrees = self.config_data.get('dec_degrees', 90)
         
+        # SPICE configuration parameters
+        self.use_spice = self.config_data.get('use_spice', False)
+        self.spice_kernels = self.config_data.get('spice_kernels', [])
+        self.spice_target_body = self.config_data.get('spice_target_body', None)
+        self.spice_observer = self.config_data.get('spice_observer', 'SUN')
+        self.spice_start_time = self.config_data.get('spice_start_time', None)
+        self.spice_duration_hours = self.config_data.get('spice_duration_hours', None)
+        self.spice_update_frequency = self.config_data.get('spice_update_frequency', 'per_timestep')
+        self.spice_illumination_aberration = self.config_data.get('spice_illumination_aberration', 'LT+S')
+        self.observer_fov_degrees = self.config_data.get('observer_fov_degrees', None)
+        self.observer_position_manual = self.config_data.get('observer_position_manual', None)
+        
         # Surface Roughness Model settings (kernel-based)
         self.apply_kernel_based_roughness = self.config_data.get('apply_kernel_based_roughness', False)
         self.roughness_kernel = self.config_data.get('roughness_kernel', 'spherical_cap')
@@ -148,3 +160,47 @@ class Config:
             return 1
             
         return self.n_jobs
+    
+    def validate_spice_config(self):
+        """
+        Validate SPICE configuration parameters.
+        Raises ValueError if required parameters are missing when use_spice is True.
+        """
+        if not self.use_spice:
+            return  # No validation needed if SPICE is not enabled
+            
+        # Check required parameters
+        if not self.spice_kernels:
+            raise ValueError("SPICE mode enabled but no kernel files specified in 'spice_kernels'")
+            
+        if not self.spice_target_body:
+            raise ValueError("SPICE mode enabled but 'spice_target_body' not specified")
+            
+        if not self.spice_start_time:
+            raise ValueError("SPICE mode enabled but 'spice_start_time' not specified")
+            
+        if not self.spice_duration_hours:
+            raise ValueError("SPICE mode enabled but 'spice_duration_hours' not specified")
+            
+        # Validate update frequency
+        valid_frequencies = ['per_timestep', 'per_day', 'static']
+        if self.spice_update_frequency not in valid_frequencies:
+            warnings.warn(
+                f"Invalid spice_update_frequency '{self.spice_update_frequency}'. "
+                f"Must be one of {valid_frequencies}. Using 'per_timestep'.",
+                UserWarning
+            )
+            self.spice_update_frequency = 'per_timestep'
+            
+        # Check that kernel files exist
+        missing_kernels = []
+        for kernel_path in self.spice_kernels:
+            if not os.path.exists(kernel_path):
+                missing_kernels.append(kernel_path)
+                
+        if missing_kernels:
+            warnings.warn(
+                f"The following SPICE kernel files were not found:\n" +
+                "\n".join(f"  - {k}" for k in missing_kernels),
+                UserWarning
+            )

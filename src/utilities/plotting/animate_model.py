@@ -71,6 +71,8 @@ class AnimationState:
         self.last_camera_angles = None  # Only print camera direction when it changes
         self.dome_radius_factor = None
         self.highlights_need_update = False
+        self.sliders_visible = True
+        self.slider_widgets = []
 
 def get_next_color(state):
     color = state.color_cycle[state.color_index % len(state.color_cycle)]
@@ -83,13 +85,15 @@ def on_press(state):
     debug_print(state, f"[DEBUG] Toggled pause to {state.is_paused}")
 
 def move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
-    state.current_frame = (state.current_frame + 1) % state.timesteps_per_day
+    step_size = max(1, state.timesteps_per_day // 100)  # 1/100 of a full rotation
+    state.current_frame = (state.current_frame + step_size) % state.timesteps_per_day
     state.cumulative_rotation = (state.current_frame / state.timesteps_per_day) * 2 * math.pi
     update(None, None, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
     plotter.render()
 
 def move_backward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label):
-    state.current_frame = (state.current_frame - 1) % state.timesteps_per_day
+    step_size = max(1, state.timesteps_per_day // 100)  # 1/100 of a full rotation
+    state.current_frame = (state.current_frame - step_size) % state.timesteps_per_day
     state.cumulative_rotation = (state.current_frame / state.timesteps_per_day) * 2 * math.pi
     update(None, None, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
     plotter.render()
@@ -100,6 +104,15 @@ def reset_camera(state, plotter):
         plotter.camera.focal_point = state.initial_camera_focal_point
         plotter.camera.up = state.initial_camera_up
         plotter.render()
+
+def toggle_sliders(state, plotter):
+    """Toggle visibility of min/max value sliders."""
+    state.sliders_visible = not state.sliders_visible
+    for slider_widget in state.slider_widgets:
+        if slider_widget is not None:
+            slider_widget.GetRepresentation().SetVisibility(state.sliders_visible)
+    plotter.render()
+    debug_print(state, f"[DEBUG] Toggled sliders visibility to {state.sliders_visible}")
 
 def round_up_to_nearest(x, base):
     return base * math.ceil(x / base)
@@ -222,15 +235,25 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                         df = pd.DataFrame(data, index=time_steps)
                         df.index.name = 'Time (fraction of day)'
                         
-                        # Create a valid filename from the axis label
-                        property_name = axis_label.lower().replace(' ', '_')
+                        # Create a valid filename from the axis label - remove all problematic characters
+                        property_name = axis_label.lower().replace(' ', '_').replace('(', '').replace(')', '').replace('/', '_').replace('\\', '_').replace('²', '2').replace('³', '3')
                         timestamp = datetime.datetime.now().strftime("%H%M%S")
                         filename = os.path.join(run_dir, f'{property_name}{property_suffix}_vs_timestep_{timestamp}.csv')
+                        
+                        # Ensure directory exists right before saving
+                        os.makedirs(run_dir, exist_ok=True)
+                        
+                        # Verify directory exists before attempting save
+                        if not os.path.exists(run_dir):
+                            raise IOError(f"Failed to create directory: {run_dir}")
+                        
                         df.to_csv(filename)
                         conditional_print(False, f"Data saved to {filename}")
                         
                     except Exception as e:
+                        import traceback
                         print(f"Error saving data: {e}")
+                        print(f"Full error traceback:\n{traceback.format_exc()}")
                 elif event.key == 't':  # Add time toggle functionality
                     state.use_local_time = not state.use_local_time
                     # Update all existing lines
@@ -573,12 +596,14 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     plotter = pv.Plotter()
     plotter.enable_anti_aliasing()
-    plotter.enable_lightkit()  # Enable dynamic lighting for shading
+    # Disable lightkit for even illumination - colors determined by data only
+    # plotter.enable_lightkit()  # Enable dynamic lighting for shading
     plotter.add_key_event('space', lambda: (setattr(state, 'is_paused', not state.is_paused), setattr(state, 'pause_time', (state.current_frame / state.timesteps_per_day) if state.is_paused else None), debug_print(state, f"[DEBUG] Toggled pause to {state.is_paused}")))
     plotter.add_key_event('Left', lambda: move_backward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
     plotter.add_key_event('Right', lambda: move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
     plotter.add_key_event('c', lambda: clear_selections(state, plotter))
     plotter.add_key_event('r', lambda: reset_camera(state, plotter))  # Add the new key event for camera reset
+    plotter.add_key_event('s', lambda: toggle_sliders(state, plotter))  # Toggle slider visibility
     # Unified view-mode toggle: update both 3D mesh shading and 2D diurnal plot
     def _toggle_view_event():
         state.view_mode = not state.view_mode
@@ -669,14 +694,14 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
             state.fig.canvas.flush_events()
     plotter.add_key_event('v', _toggle_view_event)
 
-    cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
-    plotter.add_mesh(cylinder, color='green')
+    # cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
+    # plotter.add_mesh(cylinder, color='green')
 
     sunlight_start = [sunlight_direction[i] * max_dimension for i in range(3)]
     sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], scale=max_dimension * 0.3)
     plotter.add_mesh(sunlight_arrow, color='yellow')
 
-    plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False, lighting=True, smooth_shading=True)
+    plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False, lighting=False, smooth_shading=True)
 
     plotter.enable_element_picking(callback=lambda picked_mesh: on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_label), mode='cell', show=False, show_message=False)
 
@@ -687,15 +712,19 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     state.initial_camera_up = plotter.camera.up
 
     plotter.scalar_bar.GetLabelTextProperty().SetColor(bar_color)
+    plotter.scalar_bar.GetLabelTextProperty().SetFontSize(24)
+    plotter.scalar_bar.GetLabelTextProperty().SetFontFamilyToTimes()
     plotter.scalar_bar.SetPosition(0.2, 0.05)
     plotter.scalar_bar.GetLabelTextProperty().SetJustificationToCentered()
     plotter.scalar_bar.SetTitle(axis_label)
     plotter.scalar_bar.GetTitleTextProperty().SetColor(text_color_rgb)
+    plotter.scalar_bar.GetTitleTextProperty().SetFontSize(28)
+    plotter.scalar_bar.GetTitleTextProperty().SetFontFamilyToTimes()
 
     min_val = np.min(plotted_variable_array)
     max_val = np.max(plotted_variable_array)
 
-    num_labels = 5
+    num_labels = 2  # Just min and max
 
     def round_to_nice_number(x):
         if x == 0:
@@ -715,7 +744,8 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     nice_min_val = round_to_nice_number(min_val)
     nice_max_val = round_to_nice_number(max_val)
 
-    labels = np.linspace(nice_min_val, nice_max_val, num_labels)
+    # Create labels: just min and max
+    labels = np.array([min_val, max_val])
 
     vtk_labels = vtk.vtkDoubleArray()
     vtk_labels.SetNumberOfValues(len(labels))
@@ -747,32 +777,39 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         pv_mesh.set_active_scalars(axis_label)
         plotter.render()
     
-    # Add sliders for min and max values
-    plotter.add_slider_widget(
+    # Add sliders for min and max values (top left position)
+    min_slider = plotter.add_slider_widget(
         callback=update_min,
         rng=[data_min - range_padding, data_max],
         value=data_min,
         title=f"Min {axis_label}",
-        pointa=(0.025, 0.1),
-        pointb=(0.225, 0.1),
+        pointa=(0.025, 0.90),
+        pointb=(0.225, 0.90),
         style='modern'
     )
     
-    plotter.add_slider_widget(
+    max_slider = plotter.add_slider_widget(
         callback=update_max,
         rng=[data_min, data_max + range_padding],
         value=data_max,
         title=f"Max {axis_label}",
-        pointa=(0.025, 0.15),
-        pointb=(0.225, 0.15),
+        pointa=(0.025, 0.95),
+        pointb=(0.225, 0.95),
         style='modern'
     )
+    
+    # Store slider references for toggling
+    state.slider_widgets = [min_slider, max_slider]
 
-    plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
-    plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'R' - Reset camera\n'V' - Toggle view mode\n(rough models only)", position='upper_left', font_size=10, color=text_color)
+    # plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
+    #plotter.add_text("'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'R' - Reset camera\n'S' - Toggle sliders\n'V' - Toggle view mode\n(rough models only)", position='upper_left', font_size=10, color=text_color)
 
-    info_text = f"Solar Distance: {solar_distance_au} AU\nRotation Period: {rotation_period_hr} hours"
-    plotter.add_text(info_text, position='upper_right', font_size=10, color=text_color)
+    print(f"'Spacebar' - Pause/play\n'Right click' - Select facet\n'C' - Clear selections\n'R' - Reset camera\n'S' - Toggle sliders\n'V' - Toggle view mode\n(rough models only)")
+
+    # Print simulation info to terminal instead of displaying on window
+    print(f"\nSimulation Parameters:")
+    print(f"  Solar Distance: {solar_distance_au} AU")
+    print(f"  Rotation Period: {rotation_period_hr} hours")
 
     plotter.background_color = background_colour
 

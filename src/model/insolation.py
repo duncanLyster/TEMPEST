@@ -23,7 +23,7 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     ''' 
     This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
 
-    TODO: Parallelise this function.
+    Supports both traditional rotation-based geometry and SPICE-based time-varying geometry.
     '''
     # Initialize insolation array with zeros for all facets and timesteps
     insolation_array = np.zeros((len(shape_model), simulation.timesteps_per_day))
@@ -31,13 +31,30 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     # Precompute rotation matrices and rotated sunlight directions
     rotation_matrices = np.zeros((simulation.timesteps_per_day, 3, 3), dtype=np.float64)
     rotated_sunlight_directions = np.zeros((simulation.timesteps_per_day, 3), dtype=np.float64)
+    solar_distances = np.zeros(simulation.timesteps_per_day, dtype=np.float64)
     
-    for t in range(simulation.timesteps_per_day):
-        rotation_matrix = calculate_rotation_matrix(simulation.rotation_axis, 
-                                                 (2 * np.pi / simulation.timesteps_per_day) * t)
-        rotation_matrices[t] = rotation_matrix
-        rotated_sunlight_directions[t] = np.dot(rotation_matrix.T, simulation.sunlight_direction)
-        rotated_sunlight_directions[t] /= np.linalg.norm(rotated_sunlight_directions[t])
+    if simulation.use_spice:
+        # SPICE mode: get geometry from SPICE at each timestep
+        for t in range(simulation.timesteps_per_day):
+            geometry = simulation.get_geometry_at_timestep(t)
+            rotated_sunlight_directions[t] = geometry['sun_direction']
+            solar_distances[t] = geometry['solar_distance_m']
+            
+            # If body orientation is provided, use it; otherwise use identity
+            if 'body_orientation' in geometry:
+                rotation_matrices[t] = geometry['body_orientation']
+            else:
+                rotation_matrices[t] = np.eye(3, dtype=np.float64)
+    else:
+        # Traditional mode: rotation-based geometry
+        solar_distances[:] = simulation.solar_distance_m
+        
+        for t in range(simulation.timesteps_per_day):
+            rotation_matrix = calculate_rotation_matrix(simulation.rotation_axis, 
+                                                     (2 * np.pi / simulation.timesteps_per_day) * t)
+            rotation_matrices[t] = rotation_matrix
+            rotated_sunlight_directions[t] = np.dot(rotation_matrix.T, simulation.sunlight_direction)
+            rotated_sunlight_directions[t] /= np.linalg.norm(rotated_sunlight_directions[t])
 
     # Create chunks for parallel processing
     n_facets = len(shape_model)
@@ -52,6 +69,10 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     positions = np.array([facet.position for facet in shape_model], dtype=np.float64)
     shape_model_vertices = np.array([facet.vertices for facet in shape_model], dtype=np.float64)
     
+    # Get sunlight direction for the main calculation (use first timestep for non-SPICE)
+    base_sunlight_direction = (rotated_sunlight_directions[0] if simulation.use_spice 
+                              else simulation.sunlight_direction.astype(np.float64))
+    
     # Process chunks in parallel
     parallel = Parallel(n_jobs=config.n_jobs, verbose=0)
     results = parallel(
@@ -63,8 +84,8 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
             rotated_sunlight_directions,
             simulation.solar_luminosity,
             simulation.albedo,
-            simulation.solar_distance_m,
-            simulation.sunlight_direction.astype(np.float64),  # Ensure float64
+            solar_distances,  # Now time-varying for SPICE mode
+            base_sunlight_direction,
             config.include_shadowing,
             shape_model_vertices
         )
@@ -90,10 +111,11 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
 @jit(nopython=True)
 def process_insolation_chunk(normals, positions, visible_facets, rotation_matrices, 
                            rotated_sunlight_directions, solar_luminosity, albedo,
-                           solar_distance_m, sunlight_direction, include_shadowing,
+                           solar_distances, sunlight_direction, include_shadowing,
                            shape_model_vertices):
     """
     Process insolation calculations for a chunk of facets using only numba-compatible types.
+    Supports time-varying solar distances for SPICE mode.
     """
     chunk_size = len(normals)
     timesteps = len(rotation_matrices)
@@ -122,12 +144,15 @@ def process_insolation_chunk(normals, positions, visible_facets, rotation_matric
                         visible_facets[i]
                     )
                 
+                # Use time-varying solar distance (supports SPICE mode)
+                solar_dist_t = solar_distances[t] if len(solar_distances) > 1 else solar_distances[0]
+                
                 insolation[i, t] = (
                     solar_luminosity * 
                     (1 - albedo) * 
                     illumination_factor * 
                     cos_zenith_angle / 
-                    (4 * np.pi * solar_distance_m**2)
+                    (4 * np.pi * solar_dist_t**2)
                 )
     
     return insolation

@@ -1,5 +1,5 @@
 # To run the model, run the following command:
-# python tempest.py --config data/config/example_config.yaml
+# python tempest.py --config data/config/leucus_base.yaml
 
 # This config file is set up as a straightforward example and can be saved as a template for your own objects.
 
@@ -8,13 +8,13 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "1995SA-convex-shape.stl"  # Name of the shape model file in data/shape_models/
-shape_model_directory: "private/data/shape_models/"    
+shape_model_file: "leucus_rotated.stl"  # Name of the shape model file in data/shape_models/
+shape_model_directory: "data/shape_models/"    
 
 # Physical parameters
-thermal_inertia:        30    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
+thermal_inertia:        50    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
 emissivity:             0.9         
-albedo:                 0.037              
+albedo:                 0.043               
 beaming_factor:         1.0
 
 # Model structure parameters
@@ -25,12 +25,12 @@ max_days:               20          # Maximum number of days to run simulation
 min_days:               1           # Minimum number of days to run simulation
 
 # Orbital and rotational parameters
-solar_distance_au:      2.5           # TEMPEST treats the object as having a perfect circular orbit
+solar_distance_au:      5.3          # TEMPEST treats the object as having a perfect circular orbit
 solar_luminosity:       3.8642e+26  # Watts (leave this for any solar system objects)
 sunlight_direction:     [1, 0, 0]   # Direction of the Sun relative to the object
-rotation_period_hours:  14.6241          # Rotation period of the object relative to the Sun
-ra_degrees:             0           # Right ascension of the object's pole (0 is the vernal equinox)
-dec_degrees:            90          # Declination of the object's pole (90 is the north pole)
+rotation_period_hours:  445.683     # Rotation period of the object relative to the Sun
+ra_degrees:             0 #247.71      # Right ascension of the object's pole (equatorial coords) - converted from ecliptic (208°, 77°)
+dec_degrees:            90 #58.43       # Declination of the object's pole (equatorial coords)
 
 # Advanced modelling options
 n_jobs:                 16          # Number of CPU cores to use for parallel processing (if set higher than available cores, the model will run on the available cores)
@@ -44,14 +44,14 @@ temp_solver:            "tempest_standard"   # Options: "tempest_standard" or "t
 vf_rays:                1000                 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
 
 # TEMPEST Solver parameters: Used with TI and specific_heat_capacity to derive layer depth and skin depth. These should not affect the final temperature distribution once the model has converged.
-density: 1000                   # kg/m³
-specific_heat_capacity: 1000    # J/kg·K
+density: 1200                   # kg/m³
+specific_heat_capacity: 750    # J/kg·K
 
 # Animation settings
-animate_final_day_temp_distribution: true  # 3D animation of final day temperatures
+animate_final_day_temp_distribution: false  # 3D animation of final day temperatures
 animate_subfacets: false                   # Animate temperatures for sub-facets
 subfacet_facet_index: 37                   # Parent facet index for sub-facet visualization
-animate_shadowing: false                   # 3D animation showing insolation and shadowing
+animate_shadowing: true                   # 3D animation showing insolation and shadowing
 fixed_camera_theta: 1.0472                 # Polar angle (radians) of camera direction
 fixed_camera_phi: 0.7854                   # Azimuth angle (radians) of camera direction
 use_precomputed_viewed_temps: true         # Whether to use precomputed viewed-temperature per facet based on viewing geometry (phase effects of thermal emission)

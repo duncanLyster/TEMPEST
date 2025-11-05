@@ -173,6 +173,17 @@ def main():
 
     # Load setup parameters from JSON file
     simulation = Simulation(config)
+    
+    # Print SPICE information if enabled
+    if config.use_spice:
+        conditional_print(config.silent_mode, "\n=== SPICE Mode Enabled ===")
+        conditional_print(config.silent_mode, f"Target body: {config.spice_target_body}")
+        conditional_print(config.silent_mode, f"Observer: {config.spice_observer}")
+        conditional_print(config.silent_mode, f"Start time: {config.spice_start_time}")
+        conditional_print(config.silent_mode, f"Duration: {config.spice_duration_hours} hours")
+        conditional_print(config.silent_mode, f"Update frequency: {config.spice_update_frequency}")
+        conditional_print(config.silent_mode, f"Solar distance range: {simulation.spice_solar_distances.min()/1.496e11:.4f} - {simulation.spice_solar_distances.max()/1.496e11:.4f} AU")
+        conditional_print(config.silent_mode, "========================\n")
 
     # Setup simulation
     try:
@@ -427,7 +438,7 @@ def main():
                           animation_frames=200, 
                           save_animation=False, 
                           save_animation_name='shadowing_animation.gif', 
-                          background_colour = 'black')
+                          background_colour = 'white')
 
     conditional_print(config.silent_mode,  f"Calculating initial temperatures.\n")
 
@@ -453,7 +464,7 @@ def main():
     thermal_data.visible_facets = numba_visible_facets
 
     if config.animate_secondary_radiation_view_factors:
-        selected_facet = 1454  # Change this to the index of the facet you're interested in
+        selected_facet = 4270  # Change this to the index of the facet you're interested in
         
         # Get the indices and view factors of contributing facets
         contributing_indices = thermal_data.visible_facets[selected_facet]
@@ -481,13 +492,13 @@ def main():
                     simulation.solar_distance_au,              
                     simulation.rotation_period_hours,
                     config.emissivity,
-                    colour_map='viridis', 
+                    colour_map='gist_ncar', 
                     plot_title=f'Contributing Facets for Facet {selected_facet}', 
                     axis_label='View Factors Value', 
                     animation_frames=1, 
                     save_animation=False, 
                     save_animation_name=f'contributing_facets_{selected_facet}.png', 
-                    background_colour='black')
+                    background_colour='white')
         
     if config.animate_secondary_contributions:
         # Calculate the sum of secondary radiation view factors for each facet
@@ -508,7 +519,7 @@ def main():
                     animation_frames=1, 
                     save_animation=False, 
                     save_animation_name='secondary_radiation.png', 
-                    background_colour='black')
+                    background_colour='white')
 
     conditional_print(config.silent_mode,  f"Running main simulation loop.\n")
     conditional_print(config.silent_mode,  f"Convergence target: {simulation.convergence_target} K with {config.convergence_method} convergence method.\n")
@@ -830,7 +841,7 @@ def main():
                 animation_frames=200, 
                 save_animation=False, 
                 save_animation_name='temperature_animation.gif', 
-                background_colour='black')
+                background_colour='white')
 
     if config.plot_final_day_comparison and not config.silent_mode:
         conditional_print(config.silent_mode,  f"Saving final day temperatures for facet to CSV file.\n")
@@ -944,18 +955,101 @@ def main():
         conditional_print(config.silent_mode, f"Thermal phase curve data exported to {output_csv_path}")
 
     conditional_print(config.silent_mode,  f"Model run complete.\n")
+    
+    # Calculate observer radiances if SPICE mode with observer defined
+    if config.use_spice and config.spice_observer and config.spice_observer.upper() != "SUN":
+        try:
+            from src.model.observer import Observer
+            from src.model.radiance import calculate_radiance_timeseries
+            
+            conditional_print(config.silent_mode, f"Calculating observed radiances for {config.spice_observer}...")
+            
+            # Create observer
+            observer = Observer(
+                name=config.spice_observer,
+                spice_manager=simulation.spice_manager,
+                fov_degrees=config.observer_fov_degrees
+            )
+            
+            # Calculate thermal radiance timeseries
+            radiance_result = calculate_radiance_timeseries(
+                shape_model,
+                thermal_data,
+                simulation,
+                config,
+                observer,
+                radiance_type='thermal'
+            )
+            
+            # Export radiance data
+            locations = Locations()
+            locations.ensure_directories_exist()
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            radiance_output_path = os.path.join(locations.remote_outputs, f"observer_radiances_{timestamp}.csv")
+            
+            radiance_df = pd.DataFrame({
+                'Timestep': radiance_result['times'],
+                'Total_Radiance_W_m2_sr': radiance_result['radiances']
+            })
+            radiance_df.to_csv(radiance_output_path, index=False)
+            
+            conditional_print(config.silent_mode, f"Observer radiances saved to {radiance_output_path}")
+            
+        except Exception as e:
+            conditional_print(config.silent_mode, f"Warning: Could not calculate observer radiances: {e}")
+    
+    # Cleanup SPICE resources
+    if config.use_spice:
+        simulation.cleanup_spice()
 
-    # Export insolation and temperature data for facets 0 and 1
-    print("Exporting insolation and temperature for facets 0 and 1...")
-    degrees = np.linspace(0, 360, simulation.timesteps_per_day, endpoint=False)
-    os.makedirs('insolation_data', exist_ok=True)
-    os.makedirs('temperature_data', exist_ok=True)
-    for idx in [0, 1]:
-        df_ins = pd.DataFrame({'rotation_deg': degrees, 'insolation_Wm2': thermal_data.insolation[idx]})
-        df_ins.to_csv(f'insolation_data/facet_{idx}.csv', index=False)
-        df_temp = pd.DataFrame({'rotation_deg': degrees, 'temperature_K': result['final_day_temperatures'][idx]})
-        df_temp.to_csv(f'temperature_data/facet_{idx}.csv', index=False)
-        print(f"  facet {idx}: insolation_data/facet_{idx}.csv, temperature_data/facet_{idx}.csv")
+    # Export insolation and temperature data for specific facets with local time shifts
+    print("Exporting insolation and temperature data for facets 451, 186, 498 with local time shifts...")
+    
+    # Define facets and their local time shifts in degrees
+    facet_info = {
+        264: -114.9,  # High lat degrees shift
+        273: -151.8,  # Mid lat
+        444: 176.3   # Low lat
+    }
+    
+    # Create output directories
+    os.makedirs('facet_data', exist_ok=True)
+    
+    # Create local time array (0-360 degrees, one full rotation)
+    local_time_degrees = np.linspace(0, 360, simulation.timesteps_per_day, endpoint=False)
+    
+    # Prepare data dictionaries for the two CSV files
+    insolation_data = {'Local_Time_deg': local_time_degrees}
+    temperature_data = {'Local_Time_deg': local_time_degrees}
+    
+    for facet_idx, shift_degrees in facet_info.items():
+        # Convert degree shift to timesteps
+        shift_timesteps = int(round((shift_degrees / 360.0) * simulation.timesteps_per_day))
+        
+        # Get data for this facet and apply shift
+        # Positive shift means the data is shifted forward (rolled to the right)
+        shifted_insolation = np.roll(thermal_data.insolation[facet_idx], shift_timesteps)
+        shifted_temperature = np.roll(result['final_day_temperatures'][facet_idx], shift_timesteps)
+        
+        # Add to dictionaries with facet index as column name
+        insolation_data[f'Facet_{facet_idx}'] = shifted_insolation
+        temperature_data[f'Facet_{facet_idx}'] = shifted_temperature
+        
+        print(f"  Facet {facet_idx}: shifted by {shift_degrees} degrees ({shift_timesteps} timesteps)")
+    
+    # Create DataFrames and export to CSV
+    df_insolation = pd.DataFrame(insolation_data)
+    df_temperature = pd.DataFrame(temperature_data)
+    
+    insolation_csv = 'facet_data/insolation_local_time.csv'
+    temperature_csv = 'facet_data/temperature_local_time.csv'
+    
+    df_insolation.to_csv(insolation_csv, index=False)
+    df_temperature.to_csv(temperature_csv, index=False)
+    
+    print(f"\nData exported successfully:")
+    print(f"  Insolation: {insolation_csv}")
+    print(f"  Temperature: {temperature_csv}")
 
 # Call the main program with interrupt handling
 if __name__ == "__main__":
@@ -963,4 +1057,16 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\nRun interrupted by user (Ctrl-C). Exiting.")
+        sys.exit(1)
+    except Exception as e:
+        # Ensure SPICE cleanup happens even on error
+        import traceback
+        print(f"\nError during execution: {e}")
+        traceback.print_exc()
+        try:
+            # Try to get the simulation object and cleanup SPICE
+            if 'simulation' in locals() and hasattr(locals()['simulation'], 'cleanup_spice'):
+                locals()['simulation'].cleanup_spice()
+        except:
+            pass
         sys.exit(1)

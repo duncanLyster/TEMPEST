@@ -1,5 +1,5 @@
 # To run the model, run the following command:
-# python tempest.py --config data/config/example_config.yaml
+# python tempest.py --config data/config/itokawa_config.yaml
 
 # This config file is set up as a straightforward example and can be saved as a template for your own objects.
 
@@ -8,13 +8,13 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "1995SA-convex-shape.stl"  # Name of the shape model file in data/shape_models/
-shape_model_directory: "private/data/shape_models/"    
+shape_model_file: "itokawa_5k.stl"  # Name of the shape model file in data/shape_models/
+shape_model_directory: "data/shape_models/"    
 
 # Physical parameters
-thermal_inertia:        30    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
+thermal_inertia:        700    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
 emissivity:             0.9         
-albedo:                 0.037              
+albedo:                 0.01              
 beaming_factor:         1.0
 
 # Model structure parameters
@@ -22,19 +22,19 @@ n_layers:               45          # Number of depth layers in thermal model - 
 convergence_method:     "mean"      # Method to determine convergence: 'mean' or 'max' temperature difference between days
 convergence_target:     0.1         # Target temperature difference between days for convergence in K. Higher values will converge faster.
 max_days:               20          # Maximum number of days to run simulation
-min_days:               1           # Minimum number of days to run simulation
+min_days:               2           # Minimum number of days to run simulation
 
 # Orbital and rotational parameters
-solar_distance_au:      2.5           # TEMPEST treats the object as having a perfect circular orbit
+solar_distance_au:      1           # TEMPEST treats the object as having a perfect circular orbit
 solar_luminosity:       3.8642e+26  # Watts (leave this for any solar system objects)
 sunlight_direction:     [1, 0, 0]   # Direction of the Sun relative to the object
-rotation_period_hours:  14.6241          # Rotation period of the object relative to the Sun
+rotation_period_hours:  12          # Rotation period of the object relative to the Sun
 ra_degrees:             0           # Right ascension of the object's pole (0 is the vernal equinox)
 dec_degrees:            90          # Declination of the object's pole (90 is the north pole)
 
 # Advanced modelling options
-n_jobs:                 16          # Number of CPU cores to use for parallel processing (if set higher than available cores, the model will run on the available cores)
-chunk_size:             10          # Number of facets to process in each parallel batch
+n_jobs:                 4          # Number of CPU cores to use for parallel processing (if set higher than available cores, the model will run on the available cores)
+chunk_size:             100          # Number of facets to process in each parallel batch
 include_shadowing:      true        # Recommended to keep this as True for most cases
 n_scatters:             0           # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
 include_self_heating:   false                # Whether to include thermal radiation between facets
@@ -50,11 +50,11 @@ specific_heat_capacity: 1000    # J/kg·K
 # Animation settings
 animate_final_day_temp_distribution: true  # 3D animation of final day temperatures
 animate_subfacets: false                   # Animate temperatures for sub-facets
-subfacet_facet_index: 37                   # Parent facet index for sub-facet visualization
+subfacet_facet_index: 4642                   # Parent facet index for sub-facet visualization
 animate_shadowing: false                   # 3D animation showing insolation and shadowing
 fixed_camera_theta: 1.0472                 # Polar angle (radians) of camera direction
 fixed_camera_phi: 0.7854                   # Azimuth angle (radians) of camera direction
-use_precomputed_viewed_temps: true         # Whether to use precomputed viewed-temperature per facet based on viewing geometry (phase effects of thermal emission)
+use_precomputed_viewed_temps: false         # Whether to use precomputed viewed-temperature per facet based on viewing geometry (phase effects of thermal emission)
 
 # Plotting settings for individual facet properties 
 plotted_facet_index: 1220                 # Index of facet to plot detailed temperature evolution

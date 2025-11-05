@@ -2,6 +2,7 @@
 
 import numpy as np
 from src.utilities.locations import Locations
+from typing import Optional
 
 class Simulation:
     def __init__(self, config):
@@ -9,7 +10,13 @@ class Simulation:
         Initialize the simulation using the provided Config object.
         """
         self.config = config
+        self.spice_manager = None
+        self.use_spice = config.use_spice
         self.load_configuration()
+        
+        # Initialize SPICE if enabled
+        if self.use_spice:
+            self._initialize_spice()
 
     def load_configuration(self):
         """
@@ -32,12 +39,18 @@ class Simulation:
         self.timesteps_per_day = self.calculate_adaptive_timesteps() # Adaptive timestep for low thermal inertia stability
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
         
-        # Compute unit vector from RA and Dec
+        # Compute unit vector from RA and Dec (only used in non-SPICE mode)
         ra_radians = np.radians(self.ra_degrees)
         dec_radians = np.radians(self.dec_degrees)
         self.rotation_axis = np.array([np.cos(ra_radians) * np.cos(dec_radians), 
                                        np.sin(ra_radians) * np.cos(dec_radians), 
                                        np.sin(dec_radians)])
+        
+        # Initialize arrays for SPICE-derived geometry (populated later if use_spice=True)
+        self.spice_solar_distances = None
+        self.spice_sun_directions = None
+        self.spice_body_orientations = None
+        self.spice_et_times = None
 
     def calculate_adaptive_timesteps(self):
         """
@@ -70,6 +83,116 @@ class Simulation:
             return adaptive_timesteps
         else:
             return timesteps_cfl
+    
+    def _initialize_spice(self):
+        """Initialize SPICE manager and precompute geometry."""
+        from src.model.spice_interface import SpiceManager
+        
+        # Validate SPICE configuration
+        self.config.validate_spice_config()
+        
+        # Create SPICE manager
+        self.spice_manager = SpiceManager(
+            kernel_paths=self.config.spice_kernels,
+            target_body=self.config.spice_target_body,
+            observer=self.config.spice_observer,
+            aberration_correction=self.config.spice_illumination_aberration
+        )
+        
+        # Convert start time to ephemeris time
+        et_start = self.spice_manager.time_str_to_et(self.config.spice_start_time)
+        
+        # If duration is provided, use it; otherwise use the rotation period
+        if self.config.spice_duration_hours:
+            duration_seconds = self.config.spice_duration_hours * 3600
+        else:
+            duration_seconds = self.rotation_period_s
+        
+        # Create time array based on update frequency
+        if self.config.spice_update_frequency == 'static':
+            # Single geometry for entire simulation
+            et_array = np.array([et_start])
+        elif self.config.spice_update_frequency == 'per_day':
+            # One geometry per day (using max_days)
+            et_array = np.linspace(et_start, et_start + duration_seconds, 
+                                  self.config.max_days + 1)
+        else:  # per_timestep
+            # One geometry per timestep
+            et_array = np.linspace(et_start, et_start + duration_seconds,
+                                  self.timesteps_per_day)
+        
+        # Precompute all geometry
+        geometry = self.spice_manager.get_geometry_at_timesteps(
+            et_array, compute_orientations=True
+        )
+        
+        self.spice_et_times = geometry['et_times']
+        self.spice_solar_distances = geometry['solar_distances']
+        self.spice_sun_directions = geometry['sun_directions']
+        
+        # Body orientations might not be available for all bodies
+        if 'body_orientations' in geometry:
+            self.spice_body_orientations = geometry['body_orientations']
+        
+        # Update simulation parameters based on average SPICE values
+        avg_solar_distance_m = np.mean(self.spice_solar_distances)
+        self.solar_distance_au = avg_solar_distance_m / 1.496e11
+        self.solar_distance_m = avg_solar_distance_m
+        
+    def get_geometry_at_timestep(self, timestep: int) -> dict:
+        """
+        Get geometry (sun direction, distance, orientation) at a timestep.
+        
+        Args:
+            timestep: Timestep index (0 to timesteps_per_day-1)
+            
+        Returns:
+            Dictionary with keys:
+                - 'sun_direction': Unit vector pointing to Sun
+                - 'solar_distance_m': Distance to Sun in meters
+                - 'body_orientation': 3x3 rotation matrix (if available)
+        """
+        if not self.use_spice:
+            # Non-SPICE mode: use rotation-based geometry
+            from src.utilities.utils import calculate_rotation_matrix
+            
+            angle = (2 * np.pi / self.timesteps_per_day) * timestep
+            rotation_matrix = calculate_rotation_matrix(self.rotation_axis, angle)
+            
+            # Sun direction in body frame
+            sun_dir = rotation_matrix.T.dot(self.sunlight_direction)
+            sun_dir = sun_dir / np.linalg.norm(sun_dir)
+            
+            return {
+                'sun_direction': sun_dir,
+                'solar_distance_m': self.solar_distance_m,
+                'body_orientation': rotation_matrix
+            }
+        else:
+            # SPICE mode: use precomputed geometry
+            if self.config.spice_update_frequency == 'static':
+                idx = 0
+            elif self.config.spice_update_frequency == 'per_day':
+                # Map timestep to day (assuming one full rotation per call)
+                idx = min(timestep // self.timesteps_per_day, len(self.spice_et_times) - 1)
+            else:  # per_timestep
+                idx = min(timestep, len(self.spice_et_times) - 1)
+            
+            result = {
+                'sun_direction': self.spice_sun_directions[idx],
+                'solar_distance_m': self.spice_solar_distances[idx]
+            }
+            
+            if self.spice_body_orientations is not None:
+                result['body_orientation'] = self.spice_body_orientations[idx]
+                
+            return result
+    
+    def cleanup_spice(self):
+        """Clean up SPICE resources."""
+        if self.spice_manager is not None:
+            self.spice_manager.cleanup()
+            self.spice_manager = None
 
 class ThermalData:
     def __init__(self, n_facets, timesteps_per_day, n_layers, max_days, calculate_energy_terms):

@@ -1,0 +1,116 @@
+# Example SPICE Configuration for Bennu with OSIRIS-REx
+# 
+# This configuration demonstrates how to use SPICE kernels with TEMPEST
+# to model Bennu's thermal behavior as observed by OSIRIS-REx spacecraft.
+#
+# To use this configuration:
+# 1. Download required SPICE kernels from NAIF (https://naif.jpl.nasa.gov/naif/)
+# 2. Update kernel paths below to match your local directory structure
+# 3. Ensure you have the Bennu shape model in your shape_models directory
+# 4. Run: python tempest.py --config data/config/bennu_spice_example.yaml
+
+# General settings
+silent_mode: false
+remote: false
+
+# SPICE Configuration
+use_spice: true
+spice_kernels:
+  # Leap seconds kernel (required) - from NAIF generic_kernels/lsk/
+  - "kernels/naif0012.tls"
+  
+  # Physical constants for Bennu - from OSIRIS-REx mission SPICE archive
+  - "kernels/bennu_v01.tpc"
+  
+  # Bennu orbit (SPK) - from OSIRIS-REx mission archive
+  - "kernels/bennu_spk.bsp"
+  
+  # Bennu rotation/orientation (CK) - from OSIRIS-REx mission archive
+  - "kernels/bennu_ck.bc"
+  
+  # Planetary ephemeris (required for Sun position) - from NAIF generic_kernels/spk/planets/
+  - "kernels/de438.bsp"
+  
+  # OSIRIS-REx spacecraft trajectory - from OSIRIS-REx mission archive
+  - "kernels/orex_v08.bsp"
+
+# SPICE target and observer
+spice_target_body: "BENNU"         # NAIF name or ID (2101955 for Bennu)
+spice_observer: "OSIRIS-REX"       # Observer spacecraft name
+spice_start_time: "2019-03-01T00:00:00"  # UTC time string
+spice_duration_hours: 4.297        # One Bennu rotation period
+spice_update_frequency: "per_timestep"  # Options: "per_timestep", "per_day", "static"
+spice_illumination_aberration: "LT+S"   # Light time + stellar aberration correction
+observer_fov_degrees: 0.8          # OCAMS PolyCam field of view
+
+# File paths
+shape_model_file: "bennu_v20_200k.stl"  # High-res Bennu shape model
+shape_model_directory: "data/shape_models/"
+
+# Physical parameters (from OSIRIS-REx observations)
+thermal_inertia: 310               # W m⁻² K⁻¹ s⁻½ (Rozitis et al. 2020)
+emissivity: 0.9
+albedo: 0.044                      # Bond albedo
+beaming_factor: 1.0
+
+# Model structure parameters
+n_layers: 45
+convergence_method: "mean"
+convergence_target: 0.1
+max_days: 10
+min_days: 3
+
+# Orbital parameters (these will be overridden by SPICE)
+# Values here are used as fallbacks or for non-SPICE calculations
+solar_luminosity: 3.8642e+26      # Watts
+rotation_period_hours: 4.297      # Bennu's rotation period
+solar_distance_au: 1.25            # Approximate (SPICE will provide actual values)
+
+# Advanced modelling options
+n_jobs: 8
+chunk_size: 10
+include_shadowing: true
+n_scatters: 1                     # Reduce for faster computation
+include_self_heating: false
+scattering_lut: "lambertian.npy"
+emission_lut: "lambertian_epf.npy"
+temp_solver: "tempest_standard"
+vf_rays: 1000
+
+# TEMPEST Solver parameters
+density: 1200                     # kg/m³
+specific_heat_capacity: 750      # J/kg·K
+
+# Animation and plotting settings (disabled for faster runs)
+animate_final_day_temp_distribution: false
+animate_subfacets: false
+animate_shadowing: false
+plot_insolation_curve: false
+plot_initial_temp_histogram: false
+plot_final_day_all_layers_temp_distribution: false
+
+# Phase curve calculations
+calculate_visible_phase_curve: false
+calculate_thermal_phase_curve: true   # Calculate thermal phase curve using SPICE geometry
+save_thermal_phase_curve_data: true
+
+# Surface roughness (optional, increases computation time significantly)
+apply_kernel_based_roughness: false
+roughness_kernel: 'spherical_cap'
+kernel_subfacets_count: 100
+kernel_profile_angle_degrees: 90
+kernel_directional_bins: 100
+kernel_dome_radius_factor: 100.0
+intra_facet_scatters: 2
+
+# Debugging
+calculate_energy_terms: false
+
+# Notes:
+# - Kernel file paths are relative to the TEMPEST root directory
+# - Create a "kernels/" directory and download SPICE kernels from NAIF
+# - For Bennu kernels, visit: https://naif.jpl.nasa.gov/pub/naif/OSIRIS-REX/
+# - The model will automatically use SPICE-derived sun positions and distances
+# - Observer radiances will be calculated and saved automatically
+# - Body rotation state will be used from SPICE CK kernels if available
+
