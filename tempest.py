@@ -32,6 +32,7 @@ from numba.typed import List
 from stl import mesh as stl_mesh_module
 from scipy.interpolate import interp1d
 import h5py
+from joblib import Parallel, delayed
 
 # Ensure src directory is in the Python path
 current_dir = Path(__file__).resolve().parent
@@ -216,7 +217,6 @@ def main():
             facet.visible_facets = visible_indices[idx]
         # Precompute dome-to-parent view-factors (parallel across facets)
         conditional_print(config.silent_mode, "Precomputing dome-to-parent view-factors for depressions...")
-        from joblib import Parallel, delayed
         # helper to compute one facet's DP matrix
         def _compute_dp(facet, parent_vertices, parent_areas, vf_rays, dome_radius_factor):
             M = len(facet.dome_facets)
@@ -236,6 +236,7 @@ def main():
             F_dp_local = np.zeros((M, n_parents_local), dtype=np.float64)
             vis = facet.visible_facets
             if len(vis) > 0:
+                # Loop over dome bins - calculate_view_factors uses Numba parallel internally
                 for j in range(M):
                     vals = calculate_view_factors(
                         subj_vertices[j], subj_normals[j], subj_areas[j],
@@ -249,7 +250,8 @@ def main():
         # Time the dome-to-parent view-factor computation with progress
         t_dp_start = time.time()
         dp_list = []
-        # Chunk facets for DP progress display
+        # Chunk facets and process chunks in parallel (avoids nested parallelism with Numba)
+        conditional_print(config.silent_mode, f"Processing DP view factors with {config.n_jobs} parallel workers...")
         facet_chunks = [shape_model[i:i+config.chunk_size] for i in range(0, len(shape_model), config.chunk_size)]
         for chunk in conditional_tqdm(facet_chunks, config.silent_mode, desc="DP chunks"):
             dp_chunk = Parallel(n_jobs=config.n_jobs)(
@@ -335,27 +337,60 @@ def main():
         nF = len(shape_model)
         T = simulation.timesteps_per_day
         dome_flux_th = np.zeros((nF, M, T), dtype=np.float64)
+        
+        # Helper function to process a single facet's depression energetics (parallelizable)
+        def _process_facet_energetics(facet, flux0, wd, config, simulation):
+            """Process depression energetics for a single facet and return results."""
+            if flux0 is None:
+                # Facet not illuminated - return zeros
+                N = len(facet.sub_facets) if len(facet.sub_facets) > 0 else M
+                return (np.zeros(N, dtype=np.float64),
+                        np.zeros(M, dtype=np.float64),
+                        np.zeros(M, dtype=np.float64))
+            
+            # Clear any previous packets and add current incident packet
+            facet.parent_incident_energy_packets = [(flux0, wd, 'solar')]
+            # Process depression energetics
+            facet.process_intra_depression_energetics(config, simulation)
+            # Return results
+            return (facet._last_absorbed_solar.copy(),
+                    facet.depression_outgoing_flux_array_vis.copy(),
+                    facet.depression_outgoing_flux_array_th.copy())
+        
         # Time the roughness coupling loop
         t_coup_start = time.time()
+        conditional_print(config.silent_mode, f"Processing roughness with {config.n_jobs} parallel workers...")
         # Loop over timesteps
         for t in conditional_tqdm(range(simulation.timesteps_per_day), config.silent_mode, desc="Roughness timesteps"):
             # Base insolation and sun dir
             base_ins = thermal_data.insolation[:, t]
             wd = world_dirs[t]
             cos_parent = normals_array.dot(wd)
-            # Process each facet's intra-depression energetics
-            for i, facet in enumerate(shape_model):
+            
+            # Prepare inputs for parallel processing
+            flux_inputs = []
+            for i in range(n_facets):
                 cp = cos_parent[i]
-                if cp <= 0:
-                    continue
-                flux0 = base_ins[i] / ((1 - simulation.albedo) * cp)
-                facet.parent_incident_energy_packets.append((flux0, wd, 'solar'))
-                facet.process_intra_depression_energetics(config, simulation)
-                # Store absorbed solar input
-                facet.depression_thermal_data.insolation[:, t] = facet._last_absorbed_solar
-            # Aggregate outgoing flux arrays across all facets
-            out_vis_all = np.stack([f.depression_outgoing_flux_array_vis for f in shape_model], axis=0)
-            out_th_all  = np.stack([f.depression_outgoing_flux_array_th  for f in shape_model], axis=0)
+                if cp > 0:
+                    flux0 = base_ins[i] / ((1 - simulation.albedo) * cp)
+                    flux_inputs.append((shape_model[i], flux0, wd, config, simulation))
+                else:
+                    flux_inputs.append((shape_model[i], None, wd, config, simulation))
+            
+            # Process all facets in parallel (verbose shows worker info on first iteration)
+            verbose_level = 10 if t == 0 and not config.silent_mode else 0
+            results = Parallel(n_jobs=config.n_jobs, verbose=verbose_level)(
+                delayed(_process_facet_energetics)(*inputs) for inputs in flux_inputs
+            )
+            
+            # Unpack results and update facet states
+            out_vis_all = np.zeros((nF, M), dtype=np.float64)
+            out_th_all = np.zeros((nF, M), dtype=np.float64)
+            for i, (absorbed_solar, out_vis, out_th) in enumerate(results):
+                shape_model[i].depression_thermal_data.insolation[:, t] = absorbed_solar
+                out_vis_all[i] = out_vis
+                out_th_all[i] = out_th
+            
             # Store thermal dome flux for animation
             dome_flux_th[:, :, t] = out_th_all
             # Vectorized coupling: sum over i and dome bins j
