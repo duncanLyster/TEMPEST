@@ -194,7 +194,9 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                             
                         # Prepare data dictionary
                         data = {}
-                        time_steps = [i / state.timesteps_per_day for i in range(plotted_variable_array.shape[1])]
+                        n_timesteps = plotted_variable_array.shape[1]
+                        # Use local time (0-24 hours) instead of fraction of day
+                        time_steps = np.linspace(0, 24, n_timesteps)
                         
                         # Check if we need to calculate view-dependent temperatures
                         if state.view_mode and state.dome_flux_th is not None:
@@ -205,22 +207,43 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                             
                             if view_dependent_temps is not None:
                                 for facet_id in state.highlighted_cell_ids:
-                                    data[f'Facet_{facet_id}_view_dependent'] = view_dependent_temps[facet_id, :]
+                                    # Convert to local time (shift data so noon is at 12:00)
+                                    local_time_data = convert_to_local_time(
+                                        state, view_dependent_temps[facet_id, :],
+                                        state.facet_normals[facet_id],
+                                        state.sunlight_direction,
+                                        state.rotation_axis,
+                                        facet_id)
+                                    data[f'Facet_{facet_id}_view_dependent'] = local_time_data
                                 property_suffix = "_view_dependent"
                             else:
                                 # Fallback to regular data
                                 for facet_id in state.highlighted_cell_ids:
-                                    data[f'Facet_{facet_id}'] = plotted_variable_array[facet_id, :]
+                                    # Convert to local time (shift data so noon is at 12:00)
+                                    local_time_data = convert_to_local_time(
+                                        state, plotted_variable_array[facet_id, :],
+                                        state.facet_normals[facet_id],
+                                        state.sunlight_direction,
+                                        state.rotation_axis,
+                                        facet_id)
+                                    data[f'Facet_{facet_id}'] = local_time_data
                                 property_suffix = ""
                         else:
-                            # Save regular temperature data
+                            # Save regular temperature data converted to local time
                             for facet_id in state.highlighted_cell_ids:
-                                data[f'Facet_{facet_id}'] = plotted_variable_array[facet_id, :]
+                                # Convert to local time (shift data so noon is at 12:00)
+                                local_time_data = convert_to_local_time(
+                                    state, plotted_variable_array[facet_id, :],
+                                    state.facet_normals[facet_id],
+                                    state.sunlight_direction,
+                                    state.rotation_axis,
+                                    facet_id)
+                                data[f'Facet_{facet_id}'] = local_time_data
                             property_suffix = ""
                         
                         # Create DataFrame
                         df = pd.DataFrame(data, index=time_steps)
-                        df.index.name = 'Time (fraction of day)'
+                        df.index.name = 'Local Time (hours)'
                         
                         # Create a valid filename from the axis label
                         property_name = axis_label.lower().replace(' ', '_')
@@ -284,9 +307,51 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
         state.fig.canvas.draw()
         state.fig.canvas.flush_events()
 
+def calculate_facet_lat_lon(vertices, cell_id):
+    """
+    Calculate latitude and longitude of a facet from its centroid position.
+    Uses original unrotated vertex positions to get consistent lat/lon regardless of rotation.
+    
+    Args:
+        vertices: Original unrotated vertex array
+        cell_id: ID of the cell/facet
+        
+    Returns:
+        tuple: (latitude, longitude) in degrees
+    """
+    # Each facet has 3 vertices at indices 3*cell_id, 3*cell_id+1, 3*cell_id+2
+    v1 = vertices[3 * cell_id]
+    v2 = vertices[3 * cell_id + 1]
+    v3 = vertices[3 * cell_id + 2]
+    
+    # Calculate the centroid of the triangle
+    centroid = (v1 + v2 + v3) / 3.0
+    
+    # Convert to spherical coordinates
+    x, y, z = centroid
+    r = np.sqrt(x**2 + y**2 + z**2)
+    
+    # Latitude: angle from equatorial plane (-90 to +90 degrees)
+    latitude = np.degrees(np.arcsin(z / r)) if r > 0 else 0.0
+    
+    # Longitude: angle in equatorial plane (0 to 360 degrees)
+    longitude = np.degrees(np.arctan2(y, x))
+    # Convert from -180 to +180 range to 0 to 360 range
+    if longitude < 0:
+        longitude += 360
+    
+    return latitude, longitude
+
 def on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_label):
     if picked_mesh is not None:
         cell_id = picked_mesh['vtkOriginalCellIds'][0]
+        
+        # Calculate and print latitude/longitude using original unrotated vertices
+        latitude, longitude = calculate_facet_lat_lon(state.original_vertices, cell_id)
+        print(f"\n=== Facet {cell_id} ===")
+        print(f"Latitude:  {latitude:7.2f}°")
+        print(f"Longitude: {longitude:7.2f}°")
+        
         plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variable_array, axis_label)
 
 def convert_to_local_time(state, global_time_data, facet_normal, sunlight_direction, rotation_axis, facet_id):
@@ -491,6 +556,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     state.timesteps_per_day = timesteps_per_day
     state.shape_model_name = path_to_shape_model_file
     state.facet_normals = facet_normals
+    state.original_vertices = vertices  # Store original unrotated vertices for lat/lon calculation
     state.sunlight_direction = sunlight_direction
     state.rotation_axis = rotation_axis
     if emissivity is None:
