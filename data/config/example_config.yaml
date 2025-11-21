@@ -8,7 +8,7 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "500m_ico_sphere_80_facets.stl"  # Name of the shape model file in data/shape_models/
+shape_model_file: "itokawa_5k.stl"  # Name of the shape model file in data/shape_models/
 shape_model_directory: "data/shape_models/"    
 
 # Physical parameters
@@ -30,7 +30,7 @@ solar_luminosity:       3.8642e+26  # Watts (leave this for any solar system obj
 sunlight_direction:     [1, 0, 0]   # Direction of the Sun relative to the object
 rotation_period_hours:  10          # Rotation period of the object relative to the Sun
 ra_degrees:             0           # Right ascension of the object's pole (0 is the vernal equinox)
-dec_degrees:            90          # Declination of the object's pole (90 is the north pole)
+dec_degrees:            90          # Declination of the object's pole (90 is the north pole) BUG: setting to 0 causes the model to crash
 
 # Advanced modelling options
 n_jobs:                 16          # Number of CPU cores to use for parallel processing (if set higher than available cores, the model will run on the available cores)

@@ -287,10 +287,16 @@ def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
 
 class EPFLookupTable:
     """Lookup table for emission phase function values."""
-    def __init__(self, filename):
-        data = np.load(filename)
-        self.angles = data['angles']
-        self.values = data['values']
+    def __init__(self, lut_name):
+        locations = Locations()
+        lut_path = locations.get_emission_lut_path(lut_name)
+        
+        if not os.path.exists(lut_path):
+            raise FileNotFoundError(f"EPF lookup table not found at {lut_path}")
+        
+        data = np.load(lut_path, allow_pickle=True).item()
+        self.angles = data['emission_angles']
+        self.values = data['table']
         
     def query(self, angle):
         """Get EPF value for a given emission angle."""
@@ -351,13 +357,17 @@ def process_thermal_view_factors_chunk(shape_model, thermal_data, epf_lut, start
         visible_facets = thermal_data.visible_facets[i]
         view_factors = thermal_data.secondary_radiation_view_factors[i]
         
-        if len(visible_facets) == 0:
+        # Ensure both arrays have the same length and are not empty
+        if len(visible_facets) == 0 or len(view_factors) == 0:
             chunk_results.append(np.array([]))
             continue
+        
+        if len(visible_facets) != len(view_factors):
+            raise ValueError(f"Mismatch between visible_facets ({len(visible_facets)}) and view_factors ({len(view_factors)}) for facet {i}")
             
         # Calculate emission angles
-        target_centers = np.array([shape_model[idx].center for idx in visible_facets])
-        direction_vectors = target_centers - shape_model[i].center
+        target_centers = np.array([shape_model[idx].position for idx in visible_facets])
+        direction_vectors = target_centers - shape_model[i].position
         direction_vectors /= np.linalg.norm(direction_vectors, axis=1)[:, np.newaxis]
         
         cos_emission = np.einsum('ij,j->i', direction_vectors, shape_model[i].normal)

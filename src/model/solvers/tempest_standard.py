@@ -6,6 +6,8 @@ from src.utilities.utils import conditional_print
 # Standalone numba functions
 @jit(nopython=True)
 def calculate_secondary_radiation(temperatures, visible_facets, view_factors, self_heating_const):
+    if len(visible_facets) == 0 or len(view_factors) == 0:
+        return 0.0
     return self_heating_const * np.sum(temperatures[visible_facets]**4 * view_factors)
 
 @jit(nopython=True)
@@ -100,7 +102,7 @@ class TempestStandardSolver(TemperatureSolver):
                 thermal_data.layer_temperatures,
                 thermal_data.insolation,
                 thermal_data.visible_facets,
-                thermal_data.secondary_radiation_view_factors,
+                thermal_data.thermal_view_factors,
                 const1, const2, const3, self_heating_const,
                 simulation.timesteps_per_day, simulation.n_layers,
                 config.include_self_heating

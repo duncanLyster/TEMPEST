@@ -253,39 +253,73 @@ class Facet:
 
         E_total = flux_val * aperture_area * cos_theta_aperture
 
-        lit_indices = []
-        contribs = []
-        total_contrib = 0.0
-        for i in range(N):
-            cos_theta_i = np.dot(sub_normals[i], d_local)
-            if cos_theta_i <= 0:
-                continue
-            # Shadow check
-            mask = np.arange(N) != i
+        # Vectorized: compute all cosines at once
+        cos_theta_all = sub_normals.dot(d_local)
+        front_facing = cos_theta_all > 0
+        
+        if not front_facing.any():
+            # No subfacets face the incoming direction, distribute evenly
+            e_per = E_total / N
+            for i in range(N):
+                if type_flag in ('solar', 'scattered_visible'):
+                    E0_vis_local[i] = e_per
+                    absorbed_solar += e_per * (1 - albedo)
+                else:
+                    E0_th_local[i] = e_per
+                    absorbed_thermal += e_per * (1 - emissivity)
+            return E0_vis_local, E0_th_local, absorbed_solar, absorbed_thermal
+        
+        # Get indices of front-facing subfacets
+        candidate_indices = np.where(front_facing)[0]
+        n_candidates = len(candidate_indices)
+        
+        # Vectorized shadow check: check all candidates at once
+        d_local_repeated = np.tile(d_local.reshape(1, 3), (n_candidates, 1))
+        candidate_centers = centers[candidate_indices]
+        
+        # For shadow check, each candidate should test against all OTHER subfacets
+        # This is still complex, so we'll do a batch approach per candidate
+        lit_mask = np.ones(n_candidates, dtype=bool)
+        for idx_in_batch, global_idx in enumerate(candidate_indices):
+            mask = np.arange(N) != global_idx
             triangles_for_shadow = sub_triangles[mask]
             indices_for_shadow = np.arange(triangles_for_shadow.shape[0])
             is_lit = calculate_shadowing(
-                centers[i:i+1],
-                d_local.reshape(1,3),
+                centers[global_idx:global_idx+1],
+                d_local.reshape(1, 3),
                 triangles_for_shadow,
                 indices_for_shadow
             )
-            if is_lit == 1:
-                c = sub_areas[i] * cos_theta_i
-                lit_indices.append(i)
-                contribs.append(c)
-                total_contrib += c
-
-        if total_contrib > 1e-9:
-            for idx, c in zip(lit_indices, contribs):
-                e = E_total * (c / total_contrib)
-                if type_flag in ('solar', 'scattered_visible'):
-                    E0_vis_local[idx] = e
-                    absorbed_solar += e * (1 - albedo)
-                else:
-                    E0_th_local[idx] = e
-                    absorbed_thermal += e * (1 - emissivity)
+            lit_mask[idx_in_batch] = (is_lit == 1)
+        
+        lit_candidates = candidate_indices[lit_mask]
+        
+        if len(lit_candidates) > 0:
+            # Compute contributions for lit subfacets
+            contribs = sub_areas[lit_candidates] * cos_theta_all[lit_candidates]
+            total_contrib = contribs.sum()
+            
+            if total_contrib > 1e-9:
+                energies = E_total * (contribs / total_contrib)
+                for idx, e in zip(lit_candidates, energies):
+                    if type_flag in ('solar', 'scattered_visible'):
+                        E0_vis_local[idx] = e
+                        absorbed_solar += e * (1 - albedo)
+                    else:
+                        E0_th_local[idx] = e
+                        absorbed_thermal += e * (1 - emissivity)
+            else:
+                # Distribute evenly among lit subfacets
+                e_per = E_total / len(lit_candidates)
+                for idx in lit_candidates:
+                    if type_flag in ('solar', 'scattered_visible'):
+                        E0_vis_local[idx] = e_per
+                        absorbed_solar += e_per * (1 - albedo)
+                    else:
+                        E0_th_local[idx] = e_per
+                        absorbed_thermal += e_per * (1 - emissivity)
         else:
+            # No lit subfacets, distribute evenly to all
             e_per = E_total / N
             for i in range(N):
                 if type_flag in ('solar', 'scattered_visible'):
@@ -333,10 +367,14 @@ class Facet:
         self.depression_total_absorbed_solar_flux = 0.0
         self.depression_total_absorbed_thermal_flux = 0.0
 
-        # Precompute subfacet geometry arrays once
-        mesh = Facet._canonical_subfacet_mesh
-        normals = np.array([entry['normal'] for entry in mesh], dtype=np.float64)
-        areas = np.array([entry['area'] for entry in mesh], dtype=np.float64)
+        # Precompute subfacet geometry arrays once (cache at class level)
+        if not hasattr(Facet, '_canonical_normals'):
+            mesh = Facet._canonical_subfacet_mesh
+            Facet._canonical_normals = np.array([entry['normal'] for entry in mesh], dtype=np.float64)
+            Facet._canonical_areas = np.array([entry['area'] for entry in mesh], dtype=np.float64)
+        
+        normals = Facet._canonical_normals
+        areas = Facet._canonical_areas
         triangles = Facet._canonical_subfacet_triangles
         centers = Facet._canonical_subfacet_centers
 
@@ -361,9 +399,10 @@ class Facet:
 
         # Convert absorbed power E0_vis (W) into absorbed flux per subfacet area (W/m^2)
         # Note: E0_vis contains total energy on each sub-facet.
-        area_vector = np.array([entry['area'] * self.area for entry in mesh], dtype=np.float64)
-        # Normalize sub-facet areas so their sum equals the aperture area
-        area_vector *= self.area / area_vector.sum()
+        # Use cached normalized areas (canonical areas already sum to 1.0 in most cases)
+        area_vector = areas * self.area
+        norm_factor = self.area / area_vector.sum()
+        area_vector *= norm_factor
         absorbed = (1 - simulation.albedo) * E0_vis
         # Avoid division by zero
         self._last_absorbed_solar = np.where(area_vector > 0, absorbed / area_vector, 0.0)
