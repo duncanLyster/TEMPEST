@@ -28,6 +28,7 @@ from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+from numba import jit
 from numba.typed import List
 from stl import mesh as stl_mesh_module
 from scipy.interpolate import interp1d
@@ -57,7 +58,8 @@ from src.utilities.utils import (
     calculate_black_body_temp,
     conditional_print,
     calculate_rotation_matrix,
-    conditional_tqdm
+    conditional_tqdm,
+    rays_triangles_intersection
 )
 from src.utilities.plotting.plotting import check_remote_and_animate
 
@@ -217,6 +219,58 @@ def main():
             facet.visible_facets = visible_indices[idx]
         # Precompute dome-to-parent view-factors (parallel across facets)
         conditional_print(config.silent_mode, "Precomputing dome-to-parent view-factors for depressions...")
+        
+        # Directional ray-marching for dome-to-parent view factors
+        @jit(nopython=True)
+        def _compute_directional_vf(dome_center, dome_normal, dome_area, parent_vertices_subset, parent_areas_subset):
+            """
+            Compute view factor from dome bin to visible parents using directional ray.
+            """
+            # Shoot ray along dome bin normal direction
+            ray_dir = dome_normal.reshape(1, 3)
+            intersections, t_values = rays_triangles_intersection(
+                dome_center.reshape(1, 3),
+                ray_dir,
+                parent_vertices_subset
+            )
+            
+            # Initialize view factors
+            n_targets = len(parent_vertices_subset)
+            vf = np.zeros(n_targets, dtype=np.float64)
+            
+            if np.any(intersections[0]):
+                # Find which parent facet(s) were hit
+                hit_indices = np.where(intersections[0])[0]
+                if len(hit_indices) > 0:
+                    # Use closest hit
+                    closest_idx = hit_indices[np.argmin(t_values[0, hit_indices])]
+                    
+                    # Compute view factor based on solid angle approximation
+                    # For directional bins, we assume radiation exits in a cone
+                    # View factor ≈ (dome_area / distance²) * cos(angle)
+                    distance = t_values[0, closest_idx]
+                    if distance > 1e-6:
+                        # Get parent facet normal (from triangle vertices)
+                        parent_tri = parent_vertices_subset[closest_idx]
+                        parent_normal = np.cross(
+                            parent_tri[1] - parent_tri[0],
+                            parent_tri[2] - parent_tri[0]
+                        )
+                        parent_normal_norm = np.linalg.norm(parent_normal)
+                        if parent_normal_norm > 1e-9:
+                            parent_normal = parent_normal / parent_normal_norm
+                            
+                            # Cosine factor for receiving parent
+                            cos_parent = abs(np.dot(-ray_dir[0], parent_normal))
+                            
+                            # Solid angle approximation: Ω ≈ A·cos(θ) / r²
+                            solid_angle = dome_area * cos_parent / (distance * distance)
+                            
+                            # View factor from solid angle
+                            vf[closest_idx] = solid_angle * parent_areas_subset[closest_idx] / dome_area
+                            
+            return vf
+        
         # helper to compute one facet's DP matrix
         def _compute_dp(facet, parent_vertices, parent_areas, vf_rays, dome_radius_factor):
             M = len(facet.dome_facets)
@@ -232,15 +286,22 @@ def main():
                 subj_vertices[j] = world_tris
                 subj_normals[j] = facet.dome_rotation.dot(entry['normal'])
                 subj_areas[j] = entry['area'] * (dome_radius_factor * parent_radius)**2
-            # compute view factors only for visible parent facets
+            # compute view factors only for visible parent facets using directional rays
             F_dp_local = np.zeros((M, n_parents_local), dtype=np.float64)
             vis = facet.visible_facets
             if len(vis) > 0:
-                # Loop over dome bins - calculate_view_factors uses Numba parallel internally
+                # Use optimized directional ray marching
                 for j in range(M):
-                    vals = calculate_view_factors(
-                        subj_vertices[j], subj_normals[j], subj_areas[j],
-                        parent_vertices[vis], parent_areas[vis], vf_rays
+                    # Get dome bin center (centroid of triangle)
+                    dome_center = np.mean(subj_vertices[j], axis=0)
+                    
+                    # Use directional ray marching
+                    vals = _compute_directional_vf(
+                        dome_center,
+                        subj_normals[j],
+                        subj_areas[j],
+                        parent_vertices[vis],
+                        parent_areas[vis]
                     )
                     F_dp_local[j, vis] = vals
             return F_dp_local
@@ -305,10 +366,15 @@ def main():
         calculate_view_factors_end = time.time()
         conditional_print(config.silent_mode, f"Time taken to calculate view factors: {calculate_view_factors_end - calculate_view_factors_start:.2f} seconds")
         
-        # Convert to Numba lists
+        # Convert thermal_view_factors to Numba lists (always, for consistency with solver)
         numba_view_factors = List()
         for view_factors in thermal_data.thermal_view_factors:
-            numba_view_factors.append(np.array(view_factors, dtype=np.float64))
+            # Ensure array is 1D and handle empty arrays
+            arr = np.array(view_factors, dtype=np.float64)
+            if arr.size == 0:
+                numba_view_factors.append(np.array([], dtype=np.float64))
+            else:
+                numba_view_factors.append(arr.flatten() if arr.ndim > 1 else arr)
         thermal_data.thermal_view_factors = numba_view_factors
 
     thermal_data = calculate_insolation(thermal_data, shape_model, simulation, config)
@@ -321,6 +387,23 @@ def main():
         parent_areas = np.array([f.area for f in shape_model], dtype=np.float64)
         # Stack F_dp matrices for all facets: shape (n_facets, M, n_facets)
         F_dp_all = np.stack([f.depression_global_F_dp for f in shape_model], axis=0)
+        
+        # Check sparsity and optimize for convex bodies
+        nonzero_fraction = np.count_nonzero(F_dp_all) / F_dp_all.size
+        conditional_print(config.silent_mode, 
+                         f"F_dp sparsity: {nonzero_fraction*100:.2f}% non-zero ({np.count_nonzero(F_dp_all)} / {F_dp_all.size} entries)")
+        
+        # For sparse matrices (< 10% non-zero), use optimized sparse computation
+        use_sparse = nonzero_fraction < 0.1
+        if use_sparse:
+            conditional_print(config.silent_mode, "Using sparse coupling optimization")
+            # Precompute nonzero indices for each facet
+            nonzero_targets = []
+            for i in range(n_facets):
+                # Find which target facets this facet can couple to (any non-zero view factors)
+                targets = np.any(F_dp_all[i] > 0, axis=0).nonzero()[0]
+                nonzero_targets.append(targets)
+        
         # Precompute sun directions per timestep
         world_dirs = np.zeros((simulation.timesteps_per_day, 3), dtype=np.float64)
         for tt in range(simulation.timesteps_per_day):
@@ -378,8 +461,9 @@ def main():
                     flux_inputs.append((shape_model[i], None, wd, config, simulation))
             
             # Process all facets in parallel (verbose shows worker info on first iteration)
+            # Use 'threading' backend to avoid serialization issues with class attributes
             verbose_level = 10 if t == 0 and not config.silent_mode else 0
-            results = Parallel(n_jobs=config.n_jobs, verbose=verbose_level)(
+            results = Parallel(n_jobs=config.n_jobs, verbose=verbose_level, backend='threading')(
                 delayed(_process_facet_energetics)(*inputs) for inputs in flux_inputs
             )
             
@@ -393,9 +477,26 @@ def main():
             
             # Store thermal dome flux for animation
             dome_flux_th[:, :, t] = out_th_all
-            # Vectorized coupling: sum over i and dome bins j
-            inc_vis = np.tensordot(out_vis_all, F_dp_all, axes=([0,1], [0,1]))
-            inc_th  = np.tensordot(out_th_all,  F_dp_all, axes=([0,1], [0,1]))
+            
+            # Coupling calculation: choose sparse or dense based on matrix sparsity
+            if use_sparse:
+                # Sparse computation: only process non-zero couplings
+                inc_vis = np.zeros(nF, dtype=np.float64)
+                inc_th = np.zeros(nF, dtype=np.float64)
+                for i in range(nF):
+                    if len(nonzero_targets[i]) > 0:
+                        # Only compute for targets with non-zero view factors
+                        targets = nonzero_targets[i]
+                        # Sum over dome bins j: inc[target] += sum_j(out[i,j] * F_dp[i,j,target])
+                        # F_dp_all[i, :, targets] has shape (M, len(targets))
+                        # Transpose to get (len(targets), M) then dot with (M,) to get (len(targets),)
+                        inc_vis[targets] += F_dp_all[i, :, :][:, targets].T.dot(out_vis_all[i])
+                        inc_th[targets] += F_dp_all[i, :, :][:, targets].T.dot(out_th_all[i])
+            else:
+                # Dense computation (original): for dense or small matrices
+                inc_vis = np.tensordot(out_vis_all, F_dp_all, axes=([0,1], [0,1]))
+                inc_th  = np.tensordot(out_th_all,  F_dp_all, axes=([0,1], [0,1]))
+            
             # Update insolation with directional coupling
             thermal_data.insolation[:, t] += (inc_vis + inc_th) / parent_areas
         # End of roughness coupling
@@ -653,10 +754,11 @@ def main():
 
     # If roughness enabled, run sub-facet solves and aggregate before final-day animation
     if config.apply_kernel_based_roughness:
+        print("\nSolving sub-facet temperatures for roughness depressions...")
         sub_solver = TemperatureSolverFactory.create(config.temp_solver)
         old_silent = config.silent_mode
         config.silent_mode = True
-        for facet in shape_model:
+        for facet in conditional_tqdm(shape_model, config.silent_mode, desc="Solving sub-facet temps"):
             sub_solver.initialize_temperatures(facet.depression_thermal_data, simulation, config)
             facet.depression_temperature_result = sub_solver.solve(
                 facet.depression_thermal_data,
@@ -665,6 +767,7 @@ def main():
                 config
             )
         config.silent_mode = old_silent
+        print("Sub-facet temperature solving complete.")
         # Aggregate sub-facet final-day temperatures to parent facets
         n_parents = len(shape_model)
         parent_t_final = np.zeros((n_parents, simulation.timesteps_per_day), dtype=np.float64)
@@ -722,7 +825,7 @@ def main():
             # Build subfacet geometry and temps in memory (no separate file write)
             all_pts, all_faces, all_temps = [], [], []
             pt_index = 0
-            for facet in shape_model:
+            for facet in conditional_tqdm(shape_model, config.silent_mode, desc="Building subfacet geometry"):
                 # Subfacet triangles and temps
                 scale = math.sqrt(facet.area)
                 R_l2w = facet.dome_rotation.T
@@ -763,7 +866,7 @@ def main():
             T = simulation.timesteps_per_day
             dome_flux_th = np.zeros((nF, len(Facet._canonical_dome_mesh), T), dtype=np.float64)
             # Compute emissive power per subfacet and project onto dome bins
-            for i, facet in enumerate(shape_model):
+            for i, facet in conditional_tqdm(enumerate(shape_model), config.silent_mode, desc="Computing dome fluxes", total=len(shape_model)):
                 temps_sf = facet.depression_temperature_result["final_day_temperatures"]  # shape (N_subfacets, T)
                 sub_areas = np.array([entry['area'] * facet.area for entry in submesh], dtype=np.float64)
                 # Radiative power W per subfacet (use simulation.emissivity)
@@ -845,6 +948,7 @@ def main():
                 save_animation=False, 
                 save_animation_name='temperature_animation.gif', 
                 background_colour='black')
+            conditional_print(config.silent_mode, "Animation window closed, continuing...")
         else:
             # Smooth case: no combined rough HDF5; just animate
             plot_array = result["final_day_temperatures"]
@@ -866,9 +970,10 @@ def main():
                 save_animation=False, 
                 save_animation_name='temperature_animation.gif', 
                 background_colour='black')
+            conditional_print(config.silent_mode, "Animation window closed, continuing...")
 
     if config.plot_final_day_comparison and not config.silent_mode:
-        conditional_print(config.silent_mode,  f"Saving final day temperatures for facet to CSV file.\n")
+        conditional_print(config.silent_mode,  f"Saving final day temperatures to CSV file.\n")
         np.savetxt("final_day_temperatures.csv", np.column_stack((np.linspace(0, 2 * np.pi, simulation.timesteps_per_day), result["final_day_temperatures"][config.plotted_facet_index])), delimiter=',', header='Rotation angle (rad), Temperature (K)', comments='')
 
         thermprojrs_data = np.loadtxt("thermprojrs_data.csv", delimiter=',', skiprows=1)

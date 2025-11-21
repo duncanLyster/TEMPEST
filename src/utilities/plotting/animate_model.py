@@ -10,8 +10,6 @@ TODO:
 Option to make rotation axis and sun invisible 
 """
 
-import pyvista as pv
-import vtk
 from stl import mesh
 import time
 import math
@@ -505,6 +503,10 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         colour_map (str): Name of the colormap to use
         pre_selected_facets (list): List of facet IDs to pre-select
     """
+    # Lazy import of pyvista and vtk - only import when animation is actually needed
+    # This prevents slow startup when animation features aren't being used
+    import pyvista as pv
+    import vtk
 
     start_time = time.time()
     # Radiance mode: if HDF5 subfacet data exists, load it instead of STL
