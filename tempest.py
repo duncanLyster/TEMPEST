@@ -1091,11 +1091,14 @@ def main():
     os.makedirs('insolation_data', exist_ok=True)
     os.makedirs('temperature_data', exist_ok=True)
     for idx in [0, 1]:
-        df_ins = pd.DataFrame({'rotation_deg': degrees, 'insolation_Wm2': thermal_data.insolation[idx]})
-        df_ins.to_csv(f'insolation_data/facet_{idx}.csv', index=False)
-        df_temp = pd.DataFrame({'rotation_deg': degrees, 'temperature_K': result['final_day_temperatures'][idx]})
-        df_temp.to_csv(f'temperature_data/facet_{idx}.csv', index=False)
-        print(f"  facet {idx}: insolation_data/facet_{idx}.csv, temperature_data/facet_{idx}.csv")
+        try:
+            df_ins = pd.DataFrame({'rotation_deg': degrees, 'insolation_Wm2': thermal_data.insolation[idx]})
+            df_ins.to_csv(f'insolation_data/facet_{idx}.csv', index=False)
+            df_temp = pd.DataFrame({'rotation_deg': degrees, 'temperature_K': result['final_day_temperatures'][idx]})
+            df_temp.to_csv(f'temperature_data/facet_{idx}.csv', index=False)
+            print(f"  facet {idx}: insolation_data/facet_{idx}.csv, temperature_data/facet_{idx}.csv")
+        except Exception as e:
+            print(f"  Error exporting insolation and temperature for facet {idx}: {e}")
 
 # Call the main program with interrupt handling
 if __name__ == "__main__":
