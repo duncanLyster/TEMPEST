@@ -8,27 +8,27 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "itokawa_5k.stl"  # Name of the shape model file in data/shape_models/
+shape_model_file: "1D.stl"  # Name of the shape model file in data/shape_models/
 shape_model_directory: "data/shape_models/"    
 
 # Physical parameters
-thermal_inertia:        50    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
-emissivity:             0.5         
-albedo:                 0.5              
+thermal_inertia:        350    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
+emissivity:             0.98         
+albedo:                 0.1              
 beaming_factor:         1.0
 
 # Model structure parameters
-n_layers:               45          # Number of depth layers in thermal model - try increasing this if the model doesn't converge
+n_layers:               100          # Number of depth layers in thermal model - try increasing this if the model doesn't converge
 convergence_method:     "mean"      # Method to determine convergence: 'mean' or 'max' temperature difference between days
 convergence_target:     0.1         # Target temperature difference between days for convergence in K. Higher values will converge faster.
 max_days:               20          # Maximum number of days to run simulation
 min_days:               1           # Minimum number of days to run simulation
 
 # Orbital and rotational parameters
-solar_distance_au:      2           # TEMPEST treats the object as having a perfect circular orbit
+solar_distance_au:      1           # TEMPEST treats the object as having a perfect circular orbit
 solar_luminosity:       3.8642e+26  # Watts (leave this for any solar system objects)
 sunlight_direction:     [1, 0, 0]   # Direction of the Sun relative to the object
-rotation_period_hours:  10          # Rotation period of the object relative to the Sun
+rotation_period_hours:  2.4          # Rotation period of the object relative to the Sun
 ra_degrees:             0           # Right ascension of the object's pole (0 is the vernal equinox)
 dec_degrees:            90          # Declination of the object's pole (90 is the north pole) BUG: setting to 0 causes the model to crash
 

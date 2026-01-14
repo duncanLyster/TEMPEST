@@ -177,6 +177,17 @@ def main():
     # Load setup parameters from JSON file
     simulation = Simulation(config)
 
+    # ============================================================================
+    # HACK: Override timesteps_per_day to 5000 (TEMPORARY - REMOVE AFTER TESTING)
+    # ============================================================================
+    # This overrides the adaptive timestep calculation for testing purposes.
+    # Also update delta_t which depends on timesteps_per_day.
+    original_timesteps = simulation.timesteps_per_day
+    simulation.timesteps_per_day = 5000
+    simulation.delta_t = simulation.rotation_period_s / simulation.timesteps_per_day
+    conditional_print(config.silent_mode, f"HACK: Overriding timesteps_per_day from {original_timesteps} to {simulation.timesteps_per_day}")
+    # ============================================================================
+
     # Setup simulation
     try:
         shape_model = read_shape_model(
@@ -1085,20 +1096,102 @@ def main():
 
     conditional_print(config.silent_mode,  f"Model run complete.\n")
 
-    # Export insolation and temperature data for facets 0 and 1
-    print("Exporting insolation and temperature for facets 0 and 1...")
+    # Export insolation data for all facets
+    # Note: thermal_data.insolation contains absorbed insolation (insolation * (1-albedo))
+    # Convert to actual insolation by dividing by (1-albedo)
+    conditional_print(config.silent_mode, "Exporting insolation data to CSV...")
     degrees = np.linspace(0, 360, simulation.timesteps_per_day, endpoint=False)
     os.makedirs('insolation_data', exist_ok=True)
-    os.makedirs('temperature_data', exist_ok=True)
-    for idx in [0, 1]:
+    
+    # Convert absorbed insolation to actual insolation
+    # thermal_data.insolation = actual_insolation * (1 - albedo)
+    # Therefore: actual_insolation = thermal_data.insolation / (1 - albedo)
+    one_minus_albedo = 1.0 - simulation.albedo
+    if abs(one_minus_albedo) < 1e-10:
+        conditional_print(config.silent_mode, "WARNING: Albedo is 1.0, cannot convert to actual insolation. Saving absorbed insolation as-is.")
+        actual_insolation = thermal_data.insolation.copy()
+    else:
+        actual_insolation = thermal_data.insolation / one_minus_albedo
+    
+    # Create a combined DataFrame with all facets
+    insolation_dict = {'rotation_deg': degrees}
+    n_facets = len(shape_model)
+    
+    # Add each facet's insolation as a column
+    for idx in range(n_facets):
+        insolation_dict[f'facet_{idx}_insolation_Wm2'] = actual_insolation[idx]
+    
+    # Save combined CSV with all facets
+    df_combined = pd.DataFrame(insolation_dict)
+    combined_csv_path = 'insolation_data/all_facets_insolation.csv'
+    df_combined.to_csv(combined_csv_path, index=False)
+    conditional_print(config.silent_mode, f"Combined insolation data saved to {combined_csv_path}")
+    
+    # Also save individual CSV files for each facet
+    for idx in range(n_facets):
         try:
-            df_ins = pd.DataFrame({'rotation_deg': degrees, 'insolation_Wm2': thermal_data.insolation[idx]})
+            df_ins = pd.DataFrame({
+                'rotation_deg': degrees, 
+                'insolation_Wm2': actual_insolation[idx]
+            })
             df_ins.to_csv(f'insolation_data/facet_{idx}.csv', index=False)
-            df_temp = pd.DataFrame({'rotation_deg': degrees, 'temperature_K': result['final_day_temperatures'][idx]})
-            df_temp.to_csv(f'temperature_data/facet_{idx}.csv', index=False)
-            print(f"  facet {idx}: insolation_data/facet_{idx}.csv, temperature_data/facet_{idx}.csv")
         except Exception as e:
-            print(f"  Error exporting insolation and temperature for facet {idx}: {e}")
+            conditional_print(config.silent_mode, f"  Error exporting insolation for facet {idx}: {e}")
+    
+    conditional_print(config.silent_mode, f"Insolation data exported for {n_facets} facets")
+    
+    # Export temperatures for single facet as CSV
+    if len(shape_model) == 1:
+        export_single_facet_temperatures(shape_model, result, simulation, config)
+
+def export_single_facet_temperatures(shape_model, result, simulation, config):
+    """
+    Export temperatures for a single facet as a CSV file.
+    
+    This function is called automatically when there is only 1 facet in the shape model.
+    It exports the final day temperatures with rotation angle in degrees.
+    
+    Parameters:
+    -----------
+    shape_model : list
+        List of Facet objects
+    result : dict
+        Dictionary containing simulation results with 'final_day_temperatures' key
+    simulation : Simulation
+        Simulation object containing timesteps_per_day and other parameters
+    config : Config
+        Configuration object with silent_mode and other settings
+    """
+    if len(shape_model) != 1:
+        conditional_print(config.silent_mode, 
+                         f"Warning: export_single_facet_temperatures called with {len(shape_model)} facets. "
+                         f"Only exporting for the first facet.")
+    
+    # Get temperature data for the first (and only) facet
+    temperature_data = result["final_day_temperatures"][0]
+    
+    # Create rotation angle array in local time (hours)
+    local_times = np.linspace(0, 24, simulation.timesteps_per_day, endpoint=False)
+
+    # Apply a 180 degree shift to the local times to center the peak at noon
+    local_times = np.roll(local_times, len(local_times) // 2)
+    
+    # Create DataFrame
+    df = pd.DataFrame({
+        'Local time (hours)': local_times,
+        'Temperature (K)': temperature_data
+    })
+    
+    # Create output directory if it doesn't exist
+    output_dir = 'temperature_data'
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Generate output filename
+    output_csv_path = os.path.join(output_dir, 'facet_0_temperatures.csv')
+    
+    # Save to CSV
+    df.to_csv(output_csv_path, index=False)
+    conditional_print(config.silent_mode, f"Single facet temperature data exported to {output_csv_path}")
 
 # Call the main program with interrupt handling
 if __name__ == "__main__":
