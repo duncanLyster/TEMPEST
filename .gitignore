@@ -66,3 +66,15 @@ dist/
 # Ignore auto-generated config files
 data/config/*_TI_*.yaml
 data/config/optimiser_runs/
+
+# Ignore DGL_KS comparison files
+DGL_KS_comparison/
+DGL_KS_comparison_outputs/
+
+# Ignore ROI backup notebook
+notebooks/region_of_interest_analysis_backup.ipynb
+
+# Ignore DGL_KS comparison configs, notebooks, and scripts
+data/config/DGL_*.yaml
+notebooks/DGL_KS_*.ipynb
+scripts/DGL_KS_*

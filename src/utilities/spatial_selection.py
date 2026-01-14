@@ -11,6 +11,150 @@ Created: 2025
 import numpy as np
 from typing import List, Tuple, Dict, Optional
 import matplotlib.pyplot as plt
+import os
+import time
+import re
+
+
+class SimpleFacet:
+    """
+    Lightweight facet class for geometry-only operations.
+    Only stores geometric properties (normal, vertices, position).
+    Area is calculated lazily (only when accessed) to speed up loading.
+    Much faster than full Facet class for large models.
+    """
+    def __init__(self, normal, vertices):
+        self.normal = np.array(normal)
+        self.vertices = np.array(vertices)
+        self.position = np.mean(vertices, axis=0)
+        self._area = None  # Lazy calculation
+    
+    @property
+    def area(self):
+        """Calculate area on first access (lazy evaluation)."""
+        if self._area is None:
+            v0, v1, v2 = self.vertices
+            self._area = np.linalg.norm(np.cross(v1-v0, v2-v0)) / 2
+        return self._area
+    
+    @staticmethod
+    def calculate_area(vertices):
+        v0, v1, v2 = vertices
+        return np.linalg.norm(np.cross(v1-v0, v2-v0)) / 2
+
+
+def read_shape_model_geometry_only(filename, show_progress=True):
+    """
+    Lightweight function to read shape model geometry only (no thermal properties).
+    Returns a list of SimpleFacet objects with just geometry (normal, vertices, position).
+    Area is calculated lazily (only when accessed) to speed up loading.
+    
+    This is much faster than read_shape_model() for large models since it doesn't
+    initialize thermal simulation arrays.
+    
+    Args:
+        filename: Path to STL file (ASCII or binary)
+        show_progress: If True, print progress updates during loading
+        
+    Returns:
+        List of SimpleFacet objects
+    """
+    if not os.path.isfile(filename):
+        raise FileNotFoundError(f"The file {filename} was not found.")
+    
+    try:
+        # Try reading as ASCII first
+        print(f"Reading STL file: {filename}")
+        with open(filename, 'r') as file:
+            lines = file.readlines()
+        
+        # Count facets first for progress reporting
+        facet_count = sum(1 for line in lines if line.strip().startswith('facet normal'))
+        print(f"Found {facet_count:,} facets in file")
+        
+        shape_model = []
+        progress_interval = max(1, facet_count // 20)  # Update every 5%
+        
+        # Pre-compile patterns for faster parsing
+        normal_pattern = re.compile(r'facet normal\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)')
+        vertex_pattern = re.compile(r'vertex\s+([-\d.eE+]+)\s+([-\d.eE+]+)\s+([-\d.eE+]+)')
+        
+        i = 0
+        loaded = 0
+        start_time = time.time() if show_progress else None
+        
+        while i < len(lines):
+            line = lines[i]
+            # Check if this is a facet normal line (faster than strip + startswith)
+            if line[:12] == 'facet normal':
+                # Parse normal using regex (faster than split)
+                match = normal_pattern.match(line)
+                if match:
+                    normal = np.array([float(match.group(1)), float(match.group(2)), float(match.group(3))], dtype=np.float32)
+                    
+                    # Parse vertices (they're always 2, 3, 4 lines after normal)
+                    v1_match = vertex_pattern.match(lines[i+2])
+                    v2_match = vertex_pattern.match(lines[i+3])
+                    v3_match = vertex_pattern.match(lines[i+4])
+                    
+                    if v1_match and v2_match and v3_match:
+                        vertex1 = np.array([float(v1_match.group(1)), float(v1_match.group(2)), float(v1_match.group(3))], dtype=np.float32)
+                        vertex2 = np.array([float(v2_match.group(1)), float(v2_match.group(2)), float(v2_match.group(3))], dtype=np.float32)
+                        vertex3 = np.array([float(v3_match.group(1)), float(v3_match.group(2)), float(v3_match.group(3))], dtype=np.float32)
+                        
+                        facet = SimpleFacet(normal, [vertex1, vertex2, vertex3])
+                        shape_model.append(facet)
+                        loaded += 1
+                        
+                        # Progress updates with time estimate
+                        if show_progress and loaded % progress_interval == 0:
+                            progress = 100 * loaded / facet_count
+                            elapsed = time.time() - start_time
+                            rate = loaded / elapsed if elapsed > 0 else 0
+                            remaining = (facet_count - loaded) / rate if rate > 0 else 0
+                            print(f"  Loaded {loaded:,} / {facet_count:,} facets ({progress:.1f}%) - "
+                                  f"Rate: {rate:,.0f} facets/sec - "
+                                  f"Est. remaining: {remaining/60:.1f} min")
+                
+                i += 7  # Skip to next facet (facet normal + 6 more lines)
+            else:
+                i += 1
+        
+        print(f"✓ Loaded {len(shape_model):,} facets")
+        return shape_model
+        
+    except UnicodeDecodeError:
+        # If ASCII reading fails, try binary
+        print(f"Reading binary STL file: {filename}")
+        try:
+            import numpy_stl
+            stl_mesh_module = numpy_stl
+        except ImportError:
+            try:
+                from stl import mesh as stl_mesh_module
+            except ImportError:
+                raise ImportError("Need numpy-stl or stl package for binary STL files. Install with: pip install numpy-stl")
+        
+        shape_mesh = stl_mesh_module.Mesh.from_file(filename)
+        n_facets = len(shape_mesh.vectors)
+        print(f"Found {n_facets:,} facets in file")
+        
+        shape_model = []
+        progress_interval = max(1, n_facets // 20)  # Update every 5%
+        
+        for i in range(n_facets):
+            normal = shape_mesh.normals[i]
+            vertices = shape_mesh.vectors[i]
+            facet = SimpleFacet(normal, vertices)
+            shape_model.append(facet)
+            
+            # Progress updates
+            if show_progress and (i + 1) % progress_interval == 0:
+                progress = 100 * (i + 1) / n_facets
+                print(f"  Loaded {i+1:,} / {n_facets:,} facets ({progress:.1f}%)")
+        
+        print(f"✓ Loaded {len(shape_model):,} facets")
+        return shape_model
 
 
 def latlon_to_cartesian(lat_deg: float, lon_deg: float, radius: float, 
@@ -79,18 +223,124 @@ def cartesian_to_latlon(position: np.ndarray, center: np.ndarray = None) -> Tupl
     return lat_deg, lon_deg
 
 
-def calculate_shape_model_center(shape_model) -> np.ndarray:
+def calculate_shape_model_center(shape_model, solid_body: bool = True) -> np.ndarray:
     """
     Calculate the center of mass of the shape model.
     
+    This function can calculate either:
+    - Solid-body center of mass (default): For a closed polyhedron with uniform density,
+      calculates the volume-weighted center of mass using the divergence theorem.
+      This is the true center of mass for a solid body.
+    - Area-weighted center: Assumes uniform surface density, weights each facet by its area.
+      This is appropriate for surface meshes or when treating the shape as a shell.
+    - Geometric centroid: Simple average of facet positions (unweighted).
+    
     Args:
-        shape_model: List of Facet objects
+        shape_model: List of Facet objects (must form a closed surface for solid_body=True)
+        solid_body: If True (default), calculate solid-body COM using volume integration.
+                   If False, use area-weighted center (surface density).
         
     Returns:
         Center of mass as numpy array [x, y, z]
     """
     positions = np.array([f.position for f in shape_model])
-    return np.mean(positions, axis=0)
+    normals = np.array([f.normal for f in shape_model])
+    areas = np.array([f.area for f in shape_model])
+    
+    if solid_body:
+        # Calculate solid-body center of mass using exact tetrahedral decomposition
+        # For each triangle, we form a tetrahedron with the origin and compute its contribution
+        # Volume of tetrahedron: V = (1/6) |det(v0, v1, v2)|
+        # COM of tetrahedron: COM = (1/4)(v0 + v1 + v2)  (assuming origin is 4th vertex)
+        # Total COM = (1/V_total) Σ (V_i * COM_i)
+        
+        total_volume = 0.0
+        weighted_com = np.zeros(3)
+        
+        for facet in shape_model:
+            # Get triangle vertices
+            v0, v1, v2 = facet.vertices
+            
+            # Calculate signed volume of tetrahedron (origin, v0, v1, v2)
+            # V = (1/6) det(v0, v1, v2) = (1/6) (v0 · (v1 × v2))
+            cross = np.cross(v1, v2)
+            tetra_volume = (1.0 / 6.0) * np.dot(v0, cross)
+            
+            # Calculate COM of this tetrahedron (assuming uniform density)
+            # COM_tetra = (1/4)(0 + v0 + v1 + v2) = (1/4)(v0 + v1 + v2)
+            tetra_com = (v0 + v1 + v2) / 4.0
+            
+            # Accumulate volume-weighted COM
+            total_volume += tetra_volume
+            weighted_com += tetra_volume * tetra_com
+        
+        if abs(total_volume) < 1e-10:
+            # Volume is essentially zero or shape is not closed
+            # Fall back to area-weighted center
+            print("Warning: Calculated volume is near zero. Using area-weighted center instead.")
+            total_area = np.sum(areas)
+            if total_area > 0:
+                return np.sum(positions * areas[:, np.newaxis], axis=0) / total_area
+            else:
+                return np.mean(positions, axis=0)
+        
+        # Final center of mass
+        com = weighted_com / total_volume
+        return com
+    else:
+        # Area-weighted center (assumes uniform surface density)
+        total_area = np.sum(areas)
+        if total_area > 0:
+            weighted_pos = np.sum(positions * areas[:, np.newaxis], axis=0) / total_area
+            return weighted_pos
+        else:
+            # Fallback to unweighted if no area
+            return np.mean(positions, axis=0)
+
+
+def compare_center_methods(shape_model) -> Dict[str, Optional[np.ndarray]]:
+    """
+    Calculate center of mass using all three methods for comparison.
+    
+    Returns:
+        Dictionary with keys:
+        - 'solid_body': Solid-body center of mass (volume-weighted)
+        - 'area_weighted': Area-weighted center (surface density)
+        - 'geometric': Geometric centroid (unweighted mean)
+    """
+    positions = np.array([f.position for f in shape_model])
+    areas = np.array([f.area for f in shape_model])
+    
+    results = {}
+    
+    # 1. Solid-body center of mass (volume-weighted)
+    total_volume = 0.0
+    weighted_com = np.zeros(3)
+    
+    for facet in shape_model:
+        v0, v1, v2 = facet.vertices
+        cross = np.cross(v1, v2)
+        tetra_volume = (1.0 / 6.0) * np.dot(v0, cross)
+        tetra_com = (v0 + v1 + v2) / 4.0
+        total_volume += tetra_volume
+        weighted_com += tetra_volume * tetra_com
+    
+    if abs(total_volume) > 1e-10:
+        results['solid_body'] = weighted_com / total_volume
+    else:
+        results['solid_body'] = None  # Volume is zero
+    
+    # 2. Area-weighted center
+    total_area = np.sum(areas)
+    if total_area > 0:
+        results['area_weighted'] = np.sum(positions * areas[:, np.newaxis], axis=0) / total_area
+    else:
+        results['area_weighted'] = None
+    
+    # 3. Geometric centroid (unweighted)
+    results['geometric'] = np.mean(positions, axis=0)
+    
+    return results
 
 
 def find_closest_facet(shape_model, lat_deg: float, lon_deg: float, 

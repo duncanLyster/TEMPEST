@@ -10,37 +10,158 @@ def calculate_secondary_radiation(temperatures, visible_facets, view_factors, se
         return 0.0
     return self_heating_const * np.sum(temperatures[visible_facets]**4 * view_factors)
 
+
 @jit(nopython=True)
 def calculate_temperatures(temperatures, layer_temperatures, insolation, visible_facets_list, 
                         view_factors_list, const1, const2, const3, self_heating_const,
                         timesteps_per_day, n_layers, include_self_heating):
     
     n_facets = temperatures.shape[0]
-    current_column = 0  # Use column 0 for current timestep
-    prev_column = 1    # Use column 1 for previous timestep
+    
+    # Initialize column pointers
+    current_column = 0 
+    prev_column = 0    
     
     for time_step in range(timesteps_per_day):
-        # Swap columns for next iteration
-        current_column, prev_column = prev_column, current_column
+        # 1. Column Swapping
+        if time_step % 2 == 0:
+            prev_column = 0
+            current_column = 1
+        else:
+            prev_column = 1
+            current_column = 0
+
+        # Look ahead for RK2 (Heun's Method)
+        next_step = time_step + 1
+        if next_step >= timesteps_per_day:
+            next_step = 0
         
         for i in range(n_facets):
-            # Surface temperature calculation
+            # --- Surface Calculation (Runge-Kutta 2nd Order) ---
+            
+            # State at start of step (t)
+            T_n = layer_temperatures[i, prev_column, 0]
+            T_layer1 = layer_temperatures[i, prev_column, 1] # Assumed constant for the substep
+            
+            # Insolation at start (t) and end (t+1)
+            I_n = insolation[i, time_step]
+            I_next = insolation[i, next_step]
+            
+            # --- STEP 1: Predictor (Slope at Start) ---
+            # Calculate slope k1 using T_n and I_n
+            # Note: Factors of 2.0 included for Half-Node physics
+            
+            rad_term_1 = -const2 * (T_n**4) * 2.0
+            insol_term_1 = I_n * const1 * 2.0
+            cond_term_1 = (const3 * 2.0) * (T_layer1 - T_n)
+            
+            self_heat_1 = 0.0
+            if include_self_heating:
+                self_heat_1 = 2.0 * calculate_secondary_radiation(
+                    layer_temperatures[:, prev_column, 0], 
+                    visible_facets_list[i], 
+                    view_factors_list[i], 
+                    self_heating_const
+                )
+                
+            # Total Change for Predictor
+            dT_1 = rad_term_1 + insol_term_1 + cond_term_1 + self_heat_1
+            
+            # Predicted Temp (Euler Step)
+            T_pred = T_n + dT_1
+            
+            # --- STEP 2: Corrector (Slope at End) ---
+            # Calculate slope k2 using T_pred and I_next
+            
+            rad_term_2 = -const2 * (T_pred**4) * 2.0
+            insol_term_2 = I_next * const1 * 2.0
+            cond_term_2 = (const3 * 2.0) * (T_layer1 - T_pred)
+            
+            # Note: For efficiency, we approximate self-heating as constant during the substep
+            # (Recalculating it requires updating ALL facets' T_pred, which is expensive)
+            self_heat_2 = self_heat_1 
+            
+            # Total Change for Corrector
+            dT_2 = rad_term_2 + insol_term_2 + cond_term_2 + self_heat_2
+            
+            # --- Final Update (Average of Slopes) ---
+            new_temp = T_n + 0.5 * (dT_1 + dT_2)
+
+            temperatures[i, time_step] = new_temp
+            layer_temperatures[i, current_column, 0] = new_temp
+            
+            # --- Subsurface Calculation (Standard Explicit is fine here) ---
+            # Subsurface changes are slow, so RK2 is usually overkill/too expensive
+            for layer in range(1, n_layers - 1):
+                prev_layer = layer_temperatures[i, prev_column, layer]
+                prev_layer_plus = layer_temperatures[i, prev_column, layer + 1]
+                prev_layer_minus = layer_temperatures[i, prev_column, layer - 1]
+
+                layer_temperatures[i, current_column, layer] = (
+                    prev_layer + 
+                    const3 * (prev_layer_plus - 2 * prev_layer + prev_layer_minus)
+                )
+
+            # Bottom Boundary (Adiabatic)
+            layer_temperatures[i, current_column, n_layers - 1] = layer_temperatures[i, current_column, n_layers - 2]
+
+    # --- End of Day Updates ---
+    if current_column == 1:
+        for i in range(n_facets):
+            for layer in range(n_layers):
+                layer_temperatures[i, 0, layer] = layer_temperatures[i, 1, layer]
+
+    # Radiative Mean Deep Boundary
+    for i in range(n_facets):
+        sum_rad = 0.0
+        for t in range(timesteps_per_day):
+            sum_rad += temperatures[i, t]**4
+        mean_rad_temp = (sum_rad / timesteps_per_day)**0.25
+        layer_temperatures[i, 0, n_layers - 1] = mean_rad_temp
+
+    return temperatures
+
+
+@jit(nopython=True)
+def calculate_temperatures_stable(temperatures, layer_temperatures, insolation, visible_facets_list, 
+                        view_factors_list, const1, const2, const3, self_heating_const,
+                        timesteps_per_day, n_layers, include_self_heating):
+    
+    n_facets = temperatures.shape[0]
+    
+    # Initialize column pointers
+    current_column = 0 
+    prev_column = 0    
+    
+    for time_step in range(timesteps_per_day):
+        # Column swapping logic
+        if time_step % 2 == 0:
+            prev_column = 0
+            current_column = 1
+        else:
+            prev_column = 1
+            current_column = 0
+        
+        for i in range(n_facets):
+            # --- Surface Calculation (Skin/Half-Node Model) ---
             prev_temp = layer_temperatures[i, prev_column, 0]
             prev_temp_layer1 = layer_temperatures[i, prev_column, 1]
 
-            insolation_term = insolation[i, time_step] * const1
-            re_emitted_radiation_term = -const2 * (prev_temp**4)
+            # 1. Flux terms multiplied by 2.0 because surface node has half-mass (dx/2)
+            insolation_term = insolation[i, time_step] * const1 * 2.0
+            re_emitted_radiation_term = -const2 * (prev_temp**4) * 2.0
             
             secondary_radiation_term = 0.0
             if include_self_heating:
-                secondary_radiation_term = calculate_secondary_radiation(
+                secondary_radiation_term = 2.0 * calculate_secondary_radiation(
                     layer_temperatures[:, prev_column, 0], 
                     visible_facets_list[i], 
                     view_factors_list[i], 
                     self_heating_const
                 )
             
-            conducted_heat_term = const3 * (prev_temp_layer1 - prev_temp)
+            # 2. Conduction multiplied by 2.0 (flux acts on half-mass)
+            conducted_heat_term = (const3 * 2.0) * (prev_temp_layer1 - prev_temp)
             
             new_temp = (prev_temp + 
                     insolation_term + 
@@ -51,7 +172,7 @@ def calculate_temperatures(temperatures, layer_temperatures, insolation, visible
             temperatures[i, time_step] = new_temp
             layer_temperatures[i, current_column, 0] = new_temp
             
-            # Update subsurface temperatures
+            # --- Subsurface Calculation ---
             for layer in range(1, n_layers - 1):
                 prev_layer = layer_temperatures[i, prev_column, layer]
                 prev_layer_plus = layer_temperatures[i, prev_column, layer + 1]
@@ -59,10 +180,37 @@ def calculate_temperatures(temperatures, layer_temperatures, insolation, visible
 
                 layer_temperatures[i, current_column, layer] = (
                     prev_layer + 
-                    const3 * (prev_layer_plus - 
-                            2 * prev_layer + 
-                            prev_layer_minus)
+                    const3 * (prev_layer_plus - 2 * prev_layer + prev_layer_minus)
                 )
+
+            # 3. Bottom Boundary Condition
+            layer_temperatures[i, current_column, n_layers - 1] = layer_temperatures[i, current_column, n_layers - 2]
+
+    # --- End of Day Updates ---
+    
+    # 1. Standardize Output Column (Ensure valid data is in col 0)
+    final_col = current_column
+    if final_col == 1:
+        for i in range(n_facets):
+            for layer in range(n_layers):
+                layer_temperatures[i, 0, layer] = layer_temperatures[i, 1, layer]
+
+    # 2. FAST CONVERGENCE: Set Deep Boundary to Radiative Mean
+    # Calculate the radiative mean of the day just finished.
+    # We set the bottom boundary
+    # for the START of the next day.
+    for i in range(n_facets):
+        # Calculate Radiative Mean: (Mean(T^4))^0.25
+        # This is physically where the deep temperature tends to converge.
+        sum_rad = 0.0
+        for t in range(timesteps_per_day):
+            sum_rad += temperatures[i, t]**4
+        
+        mean_rad_temp = (sum_rad / timesteps_per_day)**0.25
+        
+        # Update the deepest layer in 'column 0' (ready for next function call)
+        # Note: Only update the very bottom. The layers between will adjust via conduction in the next day.
+        layer_temperatures[i, 0, n_layers - 1] = mean_rad_temp
 
     return temperatures
 
