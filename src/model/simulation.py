@@ -27,7 +27,6 @@ class Simulation:
         self.angular_velocity = (2 * np.pi) / self.rotation_period_s
         self.thermal_conductivity = (self.thermal_inertia**2 / (self.density * self.specific_heat_capacity))
         self.skin_depth = (self.thermal_conductivity / (self.density * self.specific_heat_capacity * self.angular_velocity)) ** 0.5
-        self.skin_depth = 0.8437
         self.layer_thickness = 8 * self.skin_depth / self.n_layers
         self.thermal_diffusivity = self.thermal_conductivity / (self.density * self.specific_heat_capacity)
         self.timesteps_per_day = self.calculate_adaptive_timesteps() # Adaptive timestep for low thermal inertia stability
