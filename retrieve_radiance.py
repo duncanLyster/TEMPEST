@@ -5,7 +5,7 @@ This script retrieves radiance measurements from TEMPEST temperature output data
 using SPICE geometry and FOV-based facet queries.
 
 Usage:
-    python retrieve_radiance.py --config data/config/radiance_retrievals/Bennu_OTES.yaml
+    python retrieve_radiance.py --config private/data/config/radiance_retrievals/Bennu_OTES.yaml
 """
 
 import os

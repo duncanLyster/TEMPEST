@@ -40,7 +40,7 @@ python3 -c "import h5py; f=h5py.File('data/output/remote_outputs/animation_outpu
 
 ### 3. Run Radiance Retrieval
 ```bash
-python retrieve_radiance.py --config data/config/radiance_retrievals/Bennu_OTES.yaml
+python retrieve_radiance.py --config private/data/config/radiance_retrievals/Bennu_OTES.yaml
 ```
 
 **Expected**:
