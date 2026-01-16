@@ -361,8 +361,9 @@ def main():
     if config.include_self_heating or config.n_scatters > 0:
         calculate_view_factors_start = time.time()
         
-        # Calculate regular view factors for scattering
+        # Calculate regular view factors for scattering and self-heating
         all_view_factors = calculate_all_view_factors(shape_model, thermal_data, config, config.vf_rays)
+        thermal_data.set_secondary_radiation_view_factors(all_view_factors)
         
         # Calculate thermal view factors if self-heating is enabled
         if config.include_self_heating:

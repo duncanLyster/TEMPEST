@@ -96,7 +96,7 @@ def main():
     # Determine base directory for saved animations relative to project root
     script_dir = os.path.abspath(os.path.dirname(__file__))
     project_root = os.path.abspath(os.path.join(script_dir, '..', '..', '..'))
-    base_dir = os.path.join(project_root, 'outputs', 'remote_outputs')
+    base_dir = os.path.join(project_root, 'data', 'output', 'remote_outputs')
 
     # Check if base directory exists
     if not os.path.exists(base_dir):
