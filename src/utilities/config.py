@@ -43,8 +43,11 @@ class Config:
         self.remote = self.config_data.get('remote', False)
         self.temp_solver = self.config_data.get('temp_solver', 'tempest_standard')
 
-        # File paths
-        self.path_to_shape_model_file = self.locations.get_shape_model_path(self.config_data['shape_model_file'])
+        # File paths (optional - radiance retrieval configs don't need this)
+        if 'shape_model_file' in self.config_data:
+            self.path_to_shape_model_file = self.locations.get_shape_model_path(self.config_data['shape_model_file'])
+        else:
+            self.path_to_shape_model_file = None
 
         # Performance settings
         self.n_jobs = min(self.config_data.get('n_jobs', 4), cpu_count())

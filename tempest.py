@@ -1,4 +1,4 @@
-''' 
+'''
 This model simulates diurnal temperature variations of a solar system body based on
 a given shape model. It reads in the shape model, sets material and model properties, calculates 
 insolation and temperature arrays, and iterates until the model converges. The results are saved and 
@@ -178,14 +178,13 @@ def main():
     simulation = Simulation(config)
 
     # ============================================================================
-    # HACK: Override timesteps_per_day to 5000 (TEMPORARY - REMOVE AFTER TESTING)
+    # NOTE: Adaptive timestep calculation is used by default
+    # If you need to override timesteps_per_day for testing, uncomment below:
     # ============================================================================
-    # This overrides the adaptive timestep calculation for testing purposes.
-    # Also update delta_t which depends on timesteps_per_day.
-    original_timesteps = simulation.timesteps_per_day
-    simulation.timesteps_per_day = 5000
-    simulation.delta_t = simulation.rotation_period_s / simulation.timesteps_per_day
-    conditional_print(config.silent_mode, f"HACK: Overriding timesteps_per_day from {original_timesteps} to {simulation.timesteps_per_day}")
+    # original_timesteps = simulation.timesteps_per_day
+    # simulation.timesteps_per_day = 5000  # Override timesteps (WARNING: Can be very slow!)
+    # simulation.delta_t = simulation.rotation_period_s / simulation.timesteps_per_day
+    # conditional_print(config.silent_mode, f"WARNING: Overriding timesteps_per_day from {original_timesteps} to {simulation.timesteps_per_day}")
     # ============================================================================
 
     # Setup simulation
@@ -913,7 +912,20 @@ def main():
                 subgrp = cf.create_group('subfacet_data')
                 subgrp.create_dataset('points', data=np.array(all_pts,   dtype=np.float64))
                 subgrp.create_dataset('faces',  data=np.array(all_faces, dtype=np.int64))
-                subgrp.create_dataset('temps',  data=np.array(all_temps, dtype=np.float64))
+                subgrp.create_dataset('temps',  data=np.array(all_temps, dtype=np.float64))  # Final timestep only (for backward compatibility)
+                
+                # Save full timestep sub-facet temperatures for radiance retrieval
+                # Shape: (n_facets, N_subfacets, T)
+                n_facets = len(shape_model)
+                N_subfacets = len(Facet._canonical_subfacet_mesh)
+                T = simulation.timesteps_per_day
+                subfacet_temps_full = np.zeros((n_facets, N_subfacets, T), dtype=np.float64)
+                for i, facet in enumerate(shape_model):
+                    subfacet_temps_full[i] = facet.depression_temperature_result["final_day_temperatures"]
+                subgrp.create_dataset('temps_full', data=subfacet_temps_full)  # Full timestep data
+                subgrp.attrs['n_facets'] = n_facets
+                subgrp.attrs['n_subfacets'] = N_subfacets
+                subgrp.attrs['timesteps_per_day'] = T
                 # — dome flux data —
                 domegrp = cf.create_group('dome_fluxes')
                 domegrp.create_dataset('dome_flux_th',           data=dome_flux_th)
