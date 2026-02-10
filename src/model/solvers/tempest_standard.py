@@ -14,7 +14,7 @@ def calculate_secondary_radiation(temperatures, visible_facets, view_factors, se
 @jit(nopython=True)
 def calculate_temperatures(temperatures, layer_temperatures, insolation, visible_facets_list, 
                         view_factors_list, const1, const2, const3, self_heating_const,
-                        timesteps_per_day, n_layers, include_self_heating):
+                        timesteps_per_day, n_layers, include_self_heating, subsurface_const):
     
     n_facets = temperatures.shape[0]
     
@@ -54,6 +54,7 @@ def calculate_temperatures(temperatures, layer_temperatures, insolation, visible
             rad_term_1 = -const2 * (T_n**4) * 2.0
             insol_term_1 = I_n * const1 * 2.0
             cond_term_1 = (const3 * 2.0) * (T_layer1 - T_n)
+            subsurface_term_1 = subsurface_const * 2.0
             
             self_heat_1 = 0.0
             if include_self_heating:
@@ -65,7 +66,7 @@ def calculate_temperatures(temperatures, layer_temperatures, insolation, visible
                 )
                 
             # Total Change for Predictor
-            dT_1 = rad_term_1 + insol_term_1 + cond_term_1 + self_heat_1
+            dT_1 = rad_term_1 + insol_term_1 + cond_term_1 + self_heat_1 + subsurface_term_1
             
             # Predicted Temp (Euler Step)
             T_pred = T_n + dT_1
@@ -76,13 +77,14 @@ def calculate_temperatures(temperatures, layer_temperatures, insolation, visible
             rad_term_2 = -const2 * (T_pred**4) * 2.0
             insol_term_2 = I_next * const1 * 2.0
             cond_term_2 = (const3 * 2.0) * (T_layer1 - T_pred)
+            subsurface_term_2 = subsurface_const * 2.0
             
             # Note: For efficiency, we approximate self-heating as constant during the substep
             # (Recalculating it requires updating ALL facets' T_pred, which is expensive)
             self_heat_2 = self_heat_1 
             
             # Total Change for Corrector
-            dT_2 = rad_term_2 + insol_term_2 + cond_term_2 + self_heat_2
+            dT_2 = rad_term_2 + insol_term_2 + cond_term_2 + self_heat_2 + subsurface_term_2
             
             # --- Final Update (Average of Slopes) ---
             new_temp = T_n + 0.5 * (dT_1 + dT_2)
@@ -125,7 +127,7 @@ def calculate_temperatures(temperatures, layer_temperatures, insolation, visible
 @jit(nopython=True)
 def calculate_temperatures_stable(temperatures, layer_temperatures, insolation, visible_facets_list, 
                         view_factors_list, const1, const2, const3, self_heating_const,
-                        timesteps_per_day, n_layers, include_self_heating):
+                        timesteps_per_day, n_layers, include_self_heating, subsurface_const):
     
     n_facets = temperatures.shape[0]
     
@@ -150,6 +152,7 @@ def calculate_temperatures_stable(temperatures, layer_temperatures, insolation, 
             # 1. Flux terms multiplied by 2.0 because surface node has half-mass (dx/2)
             insolation_term = insolation[i, time_step] * const1 * 2.0
             re_emitted_radiation_term = -const2 * (prev_temp**4) * 2.0
+            subsurface_term = subsurface_const * 2.0
             
             secondary_radiation_term = 0.0
             if include_self_heating:
@@ -167,7 +170,8 @@ def calculate_temperatures_stable(temperatures, layer_temperatures, insolation, 
                     insolation_term + 
                     re_emitted_radiation_term + 
                     conducted_heat_term + 
-                    secondary_radiation_term)
+                    secondary_radiation_term +
+                    subsurface_term)
 
             temperatures[i, time_step] = new_temp
             layer_temperatures[i, current_column, 0] = new_temp
@@ -238,6 +242,8 @@ class TempestStandardSolver(TemperatureSolver):
         const2 = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
         const3 = simulation.thermal_diffusivity * simulation.delta_t / simulation.layer_thickness**2
         self_heating_const = 5.670374419e-8 * simulation.delta_t * simulation.emissivity**2 / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
+        # Subsurface heating constant (converts flux W/m² to temperature change)
+        subsurface_const = config.subsurface_heating_flux * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
 
         convergence_error = simulation.convergence_target + 1
         day = 0
@@ -253,7 +259,7 @@ class TempestStandardSolver(TemperatureSolver):
                 thermal_data.thermal_view_factors,
                 const1, const2, const3, self_heating_const,
                 simulation.timesteps_per_day, simulation.n_layers,
-                config.include_self_heating
+                config.include_self_heating, subsurface_const
             )
 
             # Check for invalid temperatures

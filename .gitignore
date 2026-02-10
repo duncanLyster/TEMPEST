@@ -24,6 +24,9 @@ private/
 data/shape_models/
 data/model_setups/
 
+# Ignore large Diviner data files (too big for remote)
+global_cumul_avg_cyl_*.tab.txt
+
 # Ignore flyby moon scripts
 scripts/flyby_sim/
 
@@ -57,6 +60,7 @@ dist/
 # Ignore any large datasets or generated CSVs that might clutter the repo
 *.csv
 *.npz
+*.png
 
 # Local generated files
 .requirements_hash

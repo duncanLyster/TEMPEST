@@ -734,6 +734,68 @@ def main():
 
             sys.exit()
 
+    if config.plot_temp_curve and len(config.plot_temp_curve) > 0 and not config.silent_mode:
+        fig_temp_curve = plt.figure(figsize=(10, 6))
+        conditional_print(config.silent_mode, f"Preparing temperature curve plot for {len(config.plot_temp_curve)} facet(s).\n")
+        
+        # Validate all facet indices
+        invalid_indices = [idx for idx in config.plot_temp_curve if idx < 0 or idx >= len(shape_model)]
+        if invalid_indices:
+            conditional_print(config.silent_mode, 
+                f"ERROR: Invalid facet indices {invalid_indices}. "
+                f"Valid facet indices are between 0 and {len(shape_model) - 1}.")
+            sys.exit(1)
+        
+        # Create x-axis in degrees
+        degrees = np.linspace(0, 360, simulation.timesteps_per_day, endpoint=False)
+        
+        # Plot temperature curves for each facet
+        for facet_idx in config.plot_temp_curve:
+            temperature_data = result["final_day_temperatures"][facet_idx]
+            plt.plot(degrees, temperature_data, label=f'Facet {facet_idx}')
+        
+        plt.xlabel('Rotation of the body (degrees)')
+        plt.ylabel('Temperature (K)')
+        if len(config.plot_temp_curve) == 1:
+            plt.title(f'Diurnal temperature curve for facet {config.plot_temp_curve[0]}')
+        else:
+            plt.title(f'Diurnal temperature curves for facets {config.plot_temp_curve}')
+        plt.xlim(0, 360)
+        plt.xticks(np.arange(0, 361, 45))
+        plt.grid(True, alpha=0.3)
+        if len(config.plot_temp_curve) > 1:
+            plt.legend()
+        
+        # Save data if requested
+        if config.save_temp_curve_data:
+            output_dir = 'temperature_curves'
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Create timestamp for filename
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            
+            # Create filename with parameters for identification
+            param_str = f"TI{simulation.thermal_inertia}_alb{simulation.albedo}_heat{config.subsurface_heating_flux}"
+            
+            for facet_idx in config.plot_temp_curve:
+                temperature_data = result["final_day_temperatures"][facet_idx]
+                
+                # Create DataFrame with rotation angle and temperature
+                df = pd.DataFrame({
+                    'Rotation (degrees)': degrees,
+                    'Temperature (K)': temperature_data
+                })
+                
+                # Add metadata as comment in CSV header
+                output_csv_path = os.path.join(output_dir, f'facet_{facet_idx}_{param_str}_{timestamp}.csv')
+                df.to_csv(output_csv_path, index=False)
+                
+                conditional_print(config.silent_mode, 
+                    f"Temperature curve data saved to {output_csv_path}")
+        
+        conditional_print(config.silent_mode, f"Temperature curve(s) plotted for facet(s) {config.plot_temp_curve}.")
+        plt.show()
+
     if config.plot_final_day_all_layers_temp_distribution and not config.silent_mode:
         fig_final_all_layers_temp_dist = plt.figure()
         plt.plot(result["final_day_temperatures_all_layers"][config.plotted_facet_index])
@@ -783,7 +845,24 @@ def main():
         n_parents = len(shape_model)
         parent_t_final = np.zeros((n_parents, simulation.timesteps_per_day), dtype=np.float64)
         for i, facet in enumerate(shape_model):
+            # Check if depression_temperature_result exists and has valid data
+            if (not hasattr(facet, 'depression_temperature_result') or 
+                facet.depression_temperature_result is None or
+                "final_day_temperatures" not in facet.depression_temperature_result):
+                print(f"Warning: No depression temperature result for facet {i}, using parent facet temperatures")
+                # Use parent facet temperatures as fallback
+                parent_t_final[i, :] = result["final_day_temperatures"][i, :]
+                continue
+                
             sub_temps = facet.depression_temperature_result["final_day_temperatures"]
+            
+            # Check if sub_temps is None (solver encountered invalid temperatures)
+            if sub_temps is None:
+                print(f"Warning: Invalid temperatures detected for facet {i} depression, using parent facet temperatures")
+                # Use parent facet temperatures as fallback
+                parent_t_final[i, :] = result["final_day_temperatures"][i, :]
+                continue
+                
             mesh = Facet._canonical_subfacet_mesh
             area_vec = np.array([entry['area'] * facet.area for entry in mesh], dtype=np.float64)
             # Take T^4 weighted mean and convert back to T
@@ -1152,59 +1231,6 @@ def main():
             conditional_print(config.silent_mode, f"  Error exporting insolation for facet {idx}: {e}")
     
     conditional_print(config.silent_mode, f"Insolation data exported for {n_facets} facets")
-    
-    # Export temperatures for single facet as CSV
-    if len(shape_model) == 1:
-        export_single_facet_temperatures(shape_model, result, simulation, config)
-
-def export_single_facet_temperatures(shape_model, result, simulation, config):
-    """
-    Export temperatures for a single facet as a CSV file.
-    
-    This function is called automatically when there is only 1 facet in the shape model.
-    It exports the final day temperatures with rotation angle in degrees.
-    
-    Parameters:
-    -----------
-    shape_model : list
-        List of Facet objects
-    result : dict
-        Dictionary containing simulation results with 'final_day_temperatures' key
-    simulation : Simulation
-        Simulation object containing timesteps_per_day and other parameters
-    config : Config
-        Configuration object with silent_mode and other settings
-    """
-    if len(shape_model) != 1:
-        conditional_print(config.silent_mode, 
-                         f"Warning: export_single_facet_temperatures called with {len(shape_model)} facets. "
-                         f"Only exporting for the first facet.")
-    
-    # Get temperature data for the first (and only) facet
-    temperature_data = result["final_day_temperatures"][0]
-    
-    # Create rotation angle array in local time (hours)
-    local_times = np.linspace(0, 24, simulation.timesteps_per_day, endpoint=False)
-
-    # Apply a 180 degree shift to the local times to center the peak at noon
-    local_times = np.roll(local_times, len(local_times) // 2)
-    
-    # Create DataFrame
-    df = pd.DataFrame({
-        'Local time (hours)': local_times,
-        'Temperature (K)': temperature_data
-    })
-    
-    # Create output directory if it doesn't exist
-    output_dir = 'temperature_data'
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Generate output filename
-    output_csv_path = os.path.join(output_dir, 'facet_0_temperatures.csv')
-    
-    # Save to CSV
-    df.to_csv(output_csv_path, index=False)
-    conditional_print(config.silent_mode, f"Single facet temperature data exported to {output_csv_path}")
 
 # Call the main program with interrupt handling
 if __name__ == "__main__":

@@ -56,6 +56,7 @@ class Config:
         # Modelling parameters
         self.emissivity = self.config_data.get('emissivity')
         self.albedo = self.config_data.get('albedo', 0.5)
+        self.subsurface_heating_flux = self.config_data.get('subsurface_heating_flux', 0.0)  # W/m²
         self.convergence_method = self.config_data.get('convergence_method', 'mean')
         self.convergence_target = self.config_data.get('convergence_target', 0.1)
         self.max_days = self.config_data.get('max_days', 20)
@@ -90,7 +91,19 @@ class Config:
         # Plotting settings
         self.plotted_facet_index = self.config_data.get('plotted_facet_index', 1220)
         self.plot_insolation_curve = self.config_data.get('plot_insolation_curve', False)
+        # Handle plot_temp_curve as list (convert single value to list for convenience)
+        # Set to [] or None to disable plotting
+        plot_temp_curve_raw = self.config_data.get('plot_temp_curve', [])
+        if plot_temp_curve_raw is None:
+            self.plot_temp_curve = []
+        elif isinstance(plot_temp_curve_raw, (int, float)):
+            self.plot_temp_curve = [int(plot_temp_curve_raw)]
+        elif isinstance(plot_temp_curve_raw, list):
+            self.plot_temp_curve = [int(x) for x in plot_temp_curve_raw]
+        else:
+            self.plot_temp_curve = []
         self.plot_initial_temp_histogram = self.config_data.get('plot_initial_temp_histogram', False)
+        self.save_temp_curve_data = self.config_data.get('save_temp_curve_data', False)
         self.plot_final_day_all_layers_temp_distribution = self.config_data.get('plot_final_day_all_layers_temp_distribution', False)
         self.plot_energy_terms = self.config_data.get('plot_energy_terms', False)
         self.plot_final_day_comparison = self.config_data.get('plot_final_day_comparison', False)
