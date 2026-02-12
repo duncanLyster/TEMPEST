@@ -20,6 +20,9 @@ class TemperatureSolver:
             # Calculate the initial temperature based on average power in
             power_in = np.mean(insolation)
             # Calculate the temperature of the facet using the Stefan-Boltzmann law
+            # Guard: power_in must be non-negative to avoid NaN from fractional power of negative
+            if power_in <= 0:
+                power_in = 1e-20  # Small positive to avoid 0/0 and give ~0 K
             return (power_in / (emissivity * sigma))**(1/4)
 
         # Parallel processing of facets

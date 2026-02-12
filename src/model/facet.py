@@ -120,9 +120,9 @@ class Facet:
             Facet._canonical_F_sd = F_sd
         else:
             F_ss = Facet._canonical_F_ss
-        # Set sub-facet visible indices and secondary radiation view factors
+        # Set sub-facet visible indices and thermal view factors for self-heating
         self.depression_thermal_data.visible_facets = [np.arange(N, dtype=np.int64) for _ in range(N)]
-        self.depression_thermal_data.secondary_radiation_view_factors = [F_ss[i].copy() for i in range(N)]
+        self.depression_thermal_data.thermal_view_factors = [F_ss[i].copy() for i in range(N)]
 
         # Precompute and cache canonical subfacet triangles and centers for shadow tests
         if not hasattr(Facet, '_canonical_subfacet_triangles'):
@@ -203,35 +203,92 @@ class Facet:
                     continue
                 F_ss[i, j] = cos_i * cos_j * areas_ss[j] / (np.pi * dist2)
 
-        # Compute centroid-based view factors between subfacets and dome facets
+        # Compute view factors to sky dome (F_sd) treating dome as "Sky at Infinity"
+        # The dome mesh is generated as a bottom hemisphere (z < 0).
+        # Each dome facet is treated as a directional bin of the sky.
+        # Direction to sky bin j is -normals_sd[j] (since dome normals point out/down).
+        
+        # Calculate radius squared of the canonical dome from total area
+        # For 90 deg cap, Area = 2 * pi * R^2. 
+        # Total area of dome mesh sum(areas_sd) should be ~ 2*pi*R^2.
+        # This R2 is needed to convert Area_j to Solid Angle dOmega.
+        total_dome_area = areas_sd.sum()
+        if total_dome_area > 0:
+            R2 = total_dome_area / (2 * np.pi)
+        else:
+            R2 = 1.0 # Should not happen
+            print(f"Warning: total_dome_area is 0")
+
         for i in range(N):
             for j in range(M):
-                vec_ij = centroids_sd[j] - centroids_ss[i]
-                dist2 = np.dot(vec_ij, vec_ij)
-                if dist2 <= 0:
+                # Direction to this patch of sky
+                # Original dome is bottom hemisphere, normals point out (down).
+                # So direction TO sky is -normal.
+                # However, we want to map this to the UPPER hemisphere.
+                # So we take the vector -normals_sd[j], which points UP.
+                dir_to_sky = -normals_sd[j]
+                
+                # Check visibility (horizon cutoff)
+                # Angle between subfacet normal and sky direction
+                cos_theta = np.dot(normals_ss[i], dir_to_sky)
+                
+                if cos_theta <= 0:
                     continue
-                r = np.sqrt(dist2)
-                dir_ij = vec_ij / r
-                cos_i = np.dot(normals_ss[i], dir_ij)
-                cos_j = np.dot(normals_sd[j], -dir_ij)
-                if cos_i <= 0 or cos_j <= 0:
-                    continue
-                F_sd[i, j] = cos_i * cos_j * areas_sd[j] / (np.pi * dist2)
+                    
+                # Solid angle of this sky patch
+                # dOmega = Area_j / R^2
+                if R2 > 0:
+                    dOmega = areas_sd[j] / R2
+                else:
+                    dOmega = 0
+                
+                # View factor
+                # F = (cos_theta * dOmega) / pi
+                val = (cos_theta * dOmega) / np.pi
+                
+                F_sd[i, j] = val
 
-        # Normalize the S-D view factors to conserve energy
-        for i in range(N):
-            sum_sd = F_sd[i, :].sum()
-            if sum_sd > 0:
-                F_sd[i, :] /= sum_sd
-            # If sum is zero, leave F_sd[i, :] as zeros (no view factors to dome)
-
-        # Normalize the S-S view factors to conserve energy
+        # Normalize view factors to ensure conservation of energy
+        # F_ss is determined by local geometry and is assumed correct.
+        # F_sd is scaled so that F_ss + F_sd sums to 1.0 (remainder goes to sky).
+        
+        # Track max correction for logging
+        max_correction = 0.0
+        max_correction_idx = -1
+        
         for i in range(N):
             sum_ss = F_ss[i, :].sum()
-            if sum_ss > 0:
+            sum_sd = F_sd[i, :].sum()
+            
+            current_total = sum_ss + sum_sd
+            remainder = 1.0 - sum_ss
+            
+            # Log if correction is significant (>1%)
+            if abs(current_total - 1.0) > 0.01:
+                correction_mag = abs(1.0 - current_total)
+                if correction_mag > max_correction:
+                    max_correction = correction_mag
+                    max_correction_idx = i
+            
+            if remainder < 0:
+                # Should not happen physically unless F_ss > 1 due to numerical error
+                # In this case, scale F_ss down to 1.0 and set F_sd to 0
                 F_ss[i, :] /= sum_ss
-            # If sum is zero, leave F_ss[i, :] as zeros (no view factors to other subfacets)
-    
+                F_sd[i, :] = 0.0
+            elif sum_sd > 0:
+                # Scale F_sd to fill the remainder
+                scale_factor = remainder / sum_sd
+                F_sd[i, :] *= scale_factor
+            else:
+                # No dome view factors calculated, but there is a remainder.
+                # Distribute remainder uniformly across all dome facets
+                if M > 0:
+                    F_sd[i, :] = remainder / M
+                    
+        if max_correction > 0.01:
+            print(f"Notice: View factor energy conservation required correction (Max missing: {max_correction*100:.1f}% at subfacet {max_correction_idx})")
+            print(f"        F_sd was scaled to ensure sum(F_ss) + sum(F_sd) = 1.0")
+
         return F_ss, F_sd
 
     @staticmethod

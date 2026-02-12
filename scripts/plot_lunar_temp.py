@@ -14,18 +14,20 @@ target_lon = 336.6  # Convert to -180 to 180 range
 target_lon_180 = target_lon - 360 if target_lon > 180 else target_lon
 
 # Box size (2 degree by 2 degree)
-lat_min = target_lat - 1.0
-lat_max = target_lat + 1.0
-lon_min = target_lon_180 - 1.0
-lon_max = target_lon_180 + 1.0
+box_size = 1.0
+
+lat_min = target_lat - box_size / 2
+lat_max = target_lat + box_size / 2
+lon_min = target_lon_180 - box_size / 2
+lon_max = target_lon_180 + box_size / 2
 
 # Read the data file
 data_file = 'global_cumul_avg_cyl_10s00s_002.tab.txt'
 print(f"Loading data from {data_file}...")
 print(f"Target: lat={target_lat}±1.0, lon={target_lon} ({target_lon_180:.2f}±1.0 in -180/180)")
 
-# Extract data for the 2x2 degree box using awk
-print("Extracting data for 2x2 degree box...")
+# Extract data for the box using awk
+print(f"Extracting data for {box_size}x{box_size} degree box...")
 awk_extract = f"""awk -F',' 'NR>1 {{
     lon=$1+0; lat=$2+0; tbol=$11+0;
     if (lon >= {lon_min} && lon <= {lon_max} && lat >= {lat_min} && lat <= {lat_max} && tbol != -9999) {{
@@ -77,18 +79,25 @@ print(f"Binned into {len(ltim_sorted)} time bins")
 
 # Load TEMPEST simulation data
 csv_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'output', 'user_saved_data',
-                         '1D_10-02-2026_07-24-19', 'temperature_(k)_vs_timestep_072419.csv')
+                         '1D_10-02-2026_08-32-45', 'temperature_(k)_vs_timestep_083245.csv')
 csv_path = os.path.normpath(csv_path)
 ltim_csv, temp_csv = np.loadtxt(csv_path, delimiter=',', skiprows=1, unpack=True)
 
-print(f"Loaded {len(ltim_csv)} points from TEMPEST simulation")
+# Apply 180 degree phase offset (12 hours for 24h cycle)
+ltim_csv = (ltim_csv + 12) % 24
+# Sort for correct line plotting
+sort_idx = np.argsort(ltim_csv)
+ltim_csv = ltim_csv[sort_idx]
+temp_csv = temp_csv[sort_idx]
+
+print(f"Loaded {len(ltim_csv)} points from TEMPEST simulation (180° phase offset applied)")
 
 # Plot with error bars (no line)
 plt.figure(figsize=(10, 6))
 plt.errorbar(ltim_sorted, tbol_mean_sorted, yerr=tbol_std_sorted,
              fmt='o', markersize=5, capsize=3, capthick=1.5, elinewidth=1.5,
              label='Diviner observed')
-plt.plot(ltim_csv, temp_csv, 'b-', linewidth=1.5, alpha=0.8, label='TEMPEST simulation')
+plt.plot(ltim_csv, temp_csv, 'b-', linewidth=1.5, alpha=0.8, label='TEMPEST - TI = 55 W m⁻² K⁻¹ s⁻½')
 plt.legend()
 plt.xlabel('Local Time', fontsize=12)
 plt.xlim(0, 24)

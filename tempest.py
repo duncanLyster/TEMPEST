@@ -63,6 +63,43 @@ from src.utilities.utils import (
 )
 from src.utilities.plotting.plotting import check_remote_and_animate
 
+
+def _compute_dome_adjacency(dome_mesh):
+    """Compute adjacency matrix: adjacency[i,j]=True if dome bins i,j share an edge.
+    Used for best-bin + adjacent interpolation in view mode."""
+    M = len(dome_mesh)
+    tol = 1e-9
+    
+    def vert_key(v):
+        return tuple(round(float(x), 12) for x in v)
+    
+    # Build edge set per facet: (vkey1, vkey2) for each edge
+    def get_edges(f):
+        verts = [vert_key(f['vertices'][k]) for k in range(3)]
+        return [
+            tuple(sorted([verts[0], verts[1]])),
+            tuple(sorted([verts[1], verts[2]])),
+            tuple(sorted([verts[2], verts[0]]))
+        ]
+    
+    # Map edge -> list of facet indices
+    edge_to_facets = {}
+    for i, f in enumerate(dome_mesh):
+        for e in get_edges(f):
+            if e not in edge_to_facets:
+                edge_to_facets[e] = []
+            edge_to_facets[e].append(i)
+    
+    # Adjacency: bins that share an edge
+    adj = np.zeros((M, M), dtype=bool)
+    for e, facets in edge_to_facets.items():
+        for i in facets:
+            for j in facets:
+                if i != j:
+                    adj[i, j] = True
+    return adj
+
+
 def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
     ''' 
     This function reads in the shape model of the body from a .stl file and return an array of facets, each with its own area, position, and normal vector.
@@ -461,12 +498,17 @@ def main():
             wd = world_dirs[t]
             cos_parent = normals_array.dot(wd)
             
+            # Solar constant (incident flux at normal incidence)
+            solar_constant = simulation.solar_luminosity / (4 * np.pi * simulation.solar_distance_m**2)
+            
             # Prepare inputs for parallel processing
             flux_inputs = []
             for i in range(n_facets):
                 cp = cos_parent[i]
-                if cp > 0:
-                    flux0 = base_ins[i] / ((1 - simulation.albedo) * cp)
+                # Use direct solar flux if facet is illuminated (base_ins > 0)
+                # This avoids numerical instability from dividing by small cp near terminator
+                if cp > 0 and base_ins[i] > 1e-9:
+                    flux0 = solar_constant
                     flux_inputs.append((shape_model[i], flux0, wd, config, simulation))
                 else:
                     flux_inputs.append((shape_model[i], None, wd, config, simulation))
@@ -508,8 +550,10 @@ def main():
                 inc_vis = np.tensordot(out_vis_all, F_dp_all, axes=([0,1], [0,1]))
                 inc_th  = np.tensordot(out_th_all,  F_dp_all, axes=([0,1], [0,1]))
             
-            # Update insolation with directional coupling
-            thermal_data.insolation[:, t] += (inc_vis + inc_th) / parent_areas
+            # Update insolation with directional coupling (convert incident to absorbed flux)
+            # Solver expects absorbed flux: visible -> (1-albedo), thermal -> (1-emissivity)
+            absorbed_coupling = (inc_vis * (1 - simulation.albedo) + inc_th * (1 - simulation.emissivity)) / parent_areas
+            thermal_data.insolation[:, t] += absorbed_coupling
         # End of roughness coupling
         t_coup_end = time.time()
         conditional_print(config.silent_mode, f"Roughness coupling time: {t_coup_end - t_coup_start:.2f} seconds")
@@ -964,7 +1008,11 @@ def main():
                 # Project to dome bins
                 dome_flux_th[i] = F_sd.T.dot(E_sub)
             # Compute dome metadata (kept in memory)
-            dome_normals = np.array([entry['normal'] for entry in Facet._canonical_dome_mesh])
+            # Store "direction to sky" (not raw mesh normals). The dome mesh is a bottom hemisphere
+            # with normals pointing down; direction to sky = -normal. This matches facet.py F_sd
+            # and ensures animation/phase-curve bin selection uses the correct convention.
+            dome_normals = np.array([-entry['normal'] for entry in Facet._canonical_dome_mesh])
+            dome_adjacency = _compute_dome_adjacency(Facet._canonical_dome_mesh)
             canonical_areas = np.array([entry['area'] for entry in Facet._canonical_dome_mesh])
             parent_areas = np.array([facet.area for facet in shape_model])
             dome_bin_areas = canonical_areas[None, :] * parent_areas[:, None] * config.kernel_dome_radius_factor**2
@@ -1010,8 +1058,10 @@ def main():
                 domegrp = cf.create_group('dome_fluxes')
                 domegrp.create_dataset('dome_flux_th',           data=dome_flux_th)
                 domegrp.create_dataset('dome_normals',           data=dome_normals)
+                domegrp.create_dataset('dome_adjacency',          data=dome_adjacency)
                 domegrp.create_dataset('dome_bin_areas',         data=dome_bin_areas)
                 domegrp.create_dataset('dome_bin_solid_angles',  data=solid_angles2)
+                domegrp.create_dataset('dome_vertices',           data=verts2)  # (n_bins, 3, 3) for visualization
                 # — copy out all animation parameters for TESBY —
                 paramgrp = cf.create_group('animation_params')
                 paramgrp.create_dataset('rotation_axis',        data=simulation.rotation_axis)

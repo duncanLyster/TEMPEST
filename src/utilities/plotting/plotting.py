@@ -66,13 +66,17 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
 
         if apply_kernel_based_roughness:
             print(f'Roughness detected - new logic applied\n')
-
-            print(f'Plotted variable array looks like {len(plotted_variable_array)}')
+            if plotted_variable_array is not None:
+                print(f'Plotted variable array looks like {len(plotted_variable_array)}')
+            else:
+                print('WARNING: plotted_variable_array is None (solver detected invalid temperatures)')
 
         else: 
             print(f'Smooth model detected\n')
-
-            print(f'Plotted variable array looks like {len(plotted_variable_array)}')
+            if plotted_variable_array is not None:
+                print(f'Plotted variable array looks like {len(plotted_variable_array)}')
+            else:
+                print('WARNING: plotted_variable_array is None (solver detected invalid temperatures)')
 
 
         # Save other parameters to JSON file
@@ -89,6 +93,8 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
                 'emissivity': emissivity,   # Save emissivity for animate_model
                 'rotation_axis': None,  # Placeholder for rotation_axis (stored in NPZ)
                 'sunlight_direction': None,  # Placeholder for sunlight_direction (stored in NPZ)
+                # Saved explicitly: popped above so must be included for run_local_animations
+                'apply_kernel_based_roughness': apply_kernel_based_roughness,
                 # Additional keyword arguments
                 **kwargs
             }

@@ -1,3 +1,19 @@
+# Tempest Standard Solver
+# This solver is a standard solver for the Tempest model. It is a simple solver that uses a 
+# simple forward Euler method to solve the temperature equation. It is based on thermprojrs of 
+# Spencer et al. 1989, Icarus 78 with a key modification. The base layer temperature is fixed 
+# at the end of each day to the previous day's mean surface temperature (T^4)^0.25. This is 
+# leads to very fast convergence of the model.
+
+# Limitations: (Read this is you are getting weird results)
+# The model works well when the diurnal curve is "curvy", but not when it has sharp transitions, 
+# and it may crash or give you strange behaviour, like very high surface temps, or a midday dip.
+# This is common for explicit time-stepping solvers. You are most likely to run into issues looking 
+# at low thermal inertias at low solar distances. If this happens you can increase the number of 
+# timesteps per day, but it will quickly become very computationally expensive. An implicit solver 
+# may be a better option, but is yet to be implemented in TEMPEST. 
+
+
 import numpy as np
 from numba import jit
 from .base_solver import TemperatureSolver
@@ -88,6 +104,9 @@ def calculate_temperatures(temperatures, layer_temperatures, insolation, visible
             
             # --- Final Update (Average of Slopes) ---
             new_temp = T_n + 0.5 * (dT_1 + dT_2)
+            # Physical floor: CMB (~2.7 K); prevents unphysical negative T from runaway cooling
+            if new_temp < 2.7:
+                new_temp = 2.7
 
             temperatures[i, time_step] = new_temp
             layer_temperatures[i, current_column, 0] = new_temp
@@ -267,6 +286,16 @@ class TempestStandardSolver(TemperatureSolver):
                 for time_step in range(simulation.timesteps_per_day):
                     if np.isnan(current_day_temperature[i, time_step]) or np.isinf(current_day_temperature[i, time_step]) or current_day_temperature[i, time_step] < 0:
                         conditional_print(config.silent_mode, f"Invalid temperature {current_day_temperature[i, time_step]} K detected for facet {i} at timestep {time_step}")
+                        # Root-cause diagnostics (always print for debugging)
+                        init_t = thermal_data.temperatures[i, 0]
+                        ins = thermal_data.insolation[i, :]
+                        conditional_print(False, f"  [Diagnostics] Facet {i}: initial T={init_t:.4f} K, "
+                            f"insolation: min={np.nanmin(ins):.2e} max={np.nanmax(ins):.2e} mean={np.nanmean(ins):.2e} "
+                            f"(nan={np.isnan(ins).sum()}, inf={np.isinf(ins).sum()})")
+                        conditional_print(False, f"  [Diagnostics] constants: const1={const1:.2e} const2={const2:.2e} const3={const3:.4f} "
+                            f"(CFL stable if const3<=0.5)")
+                        vf = thermal_data.thermal_view_factors[i]
+                        conditional_print(False, f"  [Diagnostics] thermal_view_factors[{i}]: len={len(vf)} (empty => no self-heating)")
                         return {
                             "final_day_temperatures": None,
                             "final_day_temperatures_all_layers": None,

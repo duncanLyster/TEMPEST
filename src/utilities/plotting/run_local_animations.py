@@ -86,7 +86,9 @@ def run_saved_animation(json_file, npz_file):
     print(f"Positional args count: {len(args)}")
     print(f"Keyword args: {list(kwargs.keys())}\n")
     
-    # Call the animate_model function
+    # Call the animate_model function; pass output_dir so dome data loads from same folder
+    output_dir = os.path.dirname(json_file)
+    kwargs['output_dir'] = output_dir
     print("Running animation...")
     animate_model(*args, animation_debug_mode=True, **kwargs)
     print("Animation complete.")

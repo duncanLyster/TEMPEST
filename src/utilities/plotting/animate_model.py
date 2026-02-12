@@ -63,6 +63,7 @@ class AnimationState:
         self.dome_bin_normals = None
         self.dome_bin_areas = None
         self.dome_bin_solid_angles = None
+        self.dome_adjacency = None  # Mesh adjacency for best-bin + adjacent interpolation
         self.dome_rotations = None
         self.simulation_emissivity = None
         self.facet_areas = None
@@ -406,6 +407,34 @@ def convert_to_local_time(state, global_time_data, facet_normal, sunlight_direct
     
     return np.roll(global_time_data, shift)
 
+def _weights_best_bin_adjacent(cosines, adjacency):
+    """Best-bin + adjacent interpolation. Weight by cosine (angular overlap).
+    Only the best bin and its mesh-adjacent neighbors contribute.
+    When adjacency is None, use top bins by cosine (fallback to avoid single-bin jumps)."""
+    best_bin = np.argmax(cosines)
+    # Include best bin and adjacent bins only
+    if adjacency is not None:
+        adj_bins = np.where(adjacency[best_bin, :])[0]
+        included = np.unique(np.concatenate([[best_bin], adj_bins]))
+    else:
+        # Fallback: include bins with cosine within 85% of best (smooths transitions)
+        best_cos = max(cosines[best_bin], 0)
+        if best_cos < 1e-6:
+            included = np.array([best_bin])
+        else:
+            threshold = max(0.01, 0.85 * best_cos)
+            included = np.where(np.clip(cosines, 0, None) >= threshold)[0]
+            if len(included) == 0:
+                included = np.array([best_bin])
+    # Weight by cosine (fractional overlap of viewing circle with each bin)
+    weights = np.zeros_like(cosines)
+    weights[included] = np.clip(cosines[included], 0, None)
+    sum_w = weights.sum()
+    if sum_w > 1e-9:
+        weights /= sum_w
+    return weights
+
+
 def calculate_view_dependent_temperatures_all_timesteps(state, plotter, rot_mat_func, rotation_axis):
     """Calculate view-dependent temperatures for all timesteps given current viewing direction."""
     if not state.view_mode or state.dome_flux_th is None:
@@ -421,48 +450,46 @@ def calculate_view_dependent_temperatures_all_timesteps(state, plotter, rot_mat_
     n_timesteps = state.dome_flux_th.shape[2]
     view_dependent_temps = np.zeros((n_facets, n_timesteps))
     
-    # Constants for temperature calculation
     scale = state.dome_radius_factor ** 2
     sigma = 5.670374419e-8
     epsilon = state.simulation_emissivity
     
     for timestep in range(n_timesteps):
-        # Calculate rotation matrix for this timestep
         rotation_angle = (timestep / state.timesteps_per_day) * 2 * math.pi
         rot_mat = np.array(rot_mat_func(rotation_axis, rotation_angle))
         
-        # Transform view direction to body coordinates for this timestep
         view_dir_body = rot_mat.T.dot(view_dir_world)
+        dir_to_observer_body = -view_dir_body
         
-        # Find best dome bins for each facet
-        cosines = np.dot(view_dir_body, state.dome_bin_normals.T).reshape(1, -1)
-        cosines = np.broadcast_to(cosines, (n_facets, len(state.dome_bin_normals)))
-        cosines = np.clip(cosines, 0, None)
-        best_bins = np.argmax(cosines, axis=1)
-        selected_cosines = cosines[np.arange(len(best_bins)), best_bins]
+        cosines = np.dot(dir_to_observer_body, state.dome_bin_normals.T)
+        weights = _weights_best_bin_adjacent(cosines, state.dome_adjacency)
+        sum_w = weights.sum()
         
-        # Compute facet horizon test
         normals_t = np.dot(state.facet_normals, rot_mat.T)
         facet_horizons = np.dot(normals_t, view_dir_world)
         
-        # Extract flux and area data for selected bins
-        F_values = state.dome_flux_th[np.arange(len(best_bins)), best_bins, timestep]
-        area_values = state.dome_bin_areas[np.arange(len(best_bins)), best_bins]
+        if sum_w > 1e-9:
+            F = state.dome_flux_th[:, :, timestep]
+            A = state.dome_bin_areas
+            # T^4 weighted mean: average in radiance (T^4) space, then take 4th root
+            T4_per_bin = np.zeros_like(F)
+            valid_bins = A > 1e-12
+            T4_per_bin[valid_bins] = (F[valid_bins] / (epsilon * sigma * A[valid_bins])) * scale
+            T4_weighted = (T4_per_bin * weights[None, :]).sum(axis=1)
+            T_raw = np.zeros(n_facets)
+            valid = T4_weighted > 1e-12
+            T_raw[valid] = (T4_weighted[valid]) ** 0.25
+            dome_visible = True
+        else:
+            T_raw = np.zeros(n_facets)
+            dome_visible = False
         
-        # Compute temperatures
-        T_raw = np.zeros(n_facets)
-        valid_areas = area_values > 0
-        T_raw[valid_areas] = ((F_values[valid_areas] / area_values[valid_areas] * scale) / (epsilon * sigma)) ** 0.25
-        
-        # Apply horizon and dome visibility masks (same logic as real-time rendering)
         horizon_tolerance = 1e-6
-        mask_dome = selected_cosines > horizon_tolerance  # Dome patch visible
-        mask_facet = facet_horizons < -horizon_tolerance  # Facet front-facing
+        mask_dome = dome_visible
+        mask_facet = facet_horizons < -horizon_tolerance
         mask_combined = mask_dome & mask_facet
         
-        # Set final temperatures: 0K if not visible, raw temperature if visible
         T_final = np.where(mask_combined, T_raw, 0.0)
-        
         view_dependent_temps[:, timestep] = T_final
     
     return view_dependent_temps
@@ -481,7 +508,7 @@ def convert_to_view_time(global_time_data, facet_normal, rotation_axis, view_dir
 
 def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
                   timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity, plot_title, axis_label, animation_frames, 
-                  save_animation, save_animation_name, background_colour, dome_radius_factor=1.0, colour_map='coolwarm', apply_kernel_based_roughness=False, pre_selected_facets=[1220, 845], animation_debug_mode=False):
+                  save_animation, save_animation_name, background_colour, dome_radius_factor=1.0, colour_map='coolwarm', apply_kernel_based_roughness=False, pre_selected_facets=[1220, 845], animation_debug_mode=False, output_dir=None):
     """
     Animate a 3D model with temperature or other variable data.
     
@@ -568,18 +595,24 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     # Load precomputed dome thermal flux arrays only if roughness is enabled
     if apply_kernel_based_roughness:
-        # Look for dome flux data in the most recent animation output
         from src.utilities.locations import Locations
         loc = Locations()
         remote_outputs_dir = loc.remote_outputs
         
-        # Find the most recent animation output directory
-        animation_dirs = [d for d in os.listdir(remote_outputs_dir) if d.startswith('animation_outputs_')]
-        if animation_dirs:
-            latest_dir = max(animation_dirs)
-            dome_flux_file = [f for f in os.listdir(os.path.join(remote_outputs_dir, latest_dir)) 
-                             if f.startswith('combined_animation_data_rough_')][0]
-            dome_flux_path = os.path.join(remote_outputs_dir, latest_dir, dome_flux_file)
+        # Use output_dir if provided (e.g. from run_local_animations), else latest folder
+        if output_dir is not None and os.path.exists(output_dir):
+            target_dir = output_dir
+        else:
+            animation_dirs = [d for d in os.listdir(remote_outputs_dir) if d.startswith('animation_outputs_')]
+            target_dir = os.path.join(remote_outputs_dir, max(animation_dirs)) if animation_dirs else None
+        
+        if target_dir is not None:
+            rough_files = [f for f in os.listdir(target_dir) if f.startswith('combined_animation_data_rough_')]
+            if rough_files:
+                dome_flux_file = rough_files[0]
+                dome_flux_path = os.path.join(target_dir, dome_flux_file)
+            else:
+                dome_flux_path = os.path.join('data', 'output', 'dome_fluxes.h5')
         else:
             dome_flux_path = os.path.join('data', 'output', 'dome_fluxes.h5')  # Fallback to old path
             
@@ -592,12 +625,14 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
                     state.dome_bin_normals = dome_group['dome_normals'][:]
                     state.dome_bin_areas = dome_group['dome_bin_areas'][:]
                     state.dome_bin_solid_angles = dome_group['dome_bin_solid_angles'][:]
+                    state.dome_adjacency = dome_group['dome_adjacency'][:] if 'dome_adjacency' in dome_group else None
                 else:
                     # Fallback to old root-level format
                     state.dome_flux_th = dfh['dome_flux_th'][:]
                     state.dome_bin_normals = dfh['dome_normals'][:]
                     state.dome_bin_areas = dfh['dome_bin_areas'][:]
                     state.dome_bin_solid_angles = dfh['dome_bin_solid_angles'][:]
+                    state.dome_adjacency = dfh['dome_adjacency'][:] if 'dome_adjacency' in dfh else None
                 debug_print(state, f"[DEBUG] Loaded dome_flux_th with shape {state.dome_flux_th.shape}, dome_bin_normals shape {state.dome_bin_normals.shape}, dome_bin_areas shape {state.dome_bin_areas.shape}")
                 # Compute world->local rotation matrices for each facet
                 up = np.array([0.0, 0.0, 1.0])
@@ -621,6 +656,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
             state.dome_flux_th = None
             state.dome_bin_normals = None
             state.dome_bin_solid_angles = None
+            state.dome_adjacency = None
             state.dome_rotations = None
             state.dome_bin_areas = None
     else:
@@ -629,6 +665,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         state.dome_flux_th = None
         state.dome_bin_normals = None
         state.dome_bin_solid_angles = None
+        state.dome_adjacency = None
         state.dome_rotations = None
         state.dome_bin_areas = None
 
@@ -641,7 +678,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     plotter = pv.Plotter()
     plotter.enable_anti_aliasing()
-    plotter.enable_lightkit()  # Enable dynamic lighting for shading
+    # No lightkit: use flat lighting so colormap values match the colorbar exactly
     plotter.add_key_event('space', lambda: (setattr(state, 'is_paused', not state.is_paused), setattr(state, 'pause_time', (state.current_frame / state.timesteps_per_day) if state.is_paused else None), debug_print(state, f"[DEBUG] Toggled pause to {state.is_paused}")))
     plotter.add_key_event('Left', lambda: move_backward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
     plotter.add_key_event('Right', lambda: move_forward(state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label))
@@ -663,62 +700,15 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
             debug_print(state, "[DEBUG] Updating diurnal plot from _toggle_view_event")
             # Compute time-series lines depending on view_mode
             if state.view_mode and state.dome_flux_th is not None:
-                # Dome-based temperatures across full rotation
-                # Compute fixed view direction in world coords
-                cam_pos = np.array(plotter.camera.position)
-                focal = np.array(plotter.camera.focal_point)
-                view_dir_world = focal - cam_pos
-                view_dir_world /= np.linalg.norm(view_dir_world)
-                # Debug: print camera direction spherical angles only when changed
-                theta = math.acos(np.clip(view_dir_world[2], -1.0, 1.0))
-                phi = math.atan2(view_dir_world[1], view_dir_world[0])
-                if state.last_camera_angles is None or abs(theta - state.last_camera_angles[0]) > 1e-3 or abs(phi - state.last_camera_angles[1]) > 1e-3:
-                    debug_print(state, f"[DEBUG] Camera direction angles: theta={theta:.3f}, phi={phi:.3f}")
-                    state.last_camera_angles = (theta, phi)
-                # Compute global rotation for facet normals
-                rot_mat = np.array(rotation_matrix(state.rotation_axis, state.cumulative_rotation))
-                # Transform view direction to body coordinates 
-                view_dir_body = rot_mat.T.dot(view_dir_world)
-                # Compute rotated facet normals for horizon test
-                normals_t = np.dot(state.facet_normals, rot_mat.T)
-                # Compute facet horizon mask: rotated facet normal dot view direction
-                facet_horizons = np.dot(normals_t, view_dir_world)
-                # Use body-frame view direction with world-coordinate dome normals
-                cosines = np.dot(view_dir_body, state.dome_bin_normals.T).reshape(1, -1)
-                cosines = np.broadcast_to(cosines, (len(state.facet_normals), len(state.dome_bin_normals)))
-                cosines = np.clip(cosines, 0, None)
-                best_bins = np.argmax(cosines, axis=1)
-                # Prepare time axis
-                sigma = 5.670374419e-8
-                epsilon = state.simulation_emissivity
-                n_t = state.dome_flux_th.shape[2]
-                x = np.linspace(0, 1, n_t)
-                # Update each selected facet's diurnal line with dynamic bin selection
-                for facet_id, line in state.cell_colors.items():
-                    T_series = np.zeros(n_t)
-                    for j in range(n_t):
-                        # Body rotation at timestep j
-                        angle_j = 2 * math.pi * j / state.timesteps_per_day
-                        rot_j = np.array(rotation_matrix(state.rotation_axis, angle_j))
-                        # Rotate view direction into mesh frame (world->body)
-                        view_mesh = rot_j.T.dot(view_dir_world)
-                        # FIXED: Use view direction in body coordinates directly with dome normals (both in world coordinates)
-                        coss = np.clip(np.dot(view_mesh, state.dome_bin_normals.T), 0, None)
-                        b_j = np.argmax(coss)
-                        F_j = state.dome_flux_th[facet_id, b_j, j]
-                        area_j = state.dome_bin_areas[facet_id, b_j]
-                        scale = state.dome_radius_factor ** 2
-                        # Check if patch is visible and facet facing camera
-                        facet_norm_j = state.facet_normals[facet_id].dot(rot_j.T)
-                        horizon_val = np.dot(facet_norm_j, view_dir_world)
-                        # Add small tolerance to horizon tests
-                        horizon_tolerance = 1e-6
-                        if area_j > 0 and coss[b_j] > horizon_tolerance and horizon_val < -horizon_tolerance:
-                            T_series[j] = ((F_j / area_j * scale) / (epsilon * sigma)) ** 0.25
-                        else:
-                            T_series[j] = 0.0
-                    line.set_xdata(x)
-                    line.set_ydata(T_series)
+                # Dome-based temperatures across full rotation (uses weighted interpolation for smoothness)
+                view_dependent_temps = calculate_view_dependent_temperatures_all_timesteps(
+                    state, plotter, rotation_matrix, state.rotation_axis)
+                if view_dependent_temps is not None:
+                    n_t = view_dependent_temps.shape[1]
+                    x = np.linspace(0, 1, n_t)
+                    for facet_id, line in state.cell_colors.items():
+                        line.set_xdata(x)
+                        line.set_ydata(view_dependent_temps[facet_id, :])
             else:
                 # Parent facet temperatures
                 n_t = plotted_variable_array.shape[1]
@@ -744,7 +734,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], scale=max_dimension * 0.3)
     plotter.add_mesh(sunlight_arrow, color='yellow')
 
-    plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False, lighting=True, smooth_shading=True)
+    plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False, lighting=False, smooth_shading=True)
 
     plotter.enable_element_picking(callback=lambda picked_mesh: on_pick(state, picked_mesh, plotter, pv_mesh, plotted_variable_array, axis_label), mode='cell', show=False, show_message=False)
 
@@ -755,7 +745,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     state.initial_camera_up = plotter.camera.up
 
     plotter.scalar_bar.GetLabelTextProperty().SetColor(bar_color)
-    plotter.scalar_bar.SetPosition(0.2, 0.05)
+    plotter.scalar_bar.SetPosition(0.3, 0.05)
     plotter.scalar_bar.GetLabelTextProperty().SetJustificationToCentered()
     plotter.scalar_bar.SetTitle(axis_label)
     plotter.scalar_bar.GetTitleTextProperty().SetColor(text_color_rgb)
@@ -831,8 +821,8 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         rng=[data_min, data_max + range_padding],
         value=data_max,
         title=f"Max {axis_label}",
-        pointa=(0.025, 0.15),
-        pointb=(0.225, 0.15),
+        pointa=(0.025, 0.22),
+        pointb=(0.225, 0.22),
         style='modern'
     )
 
@@ -864,61 +854,14 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         def _camera_moved_event(caller, event):
             if state.view_mode and state.fig and hasattr(state, 'ax'):
                 debug_print(state, "[DEBUG] Camera moved event: updating diurnal plot")
-                sigma = 5.670374419e-8
-                epsilon = state.simulation_emissivity
-                # Compute fixed view direction in world coords
-                cam_pos = np.array(plotter.camera.position)
-                focal = np.array(plotter.camera.focal_point)
-                view_dir_world = focal - cam_pos
-                view_dir_world /= np.linalg.norm(view_dir_world)
-                # Debug: print camera direction spherical angles only when changed
-                theta = math.acos(np.clip(view_dir_world[2], -1.0, 1.0))
-                phi = math.atan2(view_dir_world[1], view_dir_world[0])
-                if state.last_camera_angles is None or abs(theta - state.last_camera_angles[0]) > 1e-3 or abs(phi - state.last_camera_angles[1]) > 1e-3:
-                    debug_print(state, f"[DEBUG] Camera direction angles: theta={theta:.3f}, phi={phi:.3f}")
-                    state.last_camera_angles = (theta, phi)
-                # Compute global rotation for facet normals
-                rot_mat = np.array(rotation_matrix(state.rotation_axis, state.cumulative_rotation))
-                # Transform view direction to body coordinates 
-                view_dir_body = rot_mat.T.dot(view_dir_world)
-                # Compute rotated facet normals for horizon test
-                normals_t = np.dot(state.facet_normals, rot_mat.T)
-                # Compute facet horizon mask: rotated facet normal dot view direction
-                facet_horizons = np.dot(normals_t, view_dir_world)
-                # Use body-frame view direction with world-coordinate dome normals
-                cosines = np.dot(view_dir_body, state.dome_bin_normals.T).reshape(1, -1)
-                cosines = np.broadcast_to(cosines, (len(state.facet_normals), len(state.dome_bin_normals)))
-                cosines = np.clip(cosines, 0, None)
-                best_bins = np.argmax(cosines, axis=1)
-                # Prepare time axis
-                n_t = state.dome_flux_th.shape[2]
-                x = np.linspace(0, 1, n_t)
-                # Update each selected facet's diurnal line with dynamic bin selection
-                for facet_id, line in state.cell_colors.items():
-                    T_series = np.zeros(n_t)
-                    for j in range(n_t):
-                        # Body rotation at timestep j
-                        angle_j = 2 * math.pi * j / state.timesteps_per_day
-                        rot_j = np.array(rotation_matrix(state.rotation_axis, angle_j))
-                        # Rotate view direction into mesh frame (world->body)
-                        view_mesh = rot_j.T.dot(view_dir_world)
-                        # FIXED: Use view direction in body coordinates directly with dome normals (both in world coordinates)
-                        coss = np.clip(np.dot(view_mesh, state.dome_bin_normals.T), 0, None)
-                        b_j = np.argmax(coss)
-                        F_j = state.dome_flux_th[facet_id, b_j, j]
-                        area_j = state.dome_bin_areas[facet_id, b_j]
-                        scale = state.dome_radius_factor ** 2
-                        # Check if patch is visible and facet facing camera
-                        facet_norm_j = state.facet_normals[facet_id].dot(rot_j.T)
-                        horizon_val = np.dot(facet_norm_j, view_dir_world)
-                        # Add small tolerance to horizon tests
-                        horizon_tolerance = 1e-6
-                        if area_j > 0 and coss[b_j] > horizon_tolerance and horizon_val < -horizon_tolerance:
-                            T_series[j] = ((F_j / area_j * scale) / (epsilon * sigma)) ** 0.25
-                        else:
-                            T_series[j] = 0.0
-                    line.set_xdata(x)
-                    line.set_ydata(T_series)
+                view_dependent_temps = calculate_view_dependent_temperatures_all_timesteps(
+                    state, plotter, rotation_matrix, state.rotation_axis)
+                if view_dependent_temps is not None:
+                    n_t = view_dependent_temps.shape[1]
+                    x = np.linspace(0, 1, n_t)
+                    for facet_id, line in state.cell_colors.items():
+                        line.set_xdata(x)
+                        line.set_ydata(view_dependent_temps[facet_id, :])
                 # Refresh plot
                 state.ax.relim()
                 state.ax.autoscale_view()
@@ -1090,36 +1033,39 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
                 
                 # Transform view direction to body coordinates 
                 view_dir_body = rot_mat.T.dot(view_dir_world)
+                dir_to_observer_body = -view_dir_body
+                # Best-bin + adjacent interpolation (preserves sharp changes)
+                cosines = np.dot(dir_to_observer_body, state.dome_bin_normals.T)
+                weights = _weights_best_bin_adjacent(cosines, state.dome_adjacency)
+                sum_w = weights.sum()
                 
-                # Use view direction in body coordinates directly with dome normals (both in world coordinates)
-                # Note: dome_bin_normals are in world coordinates, so we compare with view_dir_body
-                cosines = np.dot(view_dir_body, state.dome_bin_normals.T).reshape(1, -1)
-                cosines = np.broadcast_to(cosines, (len(state.facet_normals), len(state.dome_bin_normals)))
-                cosines = np.clip(cosines, 0, None)
-                best_bins = np.argmax(cosines, axis=1)
-                selected_cosines = cosines[np.arange(len(best_bins)), best_bins]
+                scale = state.dome_radius_factor ** 2
+                sigma = 5.670374419e-8
+                epsilon = state.simulation_emissivity
+                
+                if sum_w > 1e-9:
+                    F = state.dome_flux_th[:, :, state.current_frame]
+                    A = state.dome_bin_areas
+                    # T^4 weighted mean: average in radiance (T^4) space, then take 4th root
+                    T4_per_bin = np.zeros_like(F)
+                    valid_bins = A > 1e-12
+                    T4_per_bin[valid_bins] = (F[valid_bins] / (epsilon * sigma * A[valid_bins])) * scale
+                    T4_weighted = (T4_per_bin * weights[None, :]).sum(axis=1)
+                    T_raw = np.zeros(len(state.facet_normals))
+                    valid = T4_weighted > 1e-12
+                    T_raw[valid] = (T4_weighted[valid]) ** 0.25
+                    dome_visible = True
+                else:
+                    T_raw = np.zeros(len(state.facet_normals))
+                    dome_visible = False
                 
                 # Compute facet horizon test: rotated facet normal dot view direction
                 normals_t = np.dot(state.facet_normals, rot_mat.T)
                 facet_horizons = np.dot(normals_t, view_dir_world)
                 
-                # Extract flux and area data for selected bins
-                F_values = state.dome_flux_th[np.arange(len(best_bins)), best_bins, state.current_frame]
-                area_values = state.dome_bin_areas[np.arange(len(best_bins)), best_bins]
-                
-                # Apply scaling factor and compute temperatures
-                scale = state.dome_radius_factor ** 2
-                sigma = 5.670374419e-8
-                epsilon = state.simulation_emissivity
-                
-                # Compute raw temperatures
-                T_raw = np.zeros(len(F_values))
-                valid_areas = area_values > 0
-                T_raw[valid_areas] = ((F_values[valid_areas] / area_values[valid_areas] * scale) / (epsilon * sigma)) ** 0.25
-                
                 # Apply horizon and dome visibility masks
                 horizon_tolerance = 1e-6
-                mask_dome = selected_cosines > horizon_tolerance  # Dome patch visible
+                mask_dome = dome_visible
                 mask_facet = facet_horizons < -horizon_tolerance  # Facet front-facing
                 mask_combined = mask_dome & mask_facet
                 
@@ -1129,8 +1075,8 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
                 # Debug dome coverage issues every 30 frames
                 if state.current_frame % 30 == 0:
                     front_facing = facet_horizons < -horizon_tolerance
-                    dome_visible = selected_cosines > horizon_tolerance
-                    problematic = front_facing & ~dome_visible & (T_raw > 100)
+                    dome_visible_debug = dome_visible
+                    problematic = front_facing & ~dome_visible_debug & (T_raw > 100)
                     
                     if np.any(problematic):
                         prob_count = np.sum(problematic)
@@ -1141,25 +1087,19 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
                         for pid in prob_ids[:2]:  # Show details for first 2 problematic facets
                             debug_print(state, f"  Facet {pid}:")
                             debug_print(state, f"    facet_horizon={facet_horizons[pid]:.6f} (front-facing: {front_facing[pid]})")
-                            debug_print(state, f"    selected_bin={best_bins[pid]}, selected_cosine={selected_cosines[pid]:.6f}")
                             debug_print(state, f"    T_raw={T_raw[pid]:.1f}K -> will show 0K")
-                            debug_print(state, f"    view_dir_body={view_dir_body}")
-                            debug_print(state, f"    unclipped_dome_cosines: min={selected_cosines[pid]:.6f}, max={selected_cosines[pid]:.6f}")
-                            
-                            # Check unclipped cosines to see if dome actually covers the hemisphere
-                            unclipped_cosines = np.dot(view_dir_body, state.dome_bin_normals.T)
+                            debug_print(state, f"    dir_to_observer_body={dir_to_observer_body}")
+                            unclipped_cosines = np.dot(dir_to_observer_body, state.dome_bin_normals.T)
                             debug_print(state, f"    unclipped_dome_cosines: min={unclipped_cosines.min():.6f}, max={unclipped_cosines.max():.6f}")
-                            
                             positive_bins = np.sum(unclipped_cosines > 0)
-                            debug_print(state, f"    {positive_bins}/{len(unclipped_cosines)} dome bins have positive unclipped cosines")
-                            
+                            debug_print(state, f"    {positive_bins}/{len(unclipped_cosines)} dome bins have positive cosines")
                             if positive_bins == 0:
                                 debug_print(state, f"    ERROR: No dome bins face the view direction - dome coverage incomplete!")
                             else:
                                 debug_print(state, f"    ERROR: Dome bins exist but being incorrectly filtered out!")
                     
                     # Also check for the reverse: dome visible but facet not front-facing  
-                    reverse_problematic = ~front_facing & dome_visible & (T_raw > 100)
+                    reverse_problematic = ~front_facing & dome_visible_debug & (T_raw > 100)
                     if np.any(reverse_problematic):
                         rev_count = np.sum(reverse_problematic)
                         debug_print(state, f"[DEBUG] Frame {state.current_frame}: {rev_count} back-facing facets with visible dome patches")
@@ -1281,12 +1221,14 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
             if state.view_mode and state.dome_flux_th is not None:
                 debug_print(state, f"  === VIEW MODE DEBUGGING ===")
                 
-                # Transform view direction to body frame (world coordinates)
+                # Transform view direction to body frame
                 view_dir_body = current_rot_mat.T.dot(view_dir_world)
+                dir_to_observer_body = -view_dir_body
                 debug_print(state, f"  View Direction (body): [{view_dir_body[0]:.3f}, {view_dir_body[1]:.3f}, {view_dir_body[2]:.3f}]")
+                debug_print(state, f"  Dir to observer (body): [{dir_to_observer_body[0]:.3f}, {dir_to_observer_body[1]:.3f}, {dir_to_observer_body[2]:.3f}]")
                 
-                # Dome bin analysis - FIXED: Use same calculation as 3D mesh (both in world coordinates)
-                dome_cosines_unclipped = np.dot(view_dir_body, state.dome_bin_normals.T)
+                # Dome bin analysis - match direction-to-observer with dome bin normals (direction-to-sky)
+                dome_cosines_unclipped = np.dot(dir_to_observer_body, state.dome_bin_normals.T)
                 dome_cosines_clipped = np.clip(dome_cosines_unclipped, 0, None)
                 best_bin = np.argmax(dome_cosines_clipped)
                 selected_cosine = dome_cosines_clipped[best_bin]
