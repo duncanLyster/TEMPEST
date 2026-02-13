@@ -359,9 +359,10 @@ class Facet:
             if total_contrib > 1e-9:
                 energies = E_total * (contribs / total_contrib)
                 for idx, e in zip(lit_candidates, energies):
-                    if type_flag in ('solar', 'scattered_visible'):
+                    if type_flag in ('solar', 'scattered_visible', 'visible'):
                         E0_vis_local[idx] = e
-                        absorbed_solar += e * (1 - albedo)
+                        if type_flag != 'visible':
+                            absorbed_solar += e * (1 - albedo)
                     else:
                         E0_th_local[idx] = e
                         absorbed_thermal += e * (1 - emissivity)
@@ -369,9 +370,10 @@ class Facet:
                 # Distribute evenly among lit subfacets
                 e_per = E_total / len(lit_candidates)
                 for idx in lit_candidates:
-                    if type_flag in ('solar', 'scattered_visible'):
+                    if type_flag in ('solar', 'scattered_visible', 'visible'):
                         E0_vis_local[idx] = e_per
-                        absorbed_solar += e_per * (1 - albedo)
+                        if type_flag != 'visible':
+                            absorbed_solar += e_per * (1 - albedo)
                     else:
                         E0_th_local[idx] = e_per
                         absorbed_thermal += e_per * (1 - emissivity)
@@ -379,9 +381,10 @@ class Facet:
             # No lit subfacets, distribute evenly to all
             e_per = E_total / N
             for i in range(N):
-                if type_flag in ('solar', 'scattered_visible'):
+                if type_flag in ('solar', 'scattered_visible', 'visible'):
                     E0_vis_local[i] = e_per
-                    absorbed_solar += e_per * (1 - albedo)
+                    if type_flag != 'visible':
+                        absorbed_solar += e_per * (1 - albedo)
                 else:
                     E0_th_local[i] = e_per
                     absorbed_thermal += e_per * (1 - emissivity)

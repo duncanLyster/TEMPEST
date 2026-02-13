@@ -64,19 +64,10 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
         # Pop apply_kernel_based_roughness flag if provided
         apply_kernel_based_roughness = kwargs.pop('apply_kernel_based_roughness', False)
 
-        if apply_kernel_based_roughness:
-            print(f'Roughness detected - new logic applied\n')
-            if plotted_variable_array is not None:
-                print(f'Plotted variable array looks like {len(plotted_variable_array)}')
-            else:
-                print('WARNING: plotted_variable_array is None (solver detected invalid temperatures)')
-
-        else: 
-            print(f'Smooth model detected\n')
-            if plotted_variable_array is not None:
-                print(f'Plotted variable array looks like {len(plotted_variable_array)}')
-            else:
-                print('WARNING: plotted_variable_array is None (solver detected invalid temperatures)')
+        if plotted_variable_array is not None:
+            print(f'Plotted variable array looks like {len(plotted_variable_array)}')
+        else:
+            print('WARNING: plotted_variable_array is None (solver detected invalid temperatures)')
 
 
         # Save other parameters to JSON file
