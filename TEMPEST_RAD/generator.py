@@ -56,7 +56,7 @@ from src.model.view_factors import calculate_all_view_factors, calculate_thermal
 # All parameters are defined here for easy modification.
 
 # --- OUTPUT ---
-OUTPUT_FILE = "roughness_lut_spectral_v1.h5"  # Name of the generated HDF5 file
+OUTPUT_FILE = "roughness_lut_spectral_v1_factors.h5"  # Name of the generated HDF5 file
 
 # --- LUT GRID DIMENSIONS ---
 # These define the dimensionality and resolution of your lookup table.
@@ -64,7 +64,7 @@ OUTPUT_FILE = "roughness_lut_spectral_v1.h5"  # Name of the generated HDF5 file
 
 # Thermal Parameter (Theta = TI * sqrt(omega) / (emissivity * sigma * Tss^3))
 # Controls how quickly surface responds to solar heating
-# At P=10h: Theta=0.04→TI=10 (dust), Theta=0.4→TI=100 (regolith), Theta=8→TI=2000 (rock)
+# At P=10h: Theta=0.04TI=10 (dust), Theta=0.4TI=100 (regolith), Theta=8TI=2000 (rock)
 THETA_VALUES = np.array([0.0316]) #np.logspace(-1.5, 1, 10)  # 10 points from ~0.03 to 10 (TI: 10-2500)
 # For testing, use: THETA_VALUES = [0.5]  # TI≈100 at P=10h
 
@@ -92,12 +92,12 @@ EMISSION_ANGLES = np.linspace(0, 89, 10)
 AZIMUTH_ANGLES = np.linspace(0, 180, 10)
 
 # --- TEMPORAL RESOLUTION ---
-LUT_TIMESTEPS = 180   # Output resolution: 360°/180 = 2° per step
-SIM_TIMESTEPS = 720   # Internal simulation: 4x finer for stability
+LUT_TIMESTEPS = 90   # Output resolution: 360°/180 = 2° per step
+SIM_TIMESTEPS = 360   # Internal simulation: 4x finer for stability
 
 # --- CRATER GEOMETRY ---
 # Resolution of the spherical crater mesh
-CRATER_SUBFACETS = 300  # Facet count in crater (balance: 200-500 recommended)
+CRATER_SUBFACETS = 100  # Facet count in crater (balance: 200-500 recommended)
                         # Lower = faster but coarser, Higher = slower but smoother
                         # Note: Actual count may differ slightly due to geodesic tessellation
 
@@ -451,7 +451,7 @@ def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_time
 def process_single_case(theta, opening_angle, lat, config):
     """
     Run simulation and compute viewing geometry grid.
-    Returns: 4D array (Time, Wave, Emi, Azi)
+    Returns: 4D array (Time, Wave, Emi, Azi), 1D array (Normalization_Factors)
     """
     try:
         rough_temps_sim, smooth_temps_sim, facet, sun_vectors_sim = simulate_crater_diurnal_cycle(theta, opening_angle, lat, config, SIM_TIMESTEPS)
@@ -459,7 +459,7 @@ def process_single_case(theta, opening_angle, lat, config):
         print(f"Error in simulation (Th={theta}, ang={opening_angle}, lat={lat}): {e}")
         print(f"Full traceback:")
         traceback.print_exc()
-        return np.full((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32)
+        return np.full((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32), np.full(len(WAVELENGTHS_MICRONS), np.nan, dtype=np.float32)
 
     # Resample to LUT grid
     indices = np.linspace(0, SIM_TIMESTEPS-1, LUT_TIMESTEPS, dtype=int)
@@ -587,6 +587,8 @@ def process_single_case(theta, opening_angle, lat, config):
     # Time delta
     dt = 1.0 # Units don't matter as they cancel in ratio
     
+    normalization_factors = np.zeros(len(WAVELENGTHS_MICRONS), dtype=np.float32)
+
     for i_w, wave in enumerate(WAVELENGTHS_MICRONS):
         total_energy_smooth = 0.0
         total_energy_rough = 0.0
@@ -647,8 +649,9 @@ def process_single_case(theta, opening_angle, lat, config):
         
         # Apply Normalization
         result_grid[:, i_w, :, :] *= norm_factor
+        normalization_factors[i_w] = norm_factor
                 
-    return result_grid
+    return result_grid, normalization_factors
 
 def main():
     print("="*80)
@@ -687,6 +690,9 @@ def main():
     lut_tensor = np.zeros((len(THETA_VALUES), len(OPENING_ANGLES), len(LATITUDE_VALUES), 
                            LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), 
                            len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), dtype=np.float32)
+                           
+    factors_tensor = np.zeros((len(THETA_VALUES), len(OPENING_ANGLES), len(LATITUDE_VALUES),
+                              len(WAVELENGTHS_MICRONS)), dtype=np.float32)
 
     print("\nTensor assembled\n")
     
@@ -695,7 +701,9 @@ def main():
         for i_ang, angle in enumerate(OPENING_ANGLES):
             for i_lat, lat in enumerate(LATITUDE_VALUES):
                 if results[idx] is not None:
-                    lut_tensor[i_th, i_ang, i_lat, :, :, :, :] = results[idx]
+                    grid, factors = results[idx]
+                    lut_tensor[i_th, i_ang, i_lat, :, :, :, :] = grid
+                    factors_tensor[i_th, i_ang, i_lat, :] = factors
                 idx += 1
                 
     # Save
@@ -703,6 +711,7 @@ def main():
     print(f"Saving to {OUTPUT_FILE}...")
     with h5py.File(OUTPUT_FILE, 'w') as f:
         f.create_dataset("lut", data=lut_tensor)
+        f.create_dataset("normalization_factors", data=factors_tensor)
         f.create_dataset("theta", data=THETA_VALUES)
         f.create_dataset("opening_angle", data=OPENING_ANGLES)
         f.create_dataset("wavelength", data=WAVELENGTHS_MICRONS)
