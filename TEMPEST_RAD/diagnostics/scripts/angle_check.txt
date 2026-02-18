@@ -1,0 +1,14 @@
+======================================================================
+Opening Angle Axis
+======================================================================
+
+Opening angles: [90.]
+Shape: (1,)
+
+Correction factors at disk center, noon, 15μm:
+  Opening angle  90.0° (idx=0): factor = 1.1649
+
+For target_rms=90°, RoughnessLUT selects:
+  idx=0, angle=90.0°
+  factor at this angle: 1.1649
+======================================================================

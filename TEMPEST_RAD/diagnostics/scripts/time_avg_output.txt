@@ -1,0 +1,16 @@
+Wavelength: 8.0 um
+
+Time-averaged disk-integrated correction factor:
+
+Time-averaged disk correction: 1.0078
+Min across day: 0.7371
+Max across day: 1.2291
+Std across day: 0.1683
+
+(Should be ~1.0 if normalization is correct)
+
+Sample times:
+  t=0/90: disk_avg=0.7446
+  t=22/90: disk_avg=0.9461
+  t=45/90: disk_avg=1.1523
+  t=67/90: disk_avg=1.2291

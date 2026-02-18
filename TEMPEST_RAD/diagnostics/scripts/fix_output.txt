@@ -1,0 +1,39 @@
+======================================================================
+TEMPEST_RAD LUT Sun Phase Axis Fix
+======================================================================
+
+Creating backup: roughness_lut_spectral_v1_BACKUP.h5
+
+Loading LUT from: roughness_lut_spectral_v1.h5
+LUT shape: (5, 1, 4, 90, 5, 10, 10)
+  Dimensions: (Theta, Angle, Lat, Time, Wave, Emission, Azimuth)
+
+Analyzing and fixing sun_phase alignment...
+Processing 5 × 1 × 4 = 20 cases
+  θ=1.0, angle=90°, lat=0°: Peak was at t_idx=67 → shifted by -67
+  θ=2.0, angle=90°, lat=0°: Peak was at t_idx=67 → shifted by -67
+  θ=5.0, angle=90°, lat=0°: Peak was at t_idx=67 → shifted by -67
+  θ=10.0, angle=90°, lat=0°: Peak was at t_idx=67 → shifted by -67
+  θ=20.0, angle=90°, lat=0°: Peak was at t_idx=67 → shifted by -67
+
+Verifying fix...
+
+Original time series (first 10 values): [0.9158077  0.9178504  0.9202861  0.92317927 0.9261602  0.92906696
+ 0.9314432  0.933386   0.93484235 0.9356786 ]
+Fixed time series (first 10 values):    [1.1648645  1.156118   1.1330614  1.1010425  1.0663365  1.0348011
+ 1.005164   0.9807261  0.95958704 0.942759  ]
+
+Original peak at t_idx=67 (sun_phase=268°)
+Fixed peak at t_idx=0 (sun_phase=0°)
+
+✓ Fix successful! Peak is now near sun_phase = 0°
+
+Saving fixed LUT to: roughness_lut_spectral_v1_FIXED.h5
+
+Done!
+
+To use the fixed LUT:
+  1. Test with: cp roughness_lut_spectral_v1_FIXED.h5 roughness_lut_spectral_v1.h5
+  2. Or update your code to load: roughness_lut_spectral_v1_FIXED.h5
+
+To restore original: cp roughness_lut_spectral_v1_BACKUP.h5 roughness_lut_spectral_v1.h5

@@ -61,6 +61,7 @@ dist/
 *.csv
 *.npz
 *.png
+*.h5
 
 # Local generated files
 .requirements_hash

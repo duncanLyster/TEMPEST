@@ -1,0 +1,22 @@
+======================================================================
+BUG ANALYSIS: Sun Phase Offset in LUT
+======================================================================
+
+Maximum correction factor: 1.422 at t_idx=67
+  Corresponding sun_phase in LUT: 268.0°
+  This should be LOCAL NOON (when crater is hottest/brightest)
+
+Minimum correction factor: 0.955 at t_idx=0
+  Corresponding sun_phase in LUT: 0.0°
+  This should be NIGHT/DAWN (when crater is coolest/dimmest)
+
+EXPECTED behavior:
+  - sun_phase = 0° should correspond to LOCAL NOON
+  - sun_phase = 180° should correspond to LOCAL MIDNIGHT
+
+ACTUAL behavior from LUT:
+  - sun_phase = 268° has MAX factor (brightest → NOON)
+  - sun_phase = 0° has MIN factor (dimmest → MIDNIGHT)
+
+DIAGNOSIS:
+  ? Unexpected pattern - needs investigation

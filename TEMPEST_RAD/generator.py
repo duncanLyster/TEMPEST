@@ -26,6 +26,7 @@ A 7D tensor containing the Radiance Factor:
 import os
 import sys
 import time
+import traceback
 import numpy as np
 import h5py
 from joblib import Parallel, delayed
@@ -42,21 +43,88 @@ from src.model.simulation import Simulation, ThermalData
 from src.model.solvers import TemperatureSolverFactory
 from src.utilities.config import Config
 from src.utilities.locations import Locations
-from src.utilities.utils import calculate_rotation_matrix
+from src.utilities.utils import calculate_rotation_matrix, rays_triangles_intersection
 
-# --- Configuration for the LUT Generation ---
+# Import the core modules for the Standard Simulation
+from src.model.insolation import calculate_insolation
+from src.model.view_factors import calculate_all_view_factors, calculate_thermal_view_factors
 
-# Grid Definitions
-THETA_VALUES = [1.0, 2.0, 5.0, 10.0, 20.0]      # Thermal Parameter (Dimensionless)
-OPENING_ANGLES = [90.0]                         # Crater Opening Angles (Degrees). 90 = Hemisphere.
-WAVELENGTHS_MICRONS = [5.0, 8.0, 15.0, 50.0, 100.0] # Spectral bands
-LATITUDE_VALUES = [0.0, 30.0, 60.0, 85.0]       # Latitudes (degrees)
-LUT_TIMESTEPS = 90                              # Steps in the output LUT (4 degree resolution)
-SIM_TIMESTEPS = 180                             # Internal simulation steps (2x LUT resolution for fidelity)
-EMISSION_ANGLES = np.linspace(0, 89, 10)        # Viewing angles (avoid 90 to prevent div by zero)
-AZIMUTH_ANGLES = np.linspace(0, 180, 10)        # Relative azimuths (symmetric)
+# ============================================================================
+# CONFIGURATION: LUT Generation Parameters
+# ============================================================================
+# Edit this section to customize your LUT generation.
+# All parameters are defined here for easy modification.
 
-OUTPUT_FILE = "roughness_lut_spectral_v1.h5"
+# --- OUTPUT ---
+OUTPUT_FILE = "roughness_lut_spectral_v1.h5"  # Name of the generated HDF5 file
+
+# --- LUT GRID DIMENSIONS ---
+# These define the dimensionality and resolution of your lookup table.
+# Higher resolution = more accurate, but slower generation and larger files.
+
+# Thermal Parameter (Theta = TI * sqrt(omega) / (emissivity * sigma * Tss^3))
+# Controls how quickly surface responds to solar heating
+# At P=10h: Theta=0.04→TI=10 (dust), Theta=0.4→TI=100 (regolith), Theta=8→TI=2000 (rock)
+THETA_VALUES = np.array([0.0316]) #np.logspace(-1.5, 1, 10)  # 10 points from ~0.03 to 10 (TI: 10-2500)
+# For testing, use: THETA_VALUES = [0.5]  # TI≈100 at P=10h
+
+# Crater Opening Angles (degrees)
+# 90 = hemisphere, smaller = bowl-shaped
+OPENING_ANGLES = [90.0]
+
+# Wavelengths for spectral radiance calculations (microns)
+# Separate bands allow capturing non-linear thermal emission
+WAVELENGTHS_MICRONS = [5.0, 8.0, 15.0, 50.0, 100.0]
+
+# Latitudes (degrees) - Surface position on rotating body
+# Captures diurnal variation from equator (0°) to pole (90°)
+LATITUDE_VALUES = np.arange(0.0, 92.5, 2.5)  # 37 points, 2.5° spacing
+# For testing, use: LATITUDE_VALUES = [0.0, 30.0, 60.0, 85.0]
+
+# Emission Angles (degrees) - Observer viewing angle
+# 0° = looking straight down, 90° = grazing view
+# MUST have ≥10 points to capture limbward darkening
+EMISSION_ANGLES = np.linspace(0, 89, 10)
+
+# Azimuth Angles (degrees) - Angle between sun and observer
+# 0° = opposition (sun behind observer), 180° = full phase
+# MUST have ≥10 points to capture sharp opposition effect at 0-30°
+AZIMUTH_ANGLES = np.linspace(0, 180, 10)
+
+# --- TEMPORAL RESOLUTION ---
+LUT_TIMESTEPS = 180   # Output resolution: 360°/180 = 2° per step
+SIM_TIMESTEPS = 720   # Internal simulation: 4x finer for stability
+
+# --- CRATER GEOMETRY ---
+# Resolution of the spherical crater mesh
+CRATER_SUBFACETS = 300  # Facet count in crater (balance: 200-500 recommended)
+                        # Lower = faster but coarser, Higher = slower but smoother
+                        # Note: Actual count may differ slightly due to geodesic tessellation
+
+# View factor ray tracing resolution
+VIEW_FACTOR_RAYS = 2000  # Rays per facet for view factor calculation
+                         # Higher = better energy conservation (aim for <5% error)
+                         # Minimum 1000, recommended 2000-5000
+
+# --- PHYSICAL PARAMETERS (Standard Reference Conditions) ---
+# These define the "canonical" surface for the LUT
+# Actual simulations scale these using the thermal parameter (Theta)
+
+REFERENCE_ALBEDO = 0.12        # Bond albedo (typical for asteroids)
+REFERENCE_EMISSIVITY = 0.95    # Infrared emissivity
+ROTATION_PERIOD_HOURS = 10.0   # Body rotation period
+SOLAR_DISTANCE_AU = 1.0        # Distance from sun (1 AU)
+SOLAR_LUMINOSITY = 3.828e26    # Solar luminosity (W)
+
+# Subsurface thermal model
+N_LAYERS = 40           # Number of subsurface layers
+MAX_DAYS = 50           # Maximum days to reach thermal equilibrium
+MIN_DAYS = 3            # Minimum days before checking convergence
+CONVERGENCE_TARGET = 1  # Convergence threshold (K for mean temperature change)
+
+# ============================================================================
+# End of User Configuration
+# ============================================================================
 
 def planck_function(wavelength_um, temp_k):
     """
@@ -81,40 +149,42 @@ class ReferenceConfig(Config):
     """
     A minimal Config subclass that does not require a file.
     Used to generate the generic LUT under standard reference conditions.
+    All values now pulled from configuration constants above.
     """
     def __init__(self):
         # Initialize Locations (required by base class, but we won't use paths)
         self.locations = Locations()
         
-        # Manually set standard reference values for the Generator
-        # We must populate config_data because Simulation class reads from it.
+        # Build config_data from configuration constants
         self.config_data = {
-            'solar_distance_au': 1.0,
-            'solar_luminosity': 3.828e26,
-            'albedo': 0.12,
-            'emissivity': 0.95,
+            # Physical parameters from config
+            'solar_distance_au': SOLAR_DISTANCE_AU,
+            'solar_luminosity': SOLAR_LUMINOSITY,
+            'albedo': REFERENCE_ALBEDO,
+            'emissivity': REFERENCE_EMISSIVITY,
+            'beaming_factor': 1.0,
             'subsurface_heating_flux': 0.0,
+            'sunlight_direction': [1.0, 0.0, 0.0],  # Sun along +X axis
             
-            # Solver Settings
+            # Solver Settings from config
             'temp_solver': 'tempest_implicit',
             'convergence_method': 'mean',
-            'convergence_target': 0.1,
-            'max_days': 100,
-            'min_days': 5,
-            'n_layers': 40,
+            'convergence_target': CONVERGENCE_TARGET,
+            'max_days': MAX_DAYS,
+            'min_days': MIN_DAYS,
+            'n_layers': N_LAYERS,
             'include_shadowing': True,
             'n_scatters': 0, 
             'include_self_heating': True,
-            'vf_rays': 1000,
+            'vf_rays': 10000,  # Not used (overridden in simulate_crater_diurnal_cycle)
             'intra_facet_scatters': 2,
+            'silent_mode': True,  # Suppress verbose solver output
             
-            # Kernel/Roughness specific
+            # Kernel/Roughness specific from config
             'apply_kernel_based_roughness': True,
             'roughness_kernel': 'spherical_section',
-            'kernel_subfacets_count': 100,
-            'kernel_profile_angle_degrees': 90.0,
-            'kernel_directional_bins': 36,
-            'kernel_dome_radius_factor': 100.0,
+            'kernel_subfacets_count': CRATER_SUBFACETS,
+            'kernel_profile_angle_degrees': 90.0,  # Will be set per-case
             
             # Disable Plotting/Saving
             'plot_temp_curve': [],
@@ -126,10 +196,10 @@ class ReferenceConfig(Config):
             'animate_shadowing': False,
             
             # Shape model settings (dummy)
-            'shape_model_file': 'cube_without_roughness.obj', # Dummy filename
+            'shape_model_file': 'cube_without_roughness.obj',
             'ra_degrees': 0.0,
             'dec_degrees': 90.0,
-            'rotation_period_hours': 10.0, # Will be overwritten by generator
+            'rotation_period_hours': ROTATION_PERIOD_HOURS,
             
             # Physical props (will be overwritten by generator)
             'density': 1000.0,
@@ -143,24 +213,41 @@ class ReferenceConfig(Config):
         # Override path to avoid errors
         self.path_to_shape_model_file = None
 
+
+def rotate_to_lat(vector, lat_degrees):
+    """
+    Rotate a vector (initially up Z, Lat 90) to a new latitude.
+    Rotation is around Y-axis by (90 - lat) degrees.
+    """
+    angle_rad = np.radians(90.0 - lat_degrees)
+    c, s = np.cos(angle_rad), np.sin(angle_rad)
+    Ry = np.array([
+        [c, 0, s],
+        [0, 1, 0],
+        [-s, 0, c]
+    ])
+    return np.dot(Ry, vector)
+
 def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_timesteps):
     """
-    Run a full diurnal simulation for a single crater configuration.
-    Uses TEMPEST core logic (Simulation, Facet, Solver).
+    Run a full diurnal simulation for a single crater configuration using STANDARD `Simulation` logic.
+    Instead of internal Facet logic, we build a `shape_model` from the crater sub-facets
+    and run the full rigorous simulation pipeline.
     """
     # 1. Setup Simulation Object
     simulation = Simulation(config)
     
     simulation.timesteps_per_day = n_timesteps
-    simulation.rotation_period_hours = 10.0 
-    simulation.density = 1000.0
-    simulation.specific_heat_capacity = 1000.0
+    simulation.rotation_period_hours = ROTATION_PERIOD_HOURS 
+    simulation.density = 2000.0 # Standard Value
+    simulation.specific_heat_capacity = 1000.0 # Standard Value
     omega = 2 * np.pi / (simulation.rotation_period_hours * 3600)
     simulation.angular_velocity = omega
     
     # Calculate Thermal Inertia from Dimensionless Theta
-    # Theta = (Gamma * sqrt(omega)) / (epsilon * sigma * Tss^3)
+    # P = I * sqrt(omega) / (epsilon * sigma * Tss^3)
     # Tss = ((1-A) * S / (epsilon * sigma))^0.25
+
     
     solar_flux = simulation.solar_luminosity / (4 * np.pi * simulation.solar_distance_m**2)
     boltzmann = 5.670374419e-8
@@ -171,10 +258,6 @@ def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_time
     val = ((1 - albedo) * solar_flux) / (epsilon * boltzmann)
     tss = val ** 0.25
     
-    # Gamma = Theta * epsilon * sigma * Tss^3 / sqrt(omega)
-    # Note: Tss^3 * epsilon * sigma = (1-A) * S / Tss
-    # Easier: Gamma = Theta * ((1-A) * S / Tss) / sqrt(omega)
-    
     # Avoid division by zero
     if omega <= 0: omega = 1e-9
     
@@ -182,86 +265,188 @@ def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_time
     
     # Update Simulation with derived thermal inertia
     simulation.thermal_inertia = thermal_inertia
-    # Re-run initialization calculations that depend on thermal_inertia
+    # Update skin depth etc
     simulation.thermal_conductivity = (simulation.thermal_inertia**2) / (simulation.density * simulation.specific_heat_capacity)
     simulation.skin_depth = (simulation.thermal_conductivity / (simulation.density * simulation.specific_heat_capacity * simulation.angular_velocity)) ** 0.5
     simulation.layer_thickness = 8 * simulation.skin_depth / simulation.n_layers
     simulation.thermal_diffusivity = simulation.thermal_conductivity / (simulation.density * simulation.specific_heat_capacity)
     
-    # Set Geometry
-    lat_rad = np.radians(latitude)
-    # Normal vector in X-Z plane (Z is pole)
-    normal = np.array([np.cos(lat_rad), 0.0, np.sin(lat_rad)])
+    # 2. Generate Crater Mesh
+    # Create Dummy Facet (Lat 90, Z-up) to generate canonical mesh
+    dummy_normal = np.array([0.0, 0.0, 1.0])
+    dummy_vs = [np.array([-1,-1,0]), np.array([1,-1,0]), np.array([0,1,0])]
+    dummy_facet = Facet(dummy_normal, dummy_vs, 1, 1, 1, False)
     
-    vertices = [
-        np.array([-0.5, -0.288, 0.0]),
-        np.array([0.5, -0.288, 0.0]),
-        np.array([0.0, 0.577, 0.0])
-    ]
-    facet = Facet(normal, vertices, simulation.timesteps_per_day, simulation.max_days, simulation.n_layers, False)
-    
-    # Generate Crater
     config.kernel_profile_angle_degrees = opening_angle
-    config.kernel_subfacets_count = 100 # High resolution for accuracy
-    facet.generate_spherical_depression(config, simulation)
+    # Use config value for subfacets_count (already set to 300)
+    config.apply_kernel_based_roughness = True
     
-    # 3. Insolation Calculation
-    sun_vectors = np.zeros((n_timesteps, 3))
-    sun_declination = 0.0 
-    if latitude > 80:
-        sun_declination = np.radians(5.0) 
-        
-    for t in range(n_timesteps):
-        angle = (2 * np.pi * t) / n_timesteps
-        # Sun vector in body frame (Sun rotating around Z)
-        x = np.cos(sun_declination) * np.cos(-angle)
-        y = np.cos(sun_declination) * np.sin(-angle)
-        z = np.sin(sun_declination)
-        sun_vectors[t] = np.array([x, y, z])
-        
-    solar_constant = simulation.solar_luminosity / (4 * np.pi * simulation.solar_distance_m**2)
+    # Generate canonical mesh inside the class
+    dummy_facet.generate_spherical_depression(config, simulation)
     
-    for t in range(n_timesteps):
-        sun_vec = sun_vectors[t]
-        cos_inc = np.dot(facet.normal, sun_vec)
+    # Extract Sub-Facets from CANONICAL
+    if not hasattr(Facet, '_canonical_subfacet_mesh') or Facet._canonical_subfacet_mesh is None:
+         # Force regeneration if mesh doesn't exist
+         # (subfacets_count already set in config from CRATER_SUBFACETS)
+         dummy_facet.generate_spherical_depression(config, simulation)
+         
+    mesh = Facet._canonical_subfacet_mesh
+    n_facets = len(mesh)
+    
+    shape_model = []
+    
+    # Sun direction with declination (latitude proxy for solar illumination angle)
+    # NOTE: This approach keeps crater at equator and tilts sun to vary illumination.
+    # "Latitude" here is a PARAMETRIC variable controlling solar zenith angle,
+    # not geographic position. This ensures crater is always illuminated for LUT generation.
+    sun_declination = latitude
+    lat_rad = np.radians(sun_declination)
+    simulation.sunlight_direction = np.array([np.cos(lat_rad), 0.0, np.sin(lat_rad)])
+    
+    # Rotate canonical crater (opening toward +Z) to equator (opening toward +X)
+    rotation_to_equator = calculate_rotation_matrix(np.array([0.0, 1.0, 0.0]), np.pi/2)
+    
+    for entry in mesh:
+        canonical_n = np.array(entry['normal'])
+        canonical_v = np.array(entry['vertices']) # (3,3)
         
-        if cos_inc > 0:
-            facet.parent_incident_energy_packets = [(solar_constant, sun_vec, 'solar')]
-            facet.process_intra_depression_energetics(config, simulation)
-            facet.depression_thermal_data.insolation[:, t] = facet._last_absorbed_solar
+        # Apply rotation: canonical → equator
+        rotated_n = np.dot(rotation_to_equator, canonical_n)
+        rotated_v = np.array([np.dot(rotation_to_equator, v) for v in canonical_v])
+        
+        # Create full Facet object
+        new_f = Facet(
+            rotated_n, 
+            rotated_v, 
+            simulation.timesteps_per_day, 
+            simulation.max_days, 
+            simulation.n_layers, 
+            config.calculate_energy_terms
+        )
+        shape_model.append(new_f)
+    
+    # 3. Setup Thermal Data
+    thermal_data = ThermalData(n_facets, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
+    
+    # 4. Calculate Visible Facets
+    # All facets in the crater see each other, but NOT themselves
+    all_indices = np.arange(n_facets)
+    for i, f in enumerate(shape_model):
+        # Exclude self from visible facets
+        f.visible_facets = np.concatenate([all_indices[:i], all_indices[i+1:]])
+    # set_visible_facets expects a LIST of arrays (one per facet)
+    visible_facets_list = [np.concatenate([all_indices[:i], all_indices[i+1:]]) for i in range(n_facets)]
+    thermal_data.set_visible_facets(visible_facets_list) 
+    
+    # 5. Calculate View Factors (Standard + Thermal)
+    # Use configured ray count for energy conservation
+    all_view_factors = calculate_all_view_factors(shape_model, thermal_data, config, VIEW_FACTOR_RAYS)
+    thermal_data.set_secondary_radiation_view_factors(all_view_factors)
+    
+    thermal_view_factors = calculate_thermal_view_factors(shape_model, thermal_data, config)
+    # Correct conversion to Numba List
+    from numba.typed import List
+    numba_vfs = List()
+    for vf in thermal_view_factors: # Note: function returns list of lists usually
+        arr = np.array(vf, dtype=np.float64)
+        if arr.size == 0:
+            numba_vfs.append(np.array([], dtype=np.float64))
         else:
-            facet.depression_thermal_data.insolation[:, t] = 0.0
-            
-    # 4. Solve Rough Temperatures
+            numba_vfs.append(arr.flatten() if arr.ndim > 1 else arr)
+    thermal_data.thermal_view_factors = numba_vfs
+
+    # 6. Calculate Insolation (with Shadowing)
+    thermal_data = calculate_insolation(thermal_data, shape_model, simulation, config)
+    
+
+    
+    # 7. Run Solver (Standard Implicit)
+    from src.model.solvers import TemperatureSolverFactory
+    
     solver = TemperatureSolverFactory.create(config.temp_solver)
-    solver.initialize_temperatures(facet.depression_thermal_data, simulation, config)
-    res = solver.solve(facet.depression_thermal_data, facet.sub_facets, simulation, config)
+    thermal_data = solver.initialize_temperatures(thermal_data, simulation, config)
+    
+    res = solver.solve(thermal_data, shape_model, simulation, config)
     
     if res['final_day_temperatures'] is None:
         raise ValueError(f"Solver failed for Theta={theta}, lat={latitude}")
         
-    rough_temps = res['final_day_temperatures'] # (N_sub, T)
+    rough_temps = res['final_day_temperatures'] # (N_facets, T)
     
-    # 5. Solve Smooth Reference
-    smooth_data = ThermalData(1, n_timesteps, simulation.n_layers, simulation.max_days, False)
-    for t in range(n_timesteps):
-        cos_inc = np.dot(facet.normal, sun_vectors[t])
-        if cos_inc > 0:
-            smooth_data.insolation[0, t] = solar_constant * cos_inc * (1 - simulation.albedo)
-        else:
-            smooth_data.insolation[0, t] = 0.0
-            
-    solver.initialize_temperatures(smooth_data, simulation, config)
-    dummy_facet = Facet(normal, vertices, n_timesteps, simulation.max_days, simulation.n_layers, False)
-    dummy_facet.visible_facets = np.array([], dtype=np.int64) 
-    res_smooth = solver.solve(smooth_data, [dummy_facet], simulation, config)
+    # 8. Solve Smooth Reference
+    # Create flat facet at SAME LATITUDE as rough crater for proper comparison
+    # Normal should point at same angle as crater opening (latitude from equator)
+    lat_rad = np.radians(latitude)
+    flat_n = np.array([1.0, 0.0, 0.0])  # Normal pointing toward sun at equator
+    flat_n /= np.linalg.norm(flat_n)
     
-    if res_smooth['final_day_temperatures'] is None:
-        raise ValueError(f"Smooth solver failed for Theta={theta}, lat={latitude}")
-        
+    # Vertices perpendicular to normal
+    # Use two perpendicular vectors in the plane perpendicular to flat_n
+    # Scaled to give area = 1.0 to match crater opening area
+    scale = 1.0 / np.sqrt(2.0)
+    
+    # Create perpendicular basis vectors
+    if abs(flat_n[2]) < 0.9:
+        up = np.array([0.0, 0.0, 1.0])
+    else:
+        up = np.array([1.0, 0.0, 0.0])
+    
+    u = np.cross(flat_n, up)
+    u /= np.linalg.norm(u)
+    v = np.cross(flat_n, u)
+    
+    flat_v = [
+        -scale * u - scale * v,
+        scale * u - scale * v,
+        scale * v
+    ]
+    
+    flat_facet = Facet(flat_n, flat_v, simulation.timesteps_per_day, simulation.max_days, simulation.n_layers, config.calculate_energy_terms)
+    
+    # Set world_to_local_rotation to match the crater's rotation at equator
+    flat_facet.world_to_local_rotation = rotation_to_equator.T
+    
+    smooth_shape = [flat_facet]
+    
+    smooth_data = ThermalData(1, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
+    # set_visible_facets expects a LIST of arrays (one per facet)
+    # For a single isolated facet, it has no visible neighbors
+    smooth_data.set_visible_facets([np.array([], dtype=np.int64)])
+    flat_facet.visible_facets = np.array([], dtype=np.int64)
+    
+    # Dummy View Factors
+    smooth_data.set_secondary_radiation_view_factors([np.array([])])
+    # Empty thermal view factors
+    from numba.typed import List
+    numba_vfs_smooth = List()
+    # Need to match the expected type inside Numba functions (float64[:])
+    # The solver expects a list of arrays. For a single facet with no self-view, it's an empty array.
+    numba_vfs_smooth.append(np.array([], dtype=np.float64))
+    
+    smooth_data.thermal_view_factors = numba_vfs_smooth
+    
+    smooth_data = calculate_insolation(smooth_data, smooth_shape, simulation, config)
+    # Create fresh solver instance for smooth reference to avoid state contamination
+    smooth_solver = TemperatureSolverFactory.create(config.temp_solver)
+    smooth_data = smooth_solver.initialize_temperatures(smooth_data, simulation, config)
+    res_smooth = smooth_solver.solve(smooth_data, smooth_shape, simulation, config)
+    
     smooth_temps = res_smooth['final_day_temperatures'][0] # (T,)
+
+    # Reconstruct Sun Vectors for downstream geometry calc
+    timesteps = simulation.timesteps_per_day
+    sun_vectors_body = np.zeros((timesteps, 3))
     
-    return rough_temps, smooth_temps, facet, sun_vectors
+    for t in range(timesteps):
+        rot = calculate_rotation_matrix(simulation.rotation_axis, (2 * np.pi / timesteps) * t)
+        # S_body = R^T * S_inertial
+        s_body = np.dot(rot.T, simulation.sunlight_direction)
+        sun_vectors_body[t] = s_body / np.linalg.norm(s_body)
+
+    # Return flat_facet as the geometry reference
+    return rough_temps, smooth_temps, flat_facet, sun_vectors_body
+
+
 
 def process_single_case(theta, opening_angle, lat, config):
     """
@@ -272,6 +457,8 @@ def process_single_case(theta, opening_angle, lat, config):
         rough_temps_sim, smooth_temps_sim, facet, sun_vectors_sim = simulate_crater_diurnal_cycle(theta, opening_angle, lat, config, SIM_TIMESTEPS)
     except Exception as e:
         print(f"Error in simulation (Th={theta}, ang={opening_angle}, lat={lat}): {e}")
+        print(f"Full traceback:")
+        traceback.print_exc()
         return np.full((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32)
 
     # Resample to LUT grid
@@ -284,6 +471,19 @@ def process_single_case(theta, opening_angle, lat, config):
     result_grid = np.zeros((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), dtype=np.float32)
     
     # Geometry Arrays
+    # Ensure attributes are initialized even if process_intra_depression_energetics was skipped
+    if not hasattr(Facet, '_canonical_normals') or Facet._canonical_normals is None:
+        mesh = Facet._canonical_subfacet_mesh
+        Facet._canonical_normals = np.array([entry['normal'] for entry in mesh], dtype=np.float64)
+        Facet._canonical_areas = np.array([entry['area'] for entry in mesh], dtype=np.float64)
+        # Handle case where vertices might be raw list vs numpy array
+        Facet._canonical_subfacet_triangles = np.array([entry['vertices'] for entry in mesh], dtype=np.float64)
+        # Handle case where center is missing
+        if 'center' in mesh[0]:
+            Facet._canonical_subfacet_centers = np.array([entry['center'] for entry in mesh], dtype=np.float64)
+        else:
+            Facet._canonical_subfacet_centers = np.array([np.mean(entry['vertices'], axis=0) for entry in mesh], dtype=np.float64)
+
     normals = Facet._canonical_normals
     areas = Facet._canonical_areas
     triangles = Facet._canonical_subfacet_triangles
@@ -328,7 +528,7 @@ def process_single_case(theta, opening_angle, lat, config):
                 # Flux=1.0 visible packet to measure projected area
                 packet = (1.0, view_vec, 'visible') 
                 E_vis, _, _, _ = Facet._process_incident_packet(
-                    packet, facet.dome_rotation, facet.area, normals, areas, triangles, centers, 0.0, 0.0
+                    packet, facet.world_to_local_rotation, facet.area, normals, areas, triangles, centers, 0.0, 0.0
                 )
                 
                 # Loop Wavelengths
@@ -358,11 +558,103 @@ def process_single_case(theta, opening_angle, lat, config):
                             ratio = weighted_sum / flux_smooth
                             
                     result_grid[t_idx, i_w, i_e, i_a] = ratio
+                    
+    # --- NORMALIZATION STEP (Ensure Daily Energy Conservation) ---
+    # We calculate a per-wavelength scalar to force:
+    # Integral(Rough_Flux, over Day) = Integral(Smooth_Flux, over Day)
+    
+    # Pre-compute weights for hemispherical integration
+    # dOmega = sin(e) de dphi
+    # Projected Area factor is already in Flux (cos e)
+    # But result_grid stores Ratio = Rough/Smooth.
+    # Smooth Flux = B(T) * cos(e).
+    # Rough Flux = Ratio * B(T) * cos(e).
+    # We want Integral[ Rough Flux ] = Integral[ Smooth Flux ].
+    
+    # Simpson/Trapezoidal weights for Emission and Azimuth
+    em_rad = np.radians(EMISSION_ANGLES)
+    az_rad = np.radians(AZIMUTH_ANGLES)
+    
+    # Emission Grid Delta
+    d_em = np.diff(em_rad)
+    d_em = np.append(d_em, d_em[-1]) # Approx last bin
+    
+    # Azimuth Grid Delta (0 to 180 -> mirror to 360)
+    # We integrate 0-180 and multiply by 2 (assuming symmetry)
+    d_az = np.diff(az_rad)
+    d_az = np.append(d_az, d_az[-1])
+    
+    # Time delta
+    dt = 1.0 # Units don't matter as they cancel in ratio
+    
+    for i_w, wave in enumerate(WAVELENGTHS_MICRONS):
+        total_energy_smooth = 0.0
+        total_energy_rough = 0.0
+        
+        for t_idx in range(LUT_TIMESTEPS):
+            t_sm = smooth_temps[t_idx]
+            if t_sm < 5.0: continue
+            
+            # B(T)
+            rad_sm = planck_function(wave, t_sm)
+            
+            # *** FIX: Use NUMERICAL integration for smooth (same as rough) ***
+            # Previous version used analytic formula π*B(T), causing systematic errors
+            # that varied with latitude (r=-0.715). Now both use the SAME numerical
+            # integration scheme so discretization errors cancel in the ratio.
+            
+            # Smooth Flux Integral: Numerically integrate B(T) * cos(e) * sin(e) over hemisphere
+            integral_smooth = 0.0
+            for i_e, emi_deg in enumerate(EMISSION_ANGLES):
+                sin_e = np.sin(np.radians(emi_deg))
+                cos_e = np.cos(np.radians(emi_deg))
+                weight_e = sin_e * cos_e * d_em[i_e]
+                
+                # Integrate over azimuth (0-180, multiply by 2 for full circle)
+                sum_az = np.sum(d_az)  # For smooth, no angular dependence
+                integral_smooth += (sum_az * 2.0) * weight_e
+            
+            energy_step_smooth = rad_sm * integral_smooth
+            total_energy_smooth += energy_step_smooth
+            
+            # Rough Flux Integral
+            # Sum over Angles: Ratio(t, e, a) * B(T) * cos(e) * sin(e) * de * da
+            # Factor 2 for Azimuth 0-180 -> 0-360 symmetry
+            
+            integral_hemi = 0.0
+            for i_e, emi_deg in enumerate(EMISSION_ANGLES):
+                sin_e = np.sin(np.radians(emi_deg))
+                cos_e = np.cos(np.radians(emi_deg))
+                weight_e = sin_e * cos_e * d_em[i_e]
+                
+                sum_az = 0.0
+                for i_a, azi_deg in enumerate(AZIMUTH_ANGLES):
+                    ratio = result_grid[t_idx, i_w, i_e, i_a]
+                    sum_az += ratio * d_az[i_a]
+                
+                # Multiply by 2 for Azimuth symmetry (0-180 -> 0-360)
+                integral_hemi += (sum_az * 2.0) * weight_e
+            
+            # Rough Flux = B(T) * Integral_Geometry
+            energy_step_rough = rad_sm * integral_hemi
+            total_energy_rough += energy_step_rough
+            
+        # Calculate Scalar Factor for this Wavelength
+        if total_energy_rough > 1e-9:
+            norm_factor = total_energy_smooth / total_energy_rough
+        else:
+            norm_factor = 1.0
+        
+        # Apply Normalization
+        result_grid[:, i_w, :, :] *= norm_factor
                 
     return result_grid
 
 def main():
-    print("Initializing SPECTRAL LUT Generator...")
+    print("="*80)
+    print("TEMPEST Roughness LUT Generator")
+    print("="*80)
+    start_time = time.time()
     
     # Create Reference Config (Standard Physics, 1 AU)
     # This avoids loading any external config.yaml
@@ -374,20 +666,29 @@ def main():
         for angle in OPENING_ANGLES:
             for lat in LATITUDE_VALUES:
                 tasks.append((theta, angle, lat))
-                
-    print(f"Tasks: {len(tasks)}")
-    print(f"Output: {len(THETA_VALUES)}x{len(OPENING_ANGLES)}x{len(LATITUDE_VALUES)}x{LUT_TIMESTEPS}x{len(WAVELENGTHS_MICRONS)}x{len(EMISSION_ANGLES)}x{len(AZIMUTH_ANGLES)}")
+    
+    print(f"\nConfiguration:")
+    print(f"  Theta values: {len(THETA_VALUES)} ({THETA_VALUES[0]:.3f} to {THETA_VALUES[-1]:.3f})")
+    print(f"  Latitudes: {len(LATITUDE_VALUES)}° (0° to {LATITUDE_VALUES[-1]:.0f}°)")
+    print(f"  Wavelengths: {len(WAVELENGTHS_MICRONS)} bands")
+    print(f"  Viewing geometry: {len(EMISSION_ANGLES)} × {len(AZIMUTH_ANGLES)} angles")
+    print(f"  Total cases: {len(tasks)}")
+    print(f"  Parallel jobs: 4")
+    print(f"\nOutput shape: {len(THETA_VALUES)}×{len(OPENING_ANGLES)}×{len(LATITUDE_VALUES)}×{LUT_TIMESTEPS}×{len(WAVELENGTHS_MICRONS)}×{len(EMISSION_ANGLES)}×{len(AZIMUTH_ANGLES)}")
+    print(f"\nStarting generation...\n")
     
     n_jobs = 4
     results = Parallel(n_jobs=n_jobs)(
         delayed(process_single_case)(theta, angle, lat, config) 
-        for theta, angle, lat in tqdm(tasks)
+        for theta, angle, lat in tqdm(tasks, desc="Processing cases", unit="case")
     )
     
     # Assemble Tensor
     lut_tensor = np.zeros((len(THETA_VALUES), len(OPENING_ANGLES), len(LATITUDE_VALUES), 
                            LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), 
                            len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), dtype=np.float32)
+
+    print("\nTensor assembled\n")
     
     idx = 0
     for i_th, theta in enumerate(THETA_VALUES):
@@ -398,6 +699,7 @@ def main():
                 idx += 1
                 
     # Save
+    print(f"\n{'='*80}")
     print(f"Saving to {OUTPUT_FILE}...")
     with h5py.File(OUTPUT_FILE, 'w') as f:
         f.create_dataset("lut", data=lut_tensor)
@@ -407,8 +709,18 @@ def main():
         f.create_dataset("latitude", data=LATITUDE_VALUES)
         f.create_dataset("emission", data=EMISSION_ANGLES)
         f.create_dataset("azimuth", data=AZIMUTH_ANGLES)
-        
-    print("Done.")
+
+    # Print summary
+    lut_size_bytes = os.path.getsize(OUTPUT_FILE)
+    lut_size_mb = lut_size_bytes / (1024 * 1024)
+    elapsed_time = time.time() - start_time
+
+    print(f"\nLUT generation complete!")
+    print(f"  File: {OUTPUT_FILE}")
+    print(f"  Size: {lut_size_mb:.1f} MB")
+    print(f"  Time: {elapsed_time/60:.1f} minutes ({elapsed_time:.0f} seconds)")
+    print(f"  Rate: {len(tasks)/elapsed_time:.2f} cases/second")
+    print("="*80)
 
 if __name__ == "__main__":
     main()

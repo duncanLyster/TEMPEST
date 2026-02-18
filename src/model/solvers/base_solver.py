@@ -23,7 +23,9 @@ class TemperatureSolver:
             # Guard: power_in must be non-negative to avoid NaN from fractional power of negative
             if power_in <= 0:
                 power_in = 1e-20  # Small positive to avoid 0/0 and give ~0 K
-            return (power_in / (emissivity * sigma))**(1/4)
+            temp = (power_in / (emissivity * sigma))**(1/4)
+            # Floor at 50 K to prevent numerical instability in implicit solver linearization
+            return max(temp, 50.0)
 
         # Parallel processing of facets
         results = Parallel(n_jobs=config.n_jobs)(

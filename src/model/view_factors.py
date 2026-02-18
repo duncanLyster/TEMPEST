@@ -376,6 +376,7 @@ def process_thermal_view_factors_chunk(shape_model, thermal_data, epf_lut, start
         
         # Get EPF values and combine with view factors
         epf_values = np.array([epf_lut.query(em) for em in emission_angles])
+        
         chunk_results.append(view_factors * epf_values)
     
     return chunk_results

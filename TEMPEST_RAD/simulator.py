@@ -95,57 +95,81 @@ def compute_geometry(facets, sun_vec, obs_vec, rot_axis):
     
     Returns:
         latitudes: (N,) relative to rotation axis
-        sun_phases: (N,) local hour angle
+        sun_phases: (N,) GLOBAL body rotation phase (0-360°, same for all facets)
+                    This represents the rotation angle of the body, NOT per-facet local hour angles.
+                    For compatibility with LUT which was generated with uniform rotation phases.
         emissions: (N,) emission angle
         azimuths: (N,) relative azimuth
     """
     n_facets = len(facets)
     normals = np.array([f.normal for f in facets])
+    centers = np.array([f.center for f in facets])
     
     # Normalize vectors
     sun_vec = sun_vec / np.linalg.norm(sun_vec)
     obs_vec = obs_vec / np.linalg.norm(obs_vec)
     rot_axis = rot_axis / np.linalg.norm(rot_axis)
     
-    # 1. Latitude
-    # sin(lat) = N dot Axis
-    sin_lats = np.dot(normals, rot_axis)
-    latitudes = np.degrees(np.arcsin(np.clip(sin_lats, -1.0, 1.0)))
+    # 1. Latitude (from facet CENTER POSITION, not normal direction)
+    # For LUT: geographic latitude = where on body surface the facet is located
+    center_norms = np.linalg.norm(centers, axis=1)
+    centers_unit = centers / center_norms[:, np.newaxis]
+    sin_lats = np.dot(centers_unit, rot_axis)
+    latitudes = np.abs(np.degrees(np.arcsin(np.clip(sin_lats, -1.0, 1.0))))
     
     # 2. Emission Angle
     # cos(e) = N dot Obs
     cos_emi = np.dot(normals, obs_vec)
     emissions = np.degrees(np.arccos(np.clip(cos_emi, 0.0, 1.0)))
     
-    # 3. Sun Phase (Local Time)
-    # Project N and Sun onto Equatorial Plane
-    n_proj = normals - np.outer(np.dot(normals, rot_axis), rot_axis)
+    # 3. Sun Phase (Global Body Rotation Phase)
+    # FIXED: Return a single global rotation phase for all facets, not per-facet local hour angles.
+    # The LUT was generated with uniform body rotation phases (0-360°).
+    #
+    # To compute the global phase, we use a reference point on the equator (at +X initially)
+    # and measure how far it has rotated toward the sun's equatorial projection.
+    #
+    # Reference direction: Start at +X axis (0° phase)
+    # Sun's equatorial projection: Project sun vector onto equatorial plane
+    # Phase = angle from +X to sun projection, measured around rotation axis
+    
+    # Project sun onto equatorial plane
     s_proj = sun_vec - np.dot(sun_vec, rot_axis) * rot_axis
-    s_proj = s_proj / np.linalg.norm(s_proj)
+    s_norm = np.linalg.norm(s_proj)
     
-    # Normalize n_proj
-    norms_n = np.linalg.norm(n_proj, axis=1)
-    # Avoid division by zero at poles
-    valid_n = norms_n > 1e-6
-    
-    sun_phases = np.zeros(n_facets)
-    
-    if np.any(valid_n):
-        n_proj_norm = n_proj[valid_n] / norms_n[valid_n, np.newaxis]
+    if s_norm > 1e-6:
+        s_proj = s_proj / s_norm
         
-        # Dot product for angle magnitude
-        cos_phase = np.dot(n_proj_norm, s_proj)
+        # Reference direction in equatorial plane (typically +X)
+        # For a body rotating around +Z, the reference is +X axis
+        ref_dir = np.array([1.0, 0.0, 0.0])
+        ref_proj = ref_dir - np.dot(ref_dir, rot_axis) * rot_axis
+        ref_norm = np.linalg.norm(ref_proj)
+        if ref_norm > 1e-6:
+            ref_proj = ref_proj / ref_norm
+        else:
+            # Rotation axis is along X, use Y as reference
+            ref_proj = np.array([0.0, 1.0, 0.0])
+        
+        # Angle between reference and sun projection
+        cos_phase = np.dot(ref_proj, s_proj)
         phase_rad = np.arccos(np.clip(cos_phase, -1.0, 1.0))
         
-        # Cross product for sign (Morning/Afternoon)
-        # cross(N_proj, S_proj) dot Axis
-        cross_vals = np.cross(n_proj_norm, s_proj)
-        signs = np.dot(cross_vals, rot_axis)
+        # Determine sign using cross product
+        cross_val = np.cross(ref_proj, s_proj)
+        sign = np.dot(cross_val, rot_axis)
         
-        # If sign < 0, angle is 360 - angle
-        phase_rad[signs < 0] = 2 * np.pi - phase_rad[signs < 0]
+        if sign < 0:
+            phase_rad = 2 * np.pi - phase_rad
         
-        sun_phases[valid_n] = np.degrees(phase_rad)
+        # This is the global rotation phase (same for all facets)
+        global_phase = np.degrees(phase_rad)
+    else:
+        # Sun along rotation axis (polar incidence) - phase is ill-defined
+        global_phase = 0.0
+    
+    # Return the SAME phase for all facets
+    sun_phases = np.full(n_facets, global_phase)
         
     # 4. Relative Azimuth
     # Angle between Projected Sun and Projected Observer on Facet Plane

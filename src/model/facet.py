@@ -19,7 +19,7 @@ class Facet:
         
         # New attributes for parent facet functionality
         self.sub_facets = []  # List of SubFacet objects
-        self.dome_facets = []  # List of dome directional bins (dicts with normal, area)
+        self.dome_facets = []  # DEPRECATED: Only for old radiosity approach, not used by LUT generator
         self.parent_incident_energy_packets = []  # List of (flux_amount, direction_vector, type_flag) tuples
         self.depression_total_absorbed_solar_flux = 0.0
         self.depression_total_absorbed_scattered_flux = 0.0
@@ -66,23 +66,9 @@ class Facet:
                 subfacet = SubFacet(parent_id=id(self), local_id=i)
                 self.sub_facets.append(subfacet)
 
-        # Build canonical dome mesh once and cache it (in facet-local space)
-        # Allow configs without kernel_directional_bins by defaulting to kernel_subfacets_count
-        dome_bins = getattr(config, 'kernel_directional_bins', config.kernel_subfacets_count)
-        if not hasattr(Facet, "_canonical_dome_mesh") or Facet._canonical_dome_mesh is None:
-            Facet._canonical_dome_mesh = generate_canonical_spherical_cap(
-                dome_bins,
-                90.0
-            )
-            Facet._canonical_dome_params = dome_bins
-
-        # Store dome facets in facet-local coordinates
-        self.dome_facets = Facet._canonical_dome_mesh
-        # Initialize outgoing flux arrays to zeros so they always exist
-        M = len(self.dome_facets)
-        self.depression_outgoing_flux_array_vis = np.zeros(M, dtype=np.float64)
-        self.depression_outgoing_flux_array_th  = np.zeros(M, dtype=np.float64)
-
+        # NOTE: Old dome mesh generation removed - only needed for deprecated radiosity calculations
+        # The LUT generator and new thermal EPF approach don't use dome meshes
+        
         # Compute world->local rotation matrix for mapping directions into facet space
         up = np.array([0.0, 0.0, 1.0])
         n = self.normal / np.linalg.norm(self.normal)
@@ -98,7 +84,7 @@ class Facet:
             angle = math.acos(np.clip(np.dot(up, n), -1.0, 1.0))
             R_l2w = calculate_rotation_matrix(axis_norm, angle)
         # Store world->local conversion
-        self.dome_rotation = R_l2w.T  # inverse of local->world
+        self.world_to_local_rotation = R_l2w.T  # inverse of local->world
 
         # Skip thermal data initialization if simulation lacks required attributes (e.g., in tests)
         if not hasattr(simulation, 'timesteps_per_day'):
@@ -113,16 +99,21 @@ class Facet:
             max_days=simulation.max_days,
             calculate_energy_terms=config.calculate_energy_terms
         )
-        # Ensure canonical view factors are computed
-        if not hasattr(Facet, '_canonical_F_ss'):
+        # Ensure canonical view factors are computed (only needed for radiosity calculations)
+        # Skip if dome mesh wasn't generated (e.g., for LUT generator using thermal EPF approach)
+        if (hasattr(Facet, '_canonical_dome_mesh') and 
+            Facet._canonical_dome_mesh is not None and 
+            not hasattr(Facet, '_canonical_F_ss')):
             F_ss, F_sd = Facet._compute_canonical_view_factors(config)
             Facet._canonical_F_ss = F_ss
             Facet._canonical_F_sd = F_sd
-        else:
+        
+        # Only set up thermal view factors if we computed them (needed for radiosity-based self-heating)
+        if hasattr(Facet, '_canonical_F_ss'):
             F_ss = Facet._canonical_F_ss
-        # Set sub-facet visible indices and thermal view factors for self-heating
-        self.depression_thermal_data.visible_facets = [np.arange(N, dtype=np.int64) for _ in range(N)]
-        self.depression_thermal_data.thermal_view_factors = [F_ss[i].copy() for i in range(N)]
+            # Set sub-facet visible indices and thermal view factors for self-heating
+            self.depression_thermal_data.visible_facets = [np.arange(N, dtype=np.int64) for _ in range(N)]
+            self.depression_thermal_data.thermal_view_factors = [F_ss[i].copy() for i in range(N)]
 
         # Precompute and cache canonical subfacet triangles and centers for shadow tests
         if not hasattr(Facet, '_canonical_subfacet_triangles'):
@@ -292,12 +283,12 @@ class Facet:
         return F_ss, F_sd
 
     @staticmethod
-    def _process_incident_packet(packet, dome_rotation, aperture_area, sub_normals, sub_areas, sub_triangles, centers, albedo, emissivity):
+    def _process_incident_packet(packet, world_to_local_rotation, aperture_area, sub_normals, sub_areas, sub_triangles, centers, albedo, emissivity):
         """Helper to process one incident energy packet for the depression in parallel."""
         import numpy as np
         flux_val, dir_world, type_flag = packet
         d_world_vec = np.array(dir_world)
-        d_local = dome_rotation.dot(d_world_vec)
+        d_local = world_to_local_rotation.dot(d_world_vec)
         cos_theta_aperture = d_local[2]
         N = sub_normals.shape[0]
         E0_vis_local = np.zeros(N, dtype=np.float64)
@@ -442,7 +433,7 @@ class Facet:
         for packet in self.parent_incident_energy_packets:
             E0v_loc, E0t_loc, abs_s, abs_t = Facet._process_incident_packet(
                 packet,
-                self.dome_rotation,
+                self.world_to_local_rotation,
                 self.area,
                 normals,
                 areas,
@@ -459,10 +450,11 @@ class Facet:
 
         # Convert absorbed power E0_vis (W) into absorbed flux per subfacet area (W/m^2)
         # Note: E0_vis contains total energy on each sub-facet.
-        # Use cached normalized areas (canonical areas already sum to 1.0 in most cases)
+        # The canonical mesh is generated such that its projected aperture area is 1.0.
+        # So we scale by self.area (physical aperture area) to get physical sub-facet areas.
+        # We DO NOT normalize by the sum of surface areas, because surface area > aperture area for roughness.
         area_vector = areas * self.area
-        norm_factor = self.area / area_vector.sum()
-        area_vector *= norm_factor
+        
         absorbed = (1 - simulation.albedo) * E0_vis
         # Avoid division by zero
         self._last_absorbed_solar = np.where(area_vector > 0, absorbed / area_vector, 0.0)
