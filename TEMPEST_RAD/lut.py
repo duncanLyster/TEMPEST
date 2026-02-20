@@ -136,6 +136,17 @@ class RoughnessLUT:
         # Clip Latitudes (just in case)
         latitudes = np.abs(latitudes)
         
+        # Cap emission angle to avoid limb divergence.
+        # The ratio R = I_rough / I_smooth diverges as emission -> 90° because
+        # the Lambertian denominator cos(e) -> 0 while the rough radiance stays
+        # finite.  The last LUT grid point (e=89°) absorbs this divergence and
+        # has values 10-90x, which are mathematically correct for the ratio but
+        # create unphysical per-pixel temperatures.  Capping at 80° keeps us in
+        # the well-behaved regime.  Limb facets beyond 80° contribute
+        # negligibly to disk-integrated flux (cos 80° = 0.17).
+        EMI_CAP = 80.0
+        emissions = np.minimum(emissions, EMI_CAP)
+        
         if self.spectral_mode:
             if wavelength is None:
                 # Default to first wavelength if none provided

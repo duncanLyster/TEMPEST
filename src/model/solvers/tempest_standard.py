@@ -14,6 +14,7 @@
 # may be a better option, but is yet to be implemented in TEMPEST. 
 
 
+import time
 import numpy as np
 from numba import jit
 from .base_solver import TemperatureSolver
@@ -270,6 +271,7 @@ class TempestStandardSolver(TemperatureSolver):
         comparison_temps = thermal_data.temperatures[:, 0].copy()
 
         while day < simulation.max_days and (day < simulation.min_days or convergence_error > simulation.convergence_target):
+            day_start_time = time.time()
             current_day_temperature = calculate_temperatures(
                 thermal_data.temperatures,
                 thermal_data.layer_temperatures,
@@ -337,7 +339,9 @@ class TempestStandardSolver(TemperatureSolver):
             max_temperature_error = np.max(temperature_errors)
             mean_temperature_error = np.mean(temperature_errors)
 
-            conditional_print(config.silent_mode, f"Day: {day} | Mean Temperature error: {mean_temperature_error:.6f} K | Max Temp Error: {max_temperature_error:.6f} K")
+            day_end_time = time.time()
+            day_elapsed = day_end_time - day_start_time
+            conditional_print(config.silent_mode, f"Day: {day} | Mean Error: {mean_temperature_error:.6f} K | Max Error: {max_temperature_error:.6f} K | {day_elapsed:.1f}s")
             
             comparison_temps = current_day_temperature[:, 0].copy()
             error_history.append(convergence_error)

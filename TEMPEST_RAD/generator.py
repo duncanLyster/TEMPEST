@@ -56,7 +56,7 @@ from src.model.view_factors import calculate_all_view_factors, calculate_thermal
 # All parameters are defined here for easy modification.
 
 # --- OUTPUT ---
-OUTPUT_FILE = "roughness_lut_spectral_v1_factors.h5"  # Name of the generated HDF5 file
+OUTPUT_FILE = "roughness_lut_spectral_v1.h5"  # Name of the generated HDF5 file
 
 # --- LUT GRID DIMENSIONS ---
 # These define the dimensionality and resolution of your lookup table.
@@ -84,12 +84,12 @@ LATITUDE_VALUES = np.arange(0.0, 92.5, 2.5)  # 37 points, 2.5° spacing
 # Emission Angles (degrees) - Observer viewing angle
 # 0° = looking straight down, 90° = grazing view
 # MUST have ≥10 points to capture limbward darkening
-EMISSION_ANGLES = np.linspace(0, 89, 10)
+EMISSION_ANGLES = np.linspace(0, 89, 20)
 
 # Azimuth Angles (degrees) - Angle between sun and observer
 # 0° = opposition (sun behind observer), 180° = full phase
 # MUST have ≥10 points to capture sharp opposition effect at 0-30°
-AZIMUTH_ANGLES = np.linspace(0, 180, 10)
+AZIMUTH_ANGLES = np.linspace(0, 180, 20)
 
 # --- TEMPORAL RESOLUTION ---
 LUT_TIMESTEPS = 90   # Output resolution: 360°/180 = 2° per step
@@ -448,18 +448,63 @@ def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_time
 
 
 
+def plot_wireframe(mesh, filename="TEMPEST_RAD/diagnostics/plots/crater_wireframe.png"):
+    """
+    Save a 3D wireframe plot of the crater mesh.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import art3d
+    
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    vertices = []
+    for entry in mesh:
+        # entry['vertices'] is (3,3) array
+        v = entry['vertices']
+        # Close the loop for wireframe
+        v_loop = np.vstack([v, v[0]])
+        ax.plot(v_loop[:,0], v_loop[:,1], v_loop[:,2], 'k-', lw=0.5, alpha=0.3)
+        vertices.append(v)
+        
+    vertices_flat = np.vstack(vertices).reshape(-1, 3)
+    max_range = np.array([vertices_flat[:,0].max()-vertices_flat[:,0].min(), 
+                          vertices_flat[:,1].max()-vertices_flat[:,1].min(), 
+                          vertices_flat[:,2].max()-vertices_flat[:,2].min()]).max() / 2.0
+
+    mid_x = (vertices_flat[:,0].max()+vertices_flat[:,0].min()) * 0.5
+    mid_y = (vertices_flat[:,1].max()+vertices_flat[:,1].min()) * 0.5
+    mid_z = (vertices_flat[:,2].max()+vertices_flat[:,2].min()) * 0.5
+
+    ax.set_xlim(mid_x - max_range, mid_x + max_range)
+    ax.set_ylim(mid_y - max_range, mid_y + max_range)
+    ax.set_zlim(mid_z - max_range, mid_z + max_range)
+    
+    ax.set_title(f"Crater Mesh ({len(mesh)} facets)")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    
+    out_dir = os.path.dirname(filename)
+    if out_dir: os.makedirs(out_dir, exist_ok=True)
+    plt.savefig(filename, dpi=150)
+    plt.close()
+    print(f"Saved wireframe to {filename}")
+
 def process_single_case(theta, opening_angle, lat, config):
     """
     Run simulation and compute viewing geometry grid.
-    Returns: 4D array (Time, Wave, Emi, Azi), 1D array (Normalization_Factors)
+    Returns: 4D array (Time, Wave, Emi, Azi), 1D array (Normalization_Factor)
     """
     try:
         rough_temps_sim, smooth_temps_sim, facet, sun_vectors_sim = simulate_crater_diurnal_cycle(theta, opening_angle, lat, config, SIM_TIMESTEPS)
     except Exception as e:
         print(f"Error in simulation (Th={theta}, ang={opening_angle}, lat={lat}): {e}")
-        print(f"Full traceback:")
         traceback.print_exc()
-        return np.full((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32), np.full(len(WAVELENGTHS_MICRONS), np.nan, dtype=np.float32)
+        # Return scalar nan for factor
+        return np.full((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32), np.nan
 
     # Resample to LUT grid
     indices = np.linspace(0, SIM_TIMESTEPS-1, LUT_TIMESTEPS, dtype=int)
@@ -471,14 +516,11 @@ def process_single_case(theta, opening_angle, lat, config):
     result_grid = np.zeros((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), dtype=np.float32)
     
     # Geometry Arrays
-    # Ensure attributes are initialized even if process_intra_depression_energetics was skipped
     if not hasattr(Facet, '_canonical_normals') or Facet._canonical_normals is None:
         mesh = Facet._canonical_subfacet_mesh
         Facet._canonical_normals = np.array([entry['normal'] for entry in mesh], dtype=np.float64)
         Facet._canonical_areas = np.array([entry['area'] for entry in mesh], dtype=np.float64)
-        # Handle case where vertices might be raw list vs numpy array
         Facet._canonical_subfacet_triangles = np.array([entry['vertices'] for entry in mesh], dtype=np.float64)
-        # Handle case where center is missing
         if 'center' in mesh[0]:
             Facet._canonical_subfacet_centers = np.array([entry['center'] for entry in mesh], dtype=np.float64)
         else:
@@ -490,14 +532,30 @@ def process_single_case(theta, opening_angle, lat, config):
     centers = Facet._canonical_subfacet_centers
     facet_normal = facet.normal / np.linalg.norm(facet.normal)
     
+    # Pre-calculated Geometry terms
+    em_rad = np.radians(EMISSION_ANGLES)
+    az_rad = np.radians(AZIMUTH_ANGLES)
+    d_em = np.diff(em_rad); d_em = np.append(d_em, d_em[-1])
+    d_az = np.diff(az_rad); d_az = np.append(d_az, d_az[-1])
+
+    # Pre-compute cos(e)*sin(e) solid-angle weight grid for normalization.
+    # Energy conservation requires: ∫ R(e,φ) cos(e) sin(e) de dφ = π
+    # i.e., the cos(e)*sin(e)-weighted mean of R must equal 1.0.
+    cos_e_arr = np.cos(em_rad)
+    sin_e_arr = np.sin(em_rad)
+    cse_weights = np.zeros((len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)))
+    for ie in range(len(EMISSION_ANGLES)):
+        for ia in range(len(AZIMUTH_ANGLES)):
+            cse_weights[ie, ia] = cos_e_arr[ie] * sin_e_arr[ie] * d_em[ie] * d_az[ia] * 2.0
+    ref_integral = np.sum(cse_weights)  # ≈ π
+
     # Loop over Timesteps
     for t_idx in range(LUT_TIMESTEPS):
         t_sub = rough_temps[:, t_idx] # (N_sub,)
         t_smooth = smooth_temps[t_idx] # scalar
         
         # Sun Basis for Azimuth
-        sun_vec = sun_vectors[t_idx]
-        sun_vec_norm = sun_vec / np.linalg.norm(sun_vec)
+        sun_vec_norm = sun_vectors[t_idx] / np.linalg.norm(sun_vectors[t_idx])
         s_dot_n = np.dot(sun_vec_norm, facet_normal)
         sun_proj = sun_vec_norm - s_dot_n * facet_normal
         if np.linalg.norm(sun_proj) > 1e-6:
@@ -513,7 +571,7 @@ def process_single_case(theta, opening_angle, lat, config):
             emi_rad = np.radians(emi_deg)
             sin_e = np.sin(emi_rad)
             cos_e = np.cos(emi_rad)
-            
+
             for i_a, azi_deg in enumerate(AZIMUTH_ANGLES):
                 azi_rad = np.radians(azi_deg)
                 
@@ -524,134 +582,72 @@ def process_single_case(theta, opening_angle, lat, config):
                 view_vec = v_local_x * basis_x + v_local_y * basis_y + v_local_z * facet_normal
                 view_vec /= np.linalg.norm(view_vec)
                 
-                # Ray-Trace Visibility (Effective Projected Area per Subfacet)
-                # Flux=1.0 visible packet to measure projected area
+                # --- Determine Visibility via ray-tracing ---
+                # We use _process_incident_packet for its shadow-checking logic,
+                # but we do NOT use the redistributed E_vis values for radiance.
+                # E_vis > 0 identifies which subfacets are visible from this direction.
                 packet = (1.0, view_vec, 'visible') 
                 E_vis, _, _, _ = Facet._process_incident_packet(
                     packet, facet.world_to_local_rotation, facet.area, normals, areas, triangles, centers, 0.0, 0.0
                 )
+                visible_mask = E_vis > 0
+                
+                # Compute cos(theta_i) = dot(subfacet normal, view direction) in local frame
+                d_local = facet.world_to_local_rotation.dot(view_vec)
+                cos_i_all = normals.dot(d_local)
                 
                 # Loop Wavelengths
                 for i_w, wave in enumerate(WAVELENGTHS_MICRONS):
-                    # Rough Radiance
-                    # L_sub(i) = B(wave, T_sub(i))
-                    # Flux_rough = Sum( L_sub(i) * A_proj_sub(i) )
-                    #            = Sum( B(wave, T_sub(i)) * E_vis[i] )
-                    # (Note: E_vis is effectively A_proj because Flux_in was 1.0)
-                    
+                    # 1. Compute spectral intensity (power per steradian per micron)
+                    # CORRECT formula for outgoing radiance from a rough crater:
+                    #   I_rough = Σ_visible B(λ, T_i) * A_i * cos(θ_i)
+                    # where cos(θ_i) is angle between subfacet normal and view direction.
                     rad_sub = planck_function(wave, t_sub)
-                    weighted_sum = np.sum(rad_sub * E_vis)
+                    cos_i_vis = np.maximum(cos_i_all[visible_mask], 0.0)
+                    rough_intensity = np.sum(rad_sub[visible_mask] * areas[visible_mask] * cos_i_vis)
                     
-                    # Smooth Radiance
-                    # Flux_smooth = B(wave, T_smooth) * A_macro_proj
-                    # A_macro_proj = A_facet * cos(e)
-                    
-                    if t_smooth < 5.0: # Night / Shadow
-                        ratio = 1.0
+                    # Smooth intensity: I_smooth = B(λ, T_smooth) * A_aperture * cos(e)
+                    if t_smooth < 5.0:
+                        smooth_intensity = 0.0
                     else:
-                        rad_smooth = planck_function(wave, t_smooth)
-                        flux_smooth = rad_smooth * facet.area * cos_e
-                        
-                        if flux_smooth < 1e-15:
-                            ratio = 1.0
-                        else:
-                            ratio = weighted_sum / flux_smooth
-                            
-                    result_grid[t_idx, i_w, i_e, i_a] = ratio
-                    
-    # --- NORMALIZATION STEP (Ensure Daily Energy Conservation) ---
-    # We calculate a per-wavelength scalar to force:
-    # Integral(Rough_Flux, over Day) = Integral(Smooth_Flux, over Day)
-    
-    # Pre-compute weights for hemispherical integration
-    # dOmega = sin(e) de dphi
-    # Projected Area factor is already in Flux (cos e)
-    # But result_grid stores Ratio = Rough/Smooth.
-    # Smooth Flux = B(T) * cos(e).
-    # Rough Flux = Ratio * B(T) * cos(e).
-    # We want Integral[ Rough Flux ] = Integral[ Smooth Flux ].
-    
-    # Simpson/Trapezoidal weights for Emission and Azimuth
-    em_rad = np.radians(EMISSION_ANGLES)
-    az_rad = np.radians(AZIMUTH_ANGLES)
-    
-    # Emission Grid Delta
-    d_em = np.diff(em_rad)
-    d_em = np.append(d_em, d_em[-1]) # Approx last bin
-    
-    # Azimuth Grid Delta (0 to 180 -> mirror to 360)
-    # We integrate 0-180 and multiply by 2 (assuming symmetry)
-    d_az = np.diff(az_rad)
-    d_az = np.append(d_az, d_az[-1])
-    
-    # Time delta
-    dt = 1.0 # Units don't matter as they cancel in ratio
-    
-    normalization_factors = np.zeros(len(WAVELENGTHS_MICRONS), dtype=np.float32)
+                        rad_smooth_val = planck_function(wave, t_smooth)
+                        smooth_intensity = rad_smooth_val * facet.area * cos_e
 
-    for i_w, wave in enumerate(WAVELENGTHS_MICRONS):
-        total_energy_smooth = 0.0
-        total_energy_rough = 0.0
-        
-        for t_idx in range(LUT_TIMESTEPS):
-            t_sm = smooth_temps[t_idx]
-            if t_sm < 5.0: continue
-            
-            # B(T)
-            rad_sm = planck_function(wave, t_sm)
-            
-            # *** FIX: Use NUMERICAL integration for smooth (same as rough) ***
-            # Previous version used analytic formula π*B(T), causing systematic errors
-            # that varied with latitude (r=-0.715). Now both use the SAME numerical
-            # integration scheme so discretization errors cancel in the ratio.
-            
-            # Smooth Flux Integral: Numerically integrate B(T) * cos(e) * sin(e) over hemisphere
-            integral_smooth = 0.0
-            for i_e, emi_deg in enumerate(EMISSION_ANGLES):
-                sin_e = np.sin(np.radians(emi_deg))
-                cos_e = np.cos(np.radians(emi_deg))
-                weight_e = sin_e * cos_e * d_em[i_e]
+                    # Store radiance ratio: R = I_rough / I_smooth = L_rough / L_smooth
+                    if smooth_intensity < 1e-15:
+                        result_grid[t_idx, i_w, i_e, i_a] = 1.0 # Fallback
+                    else:
+                        ratio = rough_intensity / smooth_intensity
+                        # Clamp to physical range to avoid interpolation artifacts
+                        # at extreme viewing geometries (e~89°) or Wien-tail conditions
+                        result_grid[t_idx, i_w, i_e, i_a] = np.clip(ratio, 0.0, 50.0)
+
+    # --- PER-(TIME, WAVELENGTH) NORMALIZATION ---
+    # For energy conservation, the cos(e)*sin(e)-weighted average of R over
+    # all viewing directions must equal 1.0 at each timestep and wavelength.
+    # This ensures that applying R to a Lambertian smooth surface conserves
+    # total emitted power, regardless of T_smooth.
+    #
+    # Constraint: ∫ R(e,φ) * cos(e) * sin(e) de dφ = π
+    #            ⟹ <R>_{cos·sin} = 1.0
+    #
+    # We enforce this independently for each (t, λ) slice.
+    norm_factors_tw = np.zeros((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS)))
+    for t_idx in range(LUT_TIMESTEPS):
+        for i_w in range(len(WAVELENGTHS_MICRONS)):
+            raw_slice = result_grid[t_idx, i_w, :, :]  # (Emi, Azi)
+            weighted_sum = np.sum(raw_slice * cse_weights)
+            if weighted_sum > 1e-15:
+                alpha = ref_integral / weighted_sum
+            else:
+                alpha = 1.0
+            result_grid[t_idx, i_w, :, :] *= alpha
+            norm_factors_tw[t_idx, i_w] = alpha
+    
+    # Diagnostic: average normalization factor across all timesteps/wavelengths
+    norm_factor = float(np.mean(norm_factors_tw))
                 
-                # Integrate over azimuth (0-180, multiply by 2 for full circle)
-                sum_az = np.sum(d_az)  # For smooth, no angular dependence
-                integral_smooth += (sum_az * 2.0) * weight_e
-            
-            energy_step_smooth = rad_sm * integral_smooth
-            total_energy_smooth += energy_step_smooth
-            
-            # Rough Flux Integral
-            # Sum over Angles: Ratio(t, e, a) * B(T) * cos(e) * sin(e) * de * da
-            # Factor 2 for Azimuth 0-180 -> 0-360 symmetry
-            
-            integral_hemi = 0.0
-            for i_e, emi_deg in enumerate(EMISSION_ANGLES):
-                sin_e = np.sin(np.radians(emi_deg))
-                cos_e = np.cos(np.radians(emi_deg))
-                weight_e = sin_e * cos_e * d_em[i_e]
-                
-                sum_az = 0.0
-                for i_a, azi_deg in enumerate(AZIMUTH_ANGLES):
-                    ratio = result_grid[t_idx, i_w, i_e, i_a]
-                    sum_az += ratio * d_az[i_a]
-                
-                # Multiply by 2 for Azimuth symmetry (0-180 -> 0-360)
-                integral_hemi += (sum_az * 2.0) * weight_e
-            
-            # Rough Flux = B(T) * Integral_Geometry
-            energy_step_rough = rad_sm * integral_hemi
-            total_energy_rough += energy_step_rough
-            
-        # Calculate Scalar Factor for this Wavelength
-        if total_energy_rough > 1e-9:
-            norm_factor = total_energy_smooth / total_energy_rough
-        else:
-            norm_factor = 1.0
-        
-        # Apply Normalization
-        result_grid[:, i_w, :, :] *= norm_factor
-        normalization_factors[i_w] = norm_factor
-                
-    return result_grid, normalization_factors
+    return result_grid, norm_factor
 
 def main():
     print("="*80)
@@ -659,10 +655,47 @@ def main():
     print("="*80)
     start_time = time.time()
     
-    # Create Reference Config (Standard Physics, 1 AU)
-    # This avoids loading any external config.yaml
+    # Create Reference Config
     config = ReferenceConfig()
     
+    # Generate and Plot Wireframe (Requirement 5)
+    print("Generating geometry preview...")
+    dummy_normal = np.array([0.0, 0.0, 1.0])
+    dummy_vs = [np.array([-1,-1,0]), np.array([1,-1,0]), np.array([0,1,0])]
+    dummy_facet = Facet(dummy_normal, dummy_vs, 1, 1, 1, False)
+    
+    config.kernel_profile_angle_degrees = OPENING_ANGLES[0]
+    config.apply_kernel_based_roughness = True
+    dummy_facet.generate_spherical_depression(config, Simulation(config))
+    plot_wireframe(Facet._canonical_subfacet_mesh)
+    
+    # Pre-calculate View Factors (Single Threaded to avoid race condition)
+    print("Pre-calculating view factors to avoid parallel race condition...")
+    # We need to construct a shape model exactly like simulate_crater_diurnal_cycle does
+    # Use Lat 0.0 logic (rotation to equator is constant)
+    mesh = Facet._canonical_subfacet_mesh
+    n_facets = len(mesh)
+    shape_model = []
+    rotation_to_equator = calculate_rotation_matrix(np.array([0.0, 1.0, 0.0]), np.pi/2)
+    for entry in mesh:
+        canonical_n = np.array(entry['normal'])
+        canonical_v = np.array(entry['vertices'])
+        rotated_n = np.dot(rotation_to_equator, canonical_n)
+        rotated_v = np.array([np.dot(rotation_to_equator, v) for v in canonical_v])
+        new_f = Facet(rotated_n, rotated_v, 1, 1, 1, False)
+        shape_model.append(new_f)
+        
+    thermal_data = ThermalData(n_facets, 1, 1, 1, False)
+    # Visible facets logic
+    all_indices = np.arange(n_facets)
+    visible_facets_list = [np.concatenate([all_indices[:i], all_indices[i+1:]]) for i in range(n_facets)]
+    thermal_data.set_visible_facets(visible_facets_list)
+    
+    # Trigger calculation and save
+    calculate_all_view_factors(shape_model, thermal_data, config, VIEW_FACTOR_RAYS)
+    calculate_thermal_view_factors(shape_model, thermal_data, config)
+    print("View factor cache initialized.")
+
     # Tasks
     tasks = []
     for theta in THETA_VALUES:
@@ -681,30 +714,44 @@ def main():
     print(f"\nStarting generation...\n")
     
     n_jobs = 4
-    results = Parallel(n_jobs=n_jobs)(
-        delayed(process_single_case)(theta, angle, lat, config) 
-        for theta, angle, lat in tqdm(tasks, desc="Processing cases", unit="case")
+    
+    # Use joblib's verbose mode + tqdm for real completion tracking
+    print(f"  (Each '.' below = 1 completed case)\n")
+    completed = [0]
+    total = len(tasks)
+    pbar = tqdm(total=total, desc="Processing cases", unit="case")
+    
+    def _run_and_track(theta, angle, lat, config):
+        result = process_single_case(theta, angle, lat, config)
+        return result
+    
+    results = Parallel(n_jobs=n_jobs, verbose=10)(
+        delayed(_run_and_track)(theta, angle, lat, config) 
+        for theta, angle, lat in tasks
     )
+    pbar.update(total - pbar.n)  # Ensure bar reaches 100%
+    pbar.close()
     
     # Assemble Tensor
+    print("\nAssembling tensor...")
     lut_tensor = np.zeros((len(THETA_VALUES), len(OPENING_ANGLES), len(LATITUDE_VALUES), 
                            LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), 
                            len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), dtype=np.float32)
                            
-    factors_tensor = np.zeros((len(THETA_VALUES), len(OPENING_ANGLES), len(LATITUDE_VALUES),
-                              len(WAVELENGTHS_MICRONS)), dtype=np.float32)
-
-    print("\nTensor assembled\n")
+    factors_tensor = np.zeros((len(THETA_VALUES), len(OPENING_ANGLES), len(LATITUDE_VALUES)), dtype=np.float32)
     
     idx = 0
     for i_th, theta in enumerate(THETA_VALUES):
         for i_ang, angle in enumerate(OPENING_ANGLES):
             for i_lat, lat in enumerate(LATITUDE_VALUES):
                 if results[idx] is not None:
-                    grid, factors = results[idx]
+                    grid, factor = results[idx]
                     lut_tensor[i_th, i_ang, i_lat, :, :, :, :] = grid
-                    factors_tensor[i_th, i_ang, i_lat, :] = factors
+                    factors_tensor[i_th, i_ang, i_lat] = factor
+                    print(f"  Lat {lat:5.1f}°: norm_factor = {factor:.4f}")
                 idx += 1
+    
+    print("Tensor assembled.")
                 
     # Save
     print(f"\n{'='*80}")

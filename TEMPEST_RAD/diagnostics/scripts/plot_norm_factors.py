@@ -2,66 +2,100 @@ import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 from pathlib import Path
+import os
+import sys
 
 # Paths
-ROOT = Path("TEMPEST_RAD")
-LUT_FILE = "roughness_lut_spectral_v1_factors.h5"
+# Assumes run from TEMPEST root
+ROOT = Path(".")
+if len(sys.argv) > 1:
+    LUT_FILE = sys.argv[1]
+else:
+    # Look for the new standard file first
+    if os.path.exists("roughness_lut_spectral_v1.h5"):
+        LUT_FILE = "roughness_lut_spectral_v1.h5"
+    else:
+        LUT_FILE = "roughness_lut_spectral_v1_factors.h5"
+
 OUTPUT_DIR = Path("TEMPEST_RAD/diagnostics/plots")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# Try to find the file
+if os.path.exists(LUT_FILE):
+    print(f"Using {LUT_FILE} from CWD")
+elif os.path.exists(f"TEMPEST_RAD/diagnostics/{LUT_FILE}"):
+    LUT_FILE = f"TEMPEST_RAD/diagnostics/{LUT_FILE}"
+    print(f"Using {LUT_FILE}")
+else:
+    print(f"Error: {LUT_FILE} not found. Please run generator first.")
+    sys.exit(1)
+             
+print(f"Loading {LUT_FILE}...")
+
 # Load Data
 with h5py.File(LUT_FILE, 'r') as f:
-    factors = f["normalization_factors"][...]  # [theta, angle, lat, wave]
-    wavelengths = f["wavelength"][...]
+    factors_raw = f["normalization_factors"][...]
+    # wavelengths = f["wavelength"][...] # might be gone in new logic? No, just not used for factor
     latitudes = f["latitude"][...]
     theta_vals = f["theta"][...]
 
-# We assume single theta and opening angle for now as per generator config
-# factors shape: (1, 1, 37, 5) if standard grid used
-# Extract the 2D array: (Latitude, Wavelength)
-factors_2d = factors[0, 0, :, :]
+# Handle Dimensions
+# Old format: [theta, angle, lat, wave] -> (1, 1, 37, 5)
+# New format: [theta, angle, lat] -> (1, 1, 37) (Bolometric scalar)
 
-# Plot 1: Factor vs Wavelength for specific latitudes
-target_lats = [0.0, 45.0, 80.0]
-fig, ax = plt.subplots(figsize=(10, 6))
+if factors_raw.ndim == 4:
+    print("Detected old format (Spectral Factors). Calculating mean over wavelength for plot.")
+    # Assuming shape [1, 1, N_lat, N_wave]
+    # Reduce to [N_lat]
+    factors = np.mean(factors_raw[0, 0, :, :], axis=1)
+    title_suffix = "(Spectral Mean)"
+elif factors_raw.ndim == 3:
+    print("Detected new format (Bolometric Scalar).")
+    # Assuming shape [1, 1, N_lat]
+    factors = factors_raw[0, 0, :]
+    if factors.ndim > 1: # Just in case
+        factors = factors.flatten()
+    title_suffix = "(Bolometric)"
+else:
+    print(f"Unexpected shape: {factors_raw.shape}")
+    factors = factors_raw.flatten()
 
-for target in target_lats:
-    # Find nearest latitude index
-    idx = np.argmin(np.abs(latitudes - target))
-    actual_lat = latitudes[idx]
-    
-    y_vals = factors_2d[idx, :]
-    ax.plot(wavelengths, y_vals, 'o-', linewidth=2, label=f"Lat {actual_lat:.1f}°")
+# 1. Plot vs Latitude (Full Range)
+plt.figure(figsize=(10, 6))
+plt.plot(latitudes, factors, 'o-', linewidth=2, label=f'Factor {title_suffix}')
+plt.xlabel("Latitude (deg)")
+plt.ylabel("Normalization Factor")
+plt.title(f"Normalization Factor vs Latitude {title_suffix} - Full Range")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.tight_layout()
+out_full = OUTPUT_DIR / "norm_factor_vs_latitude_bolometric_full.png"
+plt.savefig(out_full)
+print(f"Saved {out_full}")
 
-ax.set_xlabel("Wavelength (microns)")
-ax.set_ylabel("Normalization Factor (Rough/Smooth Energy Ratio)")
-ax.set_title("Normalization Factor vs Wavelength")
-ax.grid(True, which="both", linestyle="--", alpha=0.6)
-ax.legend()
-ax.set_xscale('log')
-plt.savefig(OUTPUT_DIR / "norm_factor_vs_wavelength.png")
-print(f"Saved {OUTPUT_DIR / 'norm_factor_vs_wavelength.png'}")
+# 2. Plot vs Latitude (Cutoff at 80)
+mask = latitudes <= 80.0
+# Also filter invalid values if any
+if np.any(np.isnan(factors[mask])):
+    print("Warning: NaNs detected in factors, skipping them in plot.")
+    valid = ~np.isnan(factors)
+    mask = mask & valid
 
-# Plot 2: Factor vs Latitude for one wavelength bin (e.g. 15 microns)
-target_wave = 15.0
-w_idx = np.argmin(np.abs(wavelengths - target_wave))
-actual_wave = wavelengths[w_idx]
+plt.figure(figsize=(10, 6))
+plt.plot(latitudes[mask], factors[mask], 'o-', linewidth=2, color='tab:blue', label=f'Factor {title_suffix}')
+plt.xlabel("Latitude (deg)")
+plt.ylabel("Normalization Factor")
+plt.title(f"Normalization Factor vs Latitude (Lat <= 80)")
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.tight_layout()
+out_80 = OUTPUT_DIR / "norm_factor_vs_latitude_bolometric_80deg.png"
+plt.savefig(out_80)
+print(f"Saved {out_80}")
 
-fig, ax = plt.subplots(figsize=(10, 6))
-y_vals = factors_2d[:, w_idx]
-
-ax.plot(latitudes, y_vals, 's-', color='darkred', linewidth=2)
-ax.set_xlabel("Latitude (degrees)")
-ax.set_ylabel(f"Normalization Factor (at {actual_wave} µm)")
-ax.set_title(f"Normalization Factor vs Latitude (λ={actual_wave} µm)")
-ax.grid(True, linestyle="--", alpha=0.6)
-plt.savefig(OUTPUT_DIR / "norm_factor_vs_latitude.png")
-print(f"Saved {OUTPUT_DIR / 'norm_factor_vs_latitude.png'}")
-
-# Print Table for Inspection
+# Print Table
 print("\nNormalization Factors Table:")
-print(f"{'Lat (deg)':<10} | " + " | ".join([f"{w:>7.1f} um" for w in wavelengths]))
-print("-" * 70)
-for i, lat in enumerate(latitudes):
-    row_str = " | ".join([f"{f:.4f}" for f in factors_2d[i, :]])
-    print(f"{lat:<10.1f} | {row_str}")
+print(f"{'Lat (deg)':<10} | {'Factor':<10}")
+print("-" * 25)
+for i in range(len(latitudes)):
+    print(f"{latitudes[i]:<10.1f} | {factors[i]:.4f}")

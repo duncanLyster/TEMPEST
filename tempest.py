@@ -202,10 +202,18 @@ def main():
         sys.exit(1)
     thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
 
+    # Compute dimensionless thermal parameter (Theta) for comparison with LUT
+    _sigma = 5.670374419e-8
+    _solar_flux = getattr(simulation, 'solar_luminosity', 3.828e26) / (4 * np.pi * simulation.solar_distance_m**2)
+    _tss = ((1 - simulation.albedo) * _solar_flux / (simulation.emissivity * _sigma)) ** 0.25
+    _theta = (simulation.thermal_inertia * np.sqrt(simulation.angular_velocity)) / (simulation.emissivity * _sigma * _tss**3)
+
     conditional_print(config.silent_mode,  f"\nDerived model parameters:")
     conditional_print(config.silent_mode,  f"Number of timesteps per day: {simulation.timesteps_per_day}")
     conditional_print(config.silent_mode,  f"Layer thickness: {simulation.layer_thickness} m")
     conditional_print(config.silent_mode,  f"Thermal inertia: {simulation.thermal_inertia} W m^-2 K^-1 s^0.5")
+    conditional_print(config.silent_mode,  f"Thermal parameter (Theta): {_theta:.4f}  [LUT grid: 0.0316]")
+    conditional_print(config.silent_mode,  f"Subsolar temperature: {_tss:.1f} K")
     conditional_print(config.silent_mode,  f"Skin depth: {simulation.skin_depth} m")
     conditional_print(config.silent_mode,  f"\n Number of facets: {len(shape_model)}")
 
@@ -231,6 +239,7 @@ def main():
         # Calculate regular view factors for scattering and self-heating
         all_view_factors = calculate_all_view_factors(shape_model, thermal_data, config, config.vf_rays)
         thermal_data.set_secondary_radiation_view_factors(all_view_factors)
+        conditional_print(config.silent_mode, f"\nRadiation view factors complete. Now calculating thermal view factors...")
         
         # Calculate thermal view factors if self-heating is enabled
         if config.include_self_heating:
@@ -245,6 +254,7 @@ def main():
         conditional_print(config.silent_mode, f"Time taken to calculate view factors: {calculate_view_factors_end - calculate_view_factors_start:.2f} seconds")
         
         # Convert thermal_view_factors to Numba lists (always, for consistency with solver)
+        conditional_print(config.silent_mode, "Converting thermal view factors to Numba lists...")
         numba_view_factors = List()
         for view_factors in thermal_data.thermal_view_factors:
             # Ensure array is 1D and handle empty arrays
@@ -255,7 +265,11 @@ def main():
                 numba_view_factors.append(arr.flatten() if arr.ndim > 1 else arr)
         thermal_data.thermal_view_factors = numba_view_factors
 
+    conditional_print(config.silent_mode, f"\nCalculating insolation for {len(shape_model)} facets x {simulation.timesteps_per_day} timesteps (shadowing={config.include_shadowing})...")
+    insolation_start = time.time()
     thermal_data = calculate_insolation(thermal_data, shape_model, simulation, config)
+    insolation_end = time.time()
+    conditional_print(config.silent_mode, f"Insolation calculation complete in {insolation_end - insolation_start:.1f} seconds.")
 
     if config.plot_insolation_curve and not config.silent_mode:
         fig_insolation = plt.figure(figsize=(10, 6))

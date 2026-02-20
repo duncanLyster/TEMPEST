@@ -105,10 +105,13 @@ def compute_geometry(facets, sun_vec, obs_vec, rot_axis):
     normals = np.array([f.normal for f in facets])
     centers = np.array([f.center for f in facets])
     
-    # Normalize vectors
+    # Normalize all vectors (STL normals may not be unit vectors)
     sun_vec = sun_vec / np.linalg.norm(sun_vec)
     obs_vec = obs_vec / np.linalg.norm(obs_vec)
     rot_axis = rot_axis / np.linalg.norm(rot_axis)
+    normal_mags = np.linalg.norm(normals, axis=1, keepdims=True)
+    normal_mags = np.maximum(normal_mags, 1e-12)  # Avoid division by zero
+    normals = normals / normal_mags
     
     # 1. Latitude (from facet CENTER POSITION, not normal direction)
     # For LUT: geographic latitude = where on body surface the facet is located

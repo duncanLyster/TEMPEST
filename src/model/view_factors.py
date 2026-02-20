@@ -6,6 +6,9 @@ TODO: Divide into more modules for better organisation.
 
 import os
 import time
+import pickle
+import tempfile
+import multiprocessing
 import numpy as np
 from numba import jit, njit, prange
 from joblib import Parallel, delayed
@@ -146,12 +149,20 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     for i in prange(n_rays):
         ray_directions[i] = normalize_vector(ray_directions[i])
     
+    # Check for degenerate normal (zero-area facet) — would cause infinite loop below
+    normal_mag = np.sqrt(subject_normal[0]**2 + subject_normal[1]**2 + subject_normal[2]**2)
+    if normal_mag < 1e-12:
+        return np.zeros(len(test_vertices), dtype=np.float64)
+
     valid_directions = np.zeros(n_rays, dtype=np.bool_)
     for i in prange(n_rays):
         valid_directions[i] = np.dot(ray_directions[i], subject_normal) > 0
     
     valid_count = np.sum(valid_directions)
-    while valid_count < n_rays:
+    max_attempts = 100  # Safety guard against infinite loop
+    attempt = 0
+    while valid_count < n_rays and attempt < max_attempts:
+        attempt += 1
         additional_rays_needed = n_rays - valid_count
         additional_ray_directions = np.random.randn(additional_rays_needed, 3)
         for i in range(additional_rays_needed):
@@ -176,22 +187,32 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     
     return view_factors
 
-def process_view_factors_chunk(shape_model, thermal_data, start_idx, end_idx, n_rays):
+def process_view_factors_chunk(shape_model, thermal_data, start_idx, end_idx, n_rays, chunk_idx=None, n_chunks=None, tmp_dir=None):
     """
     Process a chunk of subject facets for view factor calculations.
-    Returns a list of view factors and any warnings generated.
+    Saves results to a temp file and returns the filename to avoid joblib IPC bottleneck.
     """
     chunk_view_factors = []
-    warnings = []
+    warning_facets = []
+    chunk_size = end_idx - start_idx
+    chunk_start_time = time.time()
+    chunk_label = f"Chunk {chunk_idx}/{n_chunks}" if chunk_idx is not None else f"Chunk [{start_idx}-{end_idx}]"
     
     for i in range(start_idx, end_idx):
+        facet_num = i - start_idx + 1
+        if facet_num == 1 or facet_num % 50 == 0 or facet_num == chunk_size:
+            elapsed = time.time() - chunk_start_time
+            n_visible = len(thermal_data.visible_facets[i])
+            print(f"  {chunk_label} [{start_idx}-{end_idx}]: facet {facet_num}/{chunk_size} "
+                  f"(global {i}), {n_visible} visible neighbours, {elapsed:.1f}s elapsed",
+                  flush=True)
         visible_indices = thermal_data.visible_facets[i]
         
-        subject_vertices = shape_model[i].vertices
-        subject_area = shape_model[i].area
-        subject_normal = shape_model[i].normal
-        test_vertices = np.array([shape_model[j].vertices for j in visible_indices]).reshape(-1, 3, 3)
-        test_areas = np.array([shape_model[j].area for j in visible_indices])
+        subject_vertices = np.asarray(shape_model[i].vertices, dtype=np.float64)
+        subject_area = float(shape_model[i].area)
+        subject_normal = np.asarray(shape_model[i].normal, dtype=np.float64)
+        test_vertices = np.array([shape_model[j].vertices for j in visible_indices], dtype=np.float64).reshape(-1, 3, 3)
+        test_areas = np.array([shape_model[j].area for j in visible_indices], dtype=np.float64)
 
         view_factors = calculate_view_factors(
             subject_vertices, subject_normal, subject_area, 
@@ -199,15 +220,38 @@ def process_view_factors_chunk(shape_model, thermal_data, start_idx, end_idx, n_
         )
 
         if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
-            warnings.append({
-                'facet': i,
-                'view_factors': view_factors.copy(),
-                'visible_facets': visible_indices.copy()
-            })
+            warning_facets.append(i)
             
         chunk_view_factors.append(view_factors)
     
-    return chunk_view_factors, warnings
+    # Save to a temp file to avoid large IPC serialization overhead
+    tmp_path = os.path.join(tmp_dir, f"chunk_{chunk_idx}_{start_idx}_{end_idx}.npz")
+    np.savez(tmp_path, *chunk_view_factors)
+    del chunk_view_factors  # Free memory
+    print(f"  {chunk_label}: saved to disk in {time.time() - chunk_start_time:.1f}s total", flush=True)
+    return start_idx, tmp_path, warning_facets
+
+
+def _chunk_worker_entry(shared_data_path, start_idx, end_idx, chunk_idx, n_chunks, tmp_dir):
+    """Worker process entry point. Loads shared data, processes chunk, force-exits.
+    
+    Uses os._exit() to bypass numba thread pool cleanup which hangs on macOS Python 3.13.
+    """
+    try:
+        with open(shared_data_path, 'rb') as f:
+            shape_model, thermal_data, n_rays = pickle.load(f)
+        process_view_factors_chunk(
+            shape_model, thermal_data, start_idx, end_idx,
+            n_rays, chunk_idx, n_chunks, tmp_dir
+        )
+    except Exception:
+        import traceback
+        err_path = os.path.join(tmp_dir, f"error_{chunk_idx}.txt")
+        with open(err_path, 'w') as ef:
+            traceback.print_exc(file=ef)
+        os._exit(1)
+    os._exit(0)
+
 
 def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
     """
@@ -245,45 +289,140 @@ def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
     conditional_print(config.silent_mode, f"Chunk size: {config.chunk_size:,}")
     conditional_print(config.silent_mode, f"Number of chunks: {n_chunks:,}")
 
+    tmp_dir = tempfile.mkdtemp(prefix="tempest_vf_")
+    print(f"Temp dir: {tmp_dir}", flush=True)
+
+    procs = {}  # ci -> Process
+
     try:
-        results = Parallel(n_jobs=actual_n_jobs, verbose=10, backend='loky')(
-            delayed(process_view_factors_chunk)(
-                shape_model, thermal_data, start_idx, end_idx, n_rays
-            ) for start_idx, end_idx in chunks
-        )
-        
-        # Combine results and collect warnings
+        # Serialize shared data once to a file (avoids re-serializing for every worker)
+        shared_data_path = os.path.join(tmp_dir, "shared_data.pkl")
+        print("Serializing shared data for workers...", flush=True)
+        ser_start = time.time()
+        with open(shared_data_path, 'wb') as f:
+            pickle.dump((shape_model, thermal_data, n_rays), f, protocol=pickle.HIGHEST_PROTOCOL)
+        ser_size = os.path.getsize(shared_data_path) / 1e6
+        print(f"Serialized in {time.time() - ser_start:.1f}s ({ser_size:.1f} MB)", flush=True)
+
+        ctx = multiprocessing.get_context('spawn')
+
+        # Expected output files
+        chunk_files = {}
+        for ci, (s, e) in enumerate(chunks):
+            chunk_files[ci] = os.path.join(tmp_dir, f"chunk_{ci+1}_{s}_{e}.npz")
+
+        started = set()
+        done = set()
+        next_ci = 0
+
+        print(f"Starting workers (max {actual_n_jobs} parallel)...", flush=True)
+        compute_start = time.time()
+
+        start_times = {}  # ci -> time when process was started
+        WORKER_TIMEOUT = 600  # 10 minutes per chunk max
+
+        while len(done) < n_chunks:
+            # Start new processes up to job limit
+            while next_ci < n_chunks and len(started - done) < actual_n_jobs:
+                s, e = chunks[next_ci]
+                p = ctx.Process(
+                    target=_chunk_worker_entry,
+                    args=(shared_data_path, s, e, next_ci + 1, n_chunks, tmp_dir)
+                )
+                p.start()
+                procs[next_ci] = p
+                started.add(next_ci)
+                start_times[next_ci] = time.time()
+                next_ci += 1
+
+            # Check for completed chunks (file exists = done)
+            newly_done = []
+            for ci in list(started - done):
+                if os.path.exists(chunk_files[ci]):
+                    done.add(ci)
+                    newly_done.append(ci)
+                elif not procs[ci].is_alive():
+                    # Process died without writing output file
+                    procs[ci].join(timeout=5)
+                    err_path = os.path.join(tmp_dir, f"error_{ci+1}.txt")
+                    if os.path.exists(err_path):
+                        with open(err_path) as ef:
+                            err_msg = ef.read()
+                        raise RuntimeError(f"Chunk {ci+1}/{n_chunks} failed:\n{err_msg}")
+                    else:
+                        raise RuntimeError(
+                            f"Chunk {ci+1}/{n_chunks} died (exit code {procs[ci].exitcode}) "
+                            f"without writing output"
+                        )
+                else:
+                    # Check for per-worker timeout
+                    worker_elapsed = time.time() - start_times[ci]
+                    if worker_elapsed > WORKER_TIMEOUT:
+                        procs[ci].kill()
+                        procs[ci].join(timeout=5)
+                        raise RuntimeError(
+                            f"Chunk {ci+1}/{n_chunks} timed out after {worker_elapsed:.0f}s. "
+                            f"Likely stuck on a degenerate facet."
+                        )
+
+            if newly_done:
+                elapsed = time.time() - compute_start
+                print(f"  {len(done)}/{n_chunks} chunks done ({elapsed:.0f}s elapsed).", flush=True)
+            elif len(started - done) > 0:
+                # Show which chunks are still running (every 10 seconds)
+                elapsed = time.time() - compute_start
+                if int(elapsed) % 10 < 1:  # roughly every 10s
+                    running = sorted(started - done)
+                    running_info = ", ".join(
+                        f"chunk {ci+1} ({time.time() - start_times[ci]:.0f}s)"
+                        for ci in running[:5]
+                    )
+                    if len(running) > 5:
+                        running_info += f", +{len(running)-5} more"
+                    print(f"  Waiting: {running_info}", flush=True)
+
+            if len(done) < n_chunks:
+                time.sleep(0.5)
+
+        print(f"All {n_chunks} chunks complete in {time.time() - compute_start:.1f}s. Loading results...", flush=True)
+
+        # Load results in facet order
+        load_start = time.time()
         all_view_factors = []
-        all_warnings = []
-        
-        for chunk_view_factors, chunk_warnings in results:
-            all_view_factors.extend(chunk_view_factors)
-            all_warnings.extend(chunk_warnings)
-        
-        # Report any warnings
-        if all_warnings and not config.silent_mode:
-            conditional_print(config.silent_mode, "\nWarnings during view factor calculation:")
-            for warning in all_warnings:
-                conditional_print(config.silent_mode, 
-                                f"Warning: Invalid view factor for facet {warning['facet']}")
-                conditional_print(config.silent_mode, f"View factors: {warning['view_factors']}")
-                conditional_print(config.silent_mode, f"Visible facets: {warning['visible_facets']}")
-        
-        # Ensure the directory exists before saving the file
-        os.makedirs(locations.view_factors, exist_ok=True)
+        for ci in range(n_chunks):
+            data = np.load(chunk_files[ci], allow_pickle=True)
+            for k in sorted(data.files, key=lambda s: int(s.split('_')[1])):
+                all_view_factors.append(data[k])
+        print(f"Results loaded in {time.time() - load_start:.1f}s.", flush=True)
 
         # Save the calculated view factors
-        np.savez_compressed(view_factors_filename, 
+        os.makedirs(locations.view_factors, exist_ok=True)
+        print(f"Saving view factors to {view_factors_filename}...", flush=True)
+        save_start = time.time()
+        np.savez_compressed(view_factors_filename,
                            view_factors=np.array(all_view_factors, dtype=object))
-        
+        print(f"View factors saved in {time.time() - save_start:.1f}s.", flush=True)
+
         return all_view_factors
-        
+
     except KeyboardInterrupt:
-        print("\nCalculation interrupted by user. Progress was not saved.")
+        print("\nInterrupted. Killing workers...", flush=True)
         raise
     except Exception as e:
-        print(f"\nError during calculation: {str(e)}")
+        print(f"\nError: {e}", flush=True)
         raise
+    finally:
+        # Kill all remaining worker processes
+        for ci, p in procs.items():
+            if p.is_alive():
+                p.kill()
+                try:
+                    p.join(timeout=2)
+                except Exception:
+                    pass
+        import shutil
+        if os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 class EPFLookupTable:
     """Lookup table for emission phase function values."""
@@ -329,7 +468,7 @@ def calculate_thermal_view_factors(shape_model, thermal_data, config):
              for i in range(n_chunks)]
 
     try:
-        results = Parallel(n_jobs=actual_n_jobs, verbose=10, backend='loky')(
+        results = Parallel(n_jobs=actual_n_jobs, verbose=10, backend='multiprocessing')(
             delayed(process_thermal_view_factors_chunk)(
                 shape_model, thermal_data, epf_lut, start_idx, end_idx
             ) for start_idx, end_idx in chunks

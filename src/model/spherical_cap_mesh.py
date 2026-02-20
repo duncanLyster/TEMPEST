@@ -24,24 +24,43 @@ def _calculate_facet_properties(p1, p2, p3):
     return {'vertices': vertices, 'normal': normal, 'area': area}
 
 
-def _compute_equilateral_rings(n_subfacets, phi, sphere_r, min_pts=6, max_rings=50):
+def _compute_equilateral_rings(n_subfacets, phi, sphere_r, min_pts=6, max_rings=50, power=1.0):
     """
     Pick ring count and points per ring to approximate equilateral triangles.
     Returns best (ring_counts, triangle_count).
+    If power < 1, rings are concentrated near the rim (higher theta).
+    If power > 1, rings are concentrated near the center (lower theta).
     """
     best = None
     best_diff = float('inf')
     for R in range(2, max_rings + 1):
-        delta_theta = phi / R
         ring_counts = []
+        # Calculate theta for each ring boundary
+        thetas = [phi * ((i / R) ** power) for i in range(R + 1)]
+        
         for i in range(1, R + 1):
-            theta = i * delta_theta
-            seg_len = sphere_r * delta_theta
-            circ = 2 * math.pi * sphere_r * math.sin(theta)
+            theta_prev = thetas[i-1]
+            theta_curr = thetas[i]
+            theta_mid = (theta_prev + theta_curr) / 2
+            
+            # Segment length along meridian
+            seg_len = sphere_r * (theta_curr - theta_prev)
+            
+            # Circumference at mid-radius of the ring
+            circ = 2 * math.pi * sphere_r * math.sin(theta_mid)
+            
+            # Points needed for approx equilateral triangles in this ring
             Ni = max(min_pts, int(round(circ / seg_len)))
             ring_counts.append(Ni)
+            
         N1 = ring_counts[0]
-        tri_count = N1 + sum(2 * rc for rc in ring_counts[:-1])
+        # Triangles in first cap + triangles in subsequent strips
+        # First cap: N1 triangles
+        # Strips: (N_prev + N_curr) triangles per strip
+        tri_count = N1
+        for r in range(len(ring_counts) - 1):
+             tri_count += ring_counts[r] + ring_counts[r+1]
+             
         diff = abs(tri_count - n_subfacets)
         if diff < best_diff:
             best = (ring_counts, tri_count)
@@ -80,10 +99,14 @@ def generate_canonical_spherical_cap(n_subfacets, profile_angle_deg, return_ring
     sphere_r = 1.0 / (math.sqrt(math.pi) * math.sin(phi))
     z_base = sphere_r * math.cos(phi)
 
+    # Use power < 1 to concentrate rings near the rim
+    # This helps with shadowing resolution at grazing angles
+    power = 0.5 
+
     # Determine rings
-    ring_counts, actual_n = _compute_equilateral_rings(n_subfacets, phi, sphere_r)
+    ring_counts, actual_n = _compute_equilateral_rings(n_subfacets, phi, sphere_r, power=power)
     R = len(ring_counts)
-    print(f"Using {R} rings: points per ring = {ring_counts}")
+    print(f"Using {R} rings (power={power}): points per ring = {ring_counts}")
     if actual_n != n_subfacets:
         print(f"Warning: target {n_subfacets}, got {actual_n} facets.")
 
@@ -94,8 +117,12 @@ def generate_canonical_spherical_cap(n_subfacets, profile_angle_deg, return_ring
     apex_z = z_base - sphere_r
     points.append(np.array([0.0, 0.0, apex_z]))
     pts_per.append(1)
+    
+    # Calculate theta for each ring boundary
+    thetas = [phi * ((i / R) ** power) for i in range(R + 1)]
+    
     for idx, N in enumerate(ring_counts, start=1):
-        theta = phi * idx / R
+        theta = thetas[idx]
         for i in range(N):
             ang = 2 * math.pi * i / N
             x = sphere_r * math.sin(theta) * math.cos(ang)
