@@ -179,6 +179,7 @@ class ReferenceConfig(Config):
             'include_shadowing': True,
             'n_scatters': 0, 
             'include_self_heating': True,
+            'n_jobs': N_JOBS,  # Parallel workers for view factor calculation etc.
             'vf_rays': 10000,  # Not used (overridden in simulate_crater_diurnal_cycle)
             'intra_facet_scatters': 2,
             'silent_mode': True,  # Suppress verbose solver output

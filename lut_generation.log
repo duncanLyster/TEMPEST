@@ -1,0 +1,15 @@
+================================================================================
+TEMPEST Roughness LUT Generator (Per-Theta Saving)
+================================================================================
+
+Estimated file size per theta: 406.1 MB (uncompressed float32)
+
+Generating geometry preview...
+Using 33 rings (power=0.5): points per ring = [6, 18, 30, 42, 53, 64, 75, 86, 96, 106, 115, 125, 134, 142, 151, 159, 167, 175, 182, 190, 197, 203, 210, 216, 222, 228, 233, 239, 244, 249, 253, 258, 262]
+Warning: target 10000, got 9998 facets.
+Triangulating Rings:   0%|          | 0/32 [00:00<?, ?it/s]Triangulating Rings:  50%|█████     | 16/32 [00:00<00:00, 143.39it/s]Triangulating Rings:  97%|█████████▋| 31/32 [00:00<00:00, 101.83it/s]Triangulating Rings: 100%|██████████| 32/32 [00:00<00:00, 105.37it/s]
+[Parallel(n_jobs=4)]: Using backend LokyBackend with 4 concurrent workers.
+Scaled geometry by factor 1.000048 to normalize opening area (0.999904 → 1.000000).
+Saved wireframe to lut_output/diagnostics/crater_wireframe.png
+Pre-calculating view factors (one-off, cached to disk)...
+  Crater mesh: 9998 subfacets
