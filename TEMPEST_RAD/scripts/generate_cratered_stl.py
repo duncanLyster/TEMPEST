@@ -186,8 +186,8 @@ def main():
         # Incircle → defines crater size & position
         inc_center, inc_radius = compute_incircle(v0, v1, v2)
 
-        # Scale factor:  canonical_r  →  inc_radius
-        scale = inc_radius / canonical_r
+        # Scale factor:  canonical_r  →  inc_radius  (×0.8 to avoid overlap)
+        scale = 0.8 * inc_radius / canonical_r
 
         # Rotation:  +Z  →  host_n
         R = rotation_matrix_z_to(host_n)
