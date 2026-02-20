@@ -55,8 +55,14 @@ from src.model.view_factors import calculate_all_view_factors, calculate_thermal
 # Edit this section to customize your LUT generation.
 # All parameters are defined here for easy modification.
 
+# --- PARALLELISM ---
+N_JOBS = 32             # Number of parallel workers (set to number of CPU cores)
+                        # Server: 32, Laptop: 4
+
 # --- OUTPUT ---
-OUTPUT_FILE = "roughness_lut_spectral_v1.h5"  # Name of the generated HDF5 file
+OUTPUT_DIR = "lut_output"       # Directory for per-theta HDF5 files
+OUTPUT_PREFIX = "roughness_lut_spectral_v2"  # Filename prefix
+# Each theta value is saved as: {OUTPUT_DIR}/{OUTPUT_PREFIX}_theta_{value}.h5
 
 # --- LUT GRID DIMENSIONS ---
 # These define the dimensionality and resolution of your lookup table.
@@ -64,47 +70,44 @@ OUTPUT_FILE = "roughness_lut_spectral_v1.h5"  # Name of the generated HDF5 file
 
 # Thermal Parameter (Theta = TI * sqrt(omega) / (emissivity * sigma * Tss^3))
 # Controls how quickly surface responds to solar heating
-# At P=10h: Theta=0.04TI=10 (dust), Theta=0.4TI=100 (regolith), Theta=8TI=2000 (rock)
-THETA_VALUES = np.array([0.0316]) #np.logspace(-1.5, 1, 10)  # 10 points from ~0.03 to 10 (TI: 10-2500)
-# For testing, use: THETA_VALUES = [0.5]  # TI≈100 at P=10h
+# At P=10h: Theta=0.04→TI=10 (dust), Theta=0.4→TI=100 (regolith), Theta=8→TI=2000 (rock)
+THETA_VALUES = np.logspace(-1.5, 1, 15)  # 15 points from ~0.03 to 10 (TI: 10-2500)
+# For testing, use: THETA_VALUES = np.array([0.5])  # TI≈100 at P=10h
 
 # Crater Opening Angles (degrees)
 # 90 = hemisphere, smaller = bowl-shaped
 OPENING_ANGLES = [90.0]
 
 # Wavelengths for spectral radiance calculations (microns)
-# Separate bands allow capturing non-linear thermal emission
-WAVELENGTHS_MICRONS = [5.0, 8.0, 15.0, 50.0, 100.0]
+# 12 bands spanning Wien peak to Rayleigh-Jeans tail
+WAVELENGTHS_MICRONS = [3.0, 4.0, 5.0, 6.0, 8.0, 10.0, 15.0, 25.0, 40.0, 60.0, 100.0, 200.0]
 
 # Latitudes (degrees) - Surface position on rotating body
 # Captures diurnal variation from equator (0°) to pole (90°)
 LATITUDE_VALUES = np.arange(0.0, 92.5, 2.5)  # 37 points, 2.5° spacing
-# For testing, use: LATITUDE_VALUES = [0.0, 30.0, 60.0, 85.0]
+# For testing, use: LATITUDE_VALUES = np.array([0.0, 30.0, 60.0, 85.0])
 
 # Emission Angles (degrees) - Observer viewing angle
 # 0° = looking straight down, 90° = grazing view
-# MUST have ≥10 points to capture limbward darkening
-EMISSION_ANGLES = np.linspace(0, 89, 20)
+EMISSION_ANGLES = np.linspace(0, 90, 37)  # 37 points, 2.5° spacing (matches latitude)
 
 # Azimuth Angles (degrees) - Angle between sun and observer
 # 0° = opposition (sun behind observer), 180° = full phase
-# MUST have ≥10 points to capture sharp opposition effect at 0-30°
-AZIMUTH_ANGLES = np.linspace(0, 180, 20)
+AZIMUTH_ANGLES = np.linspace(0, 180, 36)  # 37 points, ~4.9° spacing
 
 # --- TEMPORAL RESOLUTION ---
-LUT_TIMESTEPS = 90   # Output resolution: 360°/180 = 2° per step
-SIM_TIMESTEPS = 360   # Internal simulation: 4x finer for stability
+LUT_TIMESTEPS = 180    # Output resolution: 360°/180 = 2° per step
+SIM_TIMESTEPS = 720    # Internal simulation: 4x finer for stability
 
 # --- CRATER GEOMETRY ---
 # Resolution of the spherical crater mesh
-CRATER_SUBFACETS = 100  # Facet count in crater (balance: 200-500 recommended)
-                        # Lower = faster but coarser, Higher = slower but smoother
-                        # Note: Actual count may differ slightly due to geodesic tessellation
+CRATER_SUBFACETS = 10000  # Facet count in crater
+                          # Note: Actual count may differ slightly due to geodesic tessellation
 
 # View factor ray tracing resolution
-VIEW_FACTOR_RAYS = 2000  # Rays per facet for view factor calculation
-                         # Higher = better energy conservation (aim for <5% error)
-                         # Minimum 1000, recommended 2000-5000
+VIEW_FACTOR_RAYS = 100000  # Rays per facet for view factor calculation
+                           # Higher = better energy conservation (aim for <5% error)
+                           # Should be more than the number of facets to ensure good sampling
 
 # --- PHYSICAL PARAMETERS (Standard Reference Conditions) ---
 # These define the "canonical" surface for the LUT
@@ -649,17 +652,246 @@ def process_single_case(theta, opening_angle, lat, config):
                 
     return result_grid, norm_factor
 
+def save_theta_hdf5(theta_val, opening_angle_idx, lut_slice, factors_slice, 
+                    lat_status, elapsed_per_lat, output_dir):
+    """
+    Save a single theta value's LUT data to its own HDF5 file.
+    
+    Args:
+        theta_val: The theta value
+        opening_angle_idx: Index of the opening angle used
+        lut_slice: Array of shape (n_lat, n_time, n_wave, n_emi, n_azi)
+        factors_slice: Array of shape (n_lat,) - normalization factors
+        lat_status: dict mapping lat_index -> 'ok' or error string
+        elapsed_per_lat: dict mapping lat_index -> time in seconds
+        output_dir: Directory to save into
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    fname = f"{OUTPUT_PREFIX}_theta_{theta_val:.6f}.h5"
+    fpath = os.path.join(output_dir, fname)
+    
+    with h5py.File(fpath, 'w') as f:
+        # Main LUT data - shape: (n_lat, n_time, n_wave, n_emi, n_azi)
+        f.create_dataset("lut", data=lut_slice, compression="gzip", compression_opts=1)
+        f.create_dataset("normalization_factors", data=factors_slice)
+        
+        # Axes
+        f.create_dataset("theta", data=np.array([theta_val]))
+        f.create_dataset("opening_angle", data=np.array(OPENING_ANGLES))
+        f.create_dataset("wavelength", data=np.array(WAVELENGTHS_MICRONS))
+        f.create_dataset("latitude", data=LATITUDE_VALUES)
+        f.create_dataset("emission", data=EMISSION_ANGLES)
+        f.create_dataset("azimuth", data=AZIMUTH_ANGLES)
+        f.create_dataset("sun_phase_steps", data=LUT_TIMESTEPS)
+        
+        # Metadata
+        f.attrs['generator_version'] = 'v2_per_theta'
+        f.attrs['theta'] = theta_val
+        f.attrs['opening_angle'] = OPENING_ANGLES[opening_angle_idx]
+        f.attrs['crater_subfacets'] = CRATER_SUBFACETS
+        f.attrs['sim_timesteps'] = SIM_TIMESTEPS
+        f.attrs['lut_timesteps'] = LUT_TIMESTEPS
+        f.attrs['view_factor_rays'] = VIEW_FACTOR_RAYS
+        f.attrs['reference_albedo'] = REFERENCE_ALBEDO
+        f.attrs['reference_emissivity'] = REFERENCE_EMISSIVITY
+        f.attrs['rotation_period_hours'] = ROTATION_PERIOD_HOURS
+        f.attrs['solar_distance_au'] = SOLAR_DISTANCE_AU
+        f.attrs['n_successful_lats'] = sum(1 for s in lat_status.values() if s == 'ok')
+        f.attrs['n_failed_lats'] = sum(1 for s in lat_status.values() if s != 'ok')
+        
+        # Per-latitude diagnostics
+        status_strs = [lat_status.get(i, 'not_run') for i in range(len(LATITUDE_VALUES))]
+        f.create_dataset("lat_status", data=np.array(status_strs, dtype='S64'))
+        timing_arr = np.array([elapsed_per_lat.get(i, 0.0) for i in range(len(LATITUDE_VALUES))])
+        f.create_dataset("lat_elapsed_seconds", data=timing_arr)
+    
+    size_mb = os.path.getsize(fpath) / (1024**2)
+    return fpath, size_mb
+
+
+def generate_diagnostics(output_dir, all_theta_results):
+    """
+    Generate summary diagnostic plots and a status log after the full run.
+    
+    Args:
+        output_dir: Directory containing the per-theta HDF5 files
+        all_theta_results: list of dicts with keys:
+            'theta', 'elapsed', 'n_ok', 'n_fail', 'size_mb', 'mean_norm_factor'
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    
+    diag_dir = os.path.join(output_dir, 'diagnostics')
+    os.makedirs(diag_dir, exist_ok=True)
+    
+    # --- 1. Status log ---
+    log_path = os.path.join(diag_dir, 'run_summary.txt')
+    with open(log_path, 'w') as log:
+        log.write("TEMPEST LUT Generation Summary\n")
+        log.write("=" * 60 + "\n")
+        log.write(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log.write(f"N_JOBS: {N_JOBS}\n")
+        log.write(f"CRATER_SUBFACETS: {CRATER_SUBFACETS}\n")
+        log.write(f"SIM_TIMESTEPS: {SIM_TIMESTEPS} -> LUT_TIMESTEPS: {LUT_TIMESTEPS}\n")
+        log.write(f"Grid: {len(LATITUDE_VALUES)} lat x {LUT_TIMESTEPS} time x {len(WAVELENGTHS_MICRONS)} wave x {len(EMISSION_ANGLES)} emi x {len(AZIMUTH_ANGLES)} azi\n")
+        n_cells = len(LATITUDE_VALUES) * LUT_TIMESTEPS * len(WAVELENGTHS_MICRONS) * len(EMISSION_ANGLES) * len(AZIMUTH_ANGLES)
+        log.write(f"Cells per theta: {n_cells:,} ({n_cells*4/1024**2:.1f} MB uncompressed)\n")
+        log.write(f"Theta values attempted: {len(all_theta_results)}\n\n")
+        
+        total_ok = sum(r['n_ok'] for r in all_theta_results)
+        total_fail = sum(r['n_fail'] for r in all_theta_results)
+        log.write(f"Total latitude cases: {total_ok + total_fail}  (OK: {total_ok}, Failed: {total_fail})\n\n")
+        
+        log.write(f"{'Theta':>12} {'Time (min)':>10} {'OK':>4} {'Fail':>4} {'Size MB':>8} {'Mean Norm':>10}\n")
+        log.write("-" * 55 + "\n")
+        for r in all_theta_results:
+            log.write(f"{r['theta']:>12.6f} {r['elapsed']/60:>10.1f} {r['n_ok']:>4} {r['n_fail']:>4} {r['size_mb']:>8.1f} {r['mean_norm_factor']:>10.4f}\n")
+    
+    print(f"  Saved run summary to {log_path}")
+    
+    if len(all_theta_results) < 2:
+        return
+    
+    # --- 2. Timing plot ---
+    thetas = [r['theta'] for r in all_theta_results]
+    times_min = [r['elapsed']/60 for r in all_theta_results]
+    n_oks = [r['n_ok'] for r in all_theta_results]
+    n_fails = [r['n_fail'] for r in all_theta_results]
+    
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # Time per theta
+    ax = axes[0, 0]
+    ax.bar(range(len(thetas)), times_min, color='steelblue')
+    ax.set_xticks(range(len(thetas)))
+    ax.set_xticklabels([f"{t:.3f}" for t in thetas], rotation=45, ha='right', fontsize=7)
+    ax.set_ylabel('Time (minutes)')
+    ax.set_title('Wall-clock time per theta')
+    
+    # Success/failure per theta
+    ax = axes[0, 1]
+    ax.bar(range(len(thetas)), n_oks, color='green', label='OK')
+    ax.bar(range(len(thetas)), n_fails, bottom=n_oks, color='red', label='Failed')
+    ax.set_xticks(range(len(thetas)))
+    ax.set_xticklabels([f"{t:.3f}" for t in thetas], rotation=45, ha='right', fontsize=7)
+    ax.set_ylabel('Latitude cases')
+    ax.set_title('Success/failure per theta')
+    ax.legend()
+    
+    # Normalization factors
+    ax = axes[1, 0]
+    norms = [r['mean_norm_factor'] for r in all_theta_results]
+    ax.plot(thetas, norms, 'o-', color='darkorange')
+    ax.set_xscale('log')
+    ax.set_xlabel('Theta')
+    ax.set_ylabel('Mean normalization factor')
+    ax.set_title('Energy conservation (1.0 = perfect)')
+    ax.axhline(1.0, color='gray', ls='--', alpha=0.5)
+    
+    # File sizes
+    ax = axes[1, 1]
+    sizes = [r['size_mb'] for r in all_theta_results]
+    ax.bar(range(len(thetas)), sizes, color='mediumpurple')
+    ax.set_xticks(range(len(thetas)))
+    ax.set_xticklabels([f"{t:.3f}" for t in thetas], rotation=45, ha='right', fontsize=7)
+    ax.set_ylabel('File size (MB)')
+    ax.set_title('HDF5 file size per theta')
+    ax.axhline(500, color='red', ls='--', alpha=0.5, label='500 MB limit')
+    ax.legend()
+    
+    plt.tight_layout()
+    plot_path = os.path.join(diag_dir, 'run_summary.png')
+    plt.savefig(plot_path, dpi=150)
+    plt.close()
+    print(f"  Saved diagnostic plots to {plot_path}")
+    
+    # --- 3. Per-theta sample slices (if files exist) ---
+    for r in all_theta_results:
+        if r['n_ok'] == 0:
+            continue
+        try:
+            fpath = r.get('fpath', '')
+            if not fpath or not os.path.exists(fpath):
+                continue
+            with h5py.File(fpath, 'r') as f:
+                lut = f['lut'][:]
+            
+            # Plot: mean ratio vs emission angle at a few latitudes, azimuth=0 (opposition)
+            fig, axes2 = plt.subplots(1, 3, figsize=(15, 5))
+            theta_val = r['theta']
+            
+            # Pick 4 latitudes to plot
+            lat_indices = [0, len(LATITUDE_VALUES)//4, len(LATITUDE_VALUES)//2, -1]
+            wave_idx = len(WAVELENGTHS_MICRONS) // 2  # mid wavelength
+            
+            # Emission angle dependence at azimuth=0
+            ax = axes2[0]
+            for li in lat_indices:
+                # Average over all timesteps, azimuth=0
+                profile = np.nanmean(lut[li, :, wave_idx, :, 0], axis=0)  # (emi,)
+                ax.plot(EMISSION_ANGLES, profile, label=f'lat={LATITUDE_VALUES[li]:.0f}°')
+            ax.set_xlabel('Emission angle (°)')
+            ax.set_ylabel('Radiance ratio')
+            ax.set_title(f'θ={theta_val:.4f}, λ={WAVELENGTHS_MICRONS[wave_idx]}μm, azi=0°')
+            ax.legend(fontsize=7)
+            ax.axhline(1.0, color='gray', ls='--', alpha=0.5)
+            
+            # Azimuth dependence at emission=45°
+            ax = axes2[1]
+            emi_idx = len(EMISSION_ANGLES) // 2
+            for li in lat_indices:
+                profile = np.nanmean(lut[li, :, wave_idx, emi_idx, :], axis=0)  # (azi,)
+                ax.plot(AZIMUTH_ANGLES, profile, label=f'lat={LATITUDE_VALUES[li]:.0f}°')
+            ax.set_xlabel('Azimuth angle (°)')
+            ax.set_ylabel('Radiance ratio')
+            ax.set_title(f'θ={theta_val:.4f}, λ={WAVELENGTHS_MICRONS[wave_idx]}μm, emi={EMISSION_ANGLES[emi_idx]:.0f}°')
+            ax.legend(fontsize=7)
+            ax.axhline(1.0, color='gray', ls='--', alpha=0.5)
+            
+            # Wavelength dependence at nadir (emi=0)
+            ax = axes2[2]
+            for li in lat_indices:
+                profile = np.nanmean(lut[li, :, :, 0, 0], axis=0)  # (wave,)
+                ax.plot(WAVELENGTHS_MICRONS, profile, 'o-', label=f'lat={LATITUDE_VALUES[li]:.0f}°')
+            ax.set_xlabel('Wavelength (μm)')
+            ax.set_ylabel('Radiance ratio')
+            ax.set_title(f'θ={theta_val:.4f}, nadir view')
+            ax.set_xscale('log')
+            ax.legend(fontsize=7)
+            ax.axhline(1.0, color='gray', ls='--', alpha=0.5)
+            
+            plt.suptitle(f'Theta = {theta_val:.4f}', fontsize=14)
+            plt.tight_layout()
+            slice_path = os.path.join(diag_dir, f'theta_{theta_val:.6f}_slices.png')
+            plt.savefig(slice_path, dpi=120)
+            plt.close()
+        except Exception as e:
+            print(f"  Warning: Could not generate slice plot for theta={r['theta']}: {e}")
+
+
 def main():
     print("="*80)
-    print("TEMPEST Roughness LUT Generator")
+    print("TEMPEST Roughness LUT Generator (Per-Theta Saving)")
     print("="*80)
-    start_time = time.time()
+    run_start_time = time.time()
+    
+    # --- File size estimate ---
+    n_cells_per_theta = (len(LATITUDE_VALUES) * LUT_TIMESTEPS * len(WAVELENGTHS_MICRONS) 
+                         * len(EMISSION_ANGLES) * len(AZIMUTH_ANGLES))
+    est_size_mb = n_cells_per_theta * 4 / (1024**2)
+    print(f"\nEstimated file size per theta: {est_size_mb:.1f} MB (uncompressed float32)")
+    if est_size_mb > 500:
+        print(f"  WARNING: Exceeds 500 MB target! Consider reducing resolution.")
+    
+    # Create output directory
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     # Create Reference Config
     config = ReferenceConfig()
     
-    # Generate and Plot Wireframe (Requirement 5)
-    print("Generating geometry preview...")
+    # Generate and Plot Wireframe
+    print("\nGenerating geometry preview...")
     dummy_normal = np.array([0.0, 0.0, 1.0])
     dummy_vs = [np.array([-1,-1,0]), np.array([1,-1,0]), np.array([0,1,0])]
     dummy_facet = Facet(dummy_normal, dummy_vs, 1, 1, 1, False)
@@ -667,14 +899,16 @@ def main():
     config.kernel_profile_angle_degrees = OPENING_ANGLES[0]
     config.apply_kernel_based_roughness = True
     dummy_facet.generate_spherical_depression(config, Simulation(config))
-    plot_wireframe(Facet._canonical_subfacet_mesh)
+    plot_wireframe(Facet._canonical_subfacet_mesh, 
+                   filename=os.path.join(OUTPUT_DIR, "diagnostics", "crater_wireframe.png"))
     
     # Pre-calculate View Factors (Single Threaded to avoid race condition)
-    print("Pre-calculating view factors to avoid parallel race condition...")
-    # We need to construct a shape model exactly like simulate_crater_diurnal_cycle does
-    # Use Lat 0.0 logic (rotation to equator is constant)
+    # These are cached to disk and reused for ALL theta/latitude combos.
+    print("Pre-calculating view factors (one-off, cached to disk)...")
     mesh = Facet._canonical_subfacet_mesh
     n_facets = len(mesh)
+    print(f"  Crater mesh: {n_facets} subfacets")
+    
     shape_model = []
     rotation_to_equator = calculate_rotation_matrix(np.array([0.0, 1.0, 0.0]), np.pi/2)
     for entry in mesh:
@@ -686,96 +920,135 @@ def main():
         shape_model.append(new_f)
         
     thermal_data = ThermalData(n_facets, 1, 1, 1, False)
-    # Visible facets logic
     all_indices = np.arange(n_facets)
     visible_facets_list = [np.concatenate([all_indices[:i], all_indices[i+1:]]) for i in range(n_facets)]
     thermal_data.set_visible_facets(visible_facets_list)
     
-    # Trigger calculation and save
+    vf_start = time.time()
     calculate_all_view_factors(shape_model, thermal_data, config, VIEW_FACTOR_RAYS)
     calculate_thermal_view_factors(shape_model, thermal_data, config)
-    print("View factor cache initialized.")
+    vf_elapsed = time.time() - vf_start
+    print(f"  View factor cache ready ({vf_elapsed:.1f}s)")
 
-    # Tasks
-    tasks = []
-    for theta in THETA_VALUES:
-        for angle in OPENING_ANGLES:
-            for lat in LATITUDE_VALUES:
-                tasks.append((theta, angle, lat))
-    
-    print(f"\nConfiguration:")
-    print(f"  Theta values: {len(THETA_VALUES)} ({THETA_VALUES[0]:.3f} to {THETA_VALUES[-1]:.3f})")
-    print(f"  Latitudes: {len(LATITUDE_VALUES)}° (0° to {LATITUDE_VALUES[-1]:.0f}°)")
-    print(f"  Wavelengths: {len(WAVELENGTHS_MICRONS)} bands")
-    print(f"  Viewing geometry: {len(EMISSION_ANGLES)} × {len(AZIMUTH_ANGLES)} angles")
-    print(f"  Total cases: {len(tasks)}")
-    print(f"  Parallel jobs: 4")
-    print(f"\nOutput shape: {len(THETA_VALUES)}×{len(OPENING_ANGLES)}×{len(LATITUDE_VALUES)}×{LUT_TIMESTEPS}×{len(WAVELENGTHS_MICRONS)}×{len(EMISSION_ANGLES)}×{len(AZIMUTH_ANGLES)}")
-    print(f"\nStarting generation...\n")
-    
-    n_jobs = 4
-    
-    # Use joblib's verbose mode + tqdm for real completion tracking
-    print(f"  (Each '.' below = 1 completed case)\n")
-    completed = [0]
-    total = len(tasks)
-    pbar = tqdm(total=total, desc="Processing cases", unit="case")
-    
-    def _run_and_track(theta, angle, lat, config):
-        result = process_single_case(theta, angle, lat, config)
-        return result
-    
-    results = Parallel(n_jobs=n_jobs, verbose=10)(
-        delayed(_run_and_track)(theta, angle, lat, config) 
-        for theta, angle, lat in tasks
-    )
-    pbar.update(total - pbar.n)  # Ensure bar reaches 100%
-    pbar.close()
-    
-    # Assemble Tensor
-    print("\nAssembling tensor...")
-    lut_tensor = np.zeros((len(THETA_VALUES), len(OPENING_ANGLES), len(LATITUDE_VALUES), 
-                           LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), 
-                           len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), dtype=np.float32)
-                           
-    factors_tensor = np.zeros((len(THETA_VALUES), len(OPENING_ANGLES), len(LATITUDE_VALUES)), dtype=np.float32)
-    
-    idx = 0
-    for i_th, theta in enumerate(THETA_VALUES):
-        for i_ang, angle in enumerate(OPENING_ANGLES):
-            for i_lat, lat in enumerate(LATITUDE_VALUES):
-                if results[idx] is not None:
-                    grid, factor = results[idx]
-                    lut_tensor[i_th, i_ang, i_lat, :, :, :, :] = grid
-                    factors_tensor[i_th, i_ang, i_lat] = factor
-                    print(f"  Lat {lat:5.1f}°: norm_factor = {factor:.4f}")
-                idx += 1
-    
-    print("Tensor assembled.")
-                
-    # Save
+    # --- Print configuration summary ---
     print(f"\n{'='*80}")
-    print(f"Saving to {OUTPUT_FILE}...")
-    with h5py.File(OUTPUT_FILE, 'w') as f:
-        f.create_dataset("lut", data=lut_tensor)
-        f.create_dataset("normalization_factors", data=factors_tensor)
-        f.create_dataset("theta", data=THETA_VALUES)
-        f.create_dataset("opening_angle", data=OPENING_ANGLES)
-        f.create_dataset("wavelength", data=WAVELENGTHS_MICRONS)
-        f.create_dataset("latitude", data=LATITUDE_VALUES)
-        f.create_dataset("emission", data=EMISSION_ANGLES)
-        f.create_dataset("azimuth", data=AZIMUTH_ANGLES)
-
-    # Print summary
-    lut_size_bytes = os.path.getsize(OUTPUT_FILE)
-    lut_size_mb = lut_size_bytes / (1024 * 1024)
-    elapsed_time = time.time() - start_time
-
-    print(f"\nLUT generation complete!")
-    print(f"  File: {OUTPUT_FILE}")
-    print(f"  Size: {lut_size_mb:.1f} MB")
-    print(f"  Time: {elapsed_time/60:.1f} minutes ({elapsed_time:.0f} seconds)")
-    print(f"  Rate: {len(tasks)/elapsed_time:.2f} cases/second")
+    print(f"Configuration:")
+    print(f"  Theta values:    {len(THETA_VALUES)} ({THETA_VALUES[0]:.4f} to {THETA_VALUES[-1]:.4f})")
+    print(f"  Opening angles:  {OPENING_ANGLES}")
+    print(f"  Latitudes:       {len(LATITUDE_VALUES)} (0° to {LATITUDE_VALUES[-1]:.0f}°, {LATITUDE_VALUES[1]-LATITUDE_VALUES[0]:.1f}° step)")
+    print(f"  Wavelengths:     {len(WAVELENGTHS_MICRONS)} bands ({WAVELENGTHS_MICRONS[0]}-{WAVELENGTHS_MICRONS[-1]} μm)")
+    print(f"  Emission angles: {len(EMISSION_ANGLES)} (0° to {EMISSION_ANGLES[-1]:.0f}°)")
+    print(f"  Azimuth angles:  {len(AZIMUTH_ANGLES)} (0° to {AZIMUTH_ANGLES[-1]:.0f}°)")
+    print(f"  Time steps:      {LUT_TIMESTEPS} output ({SIM_TIMESTEPS} internal)")
+    print(f"  Crater facets:   {n_facets}")
+    print(f"  Parallel jobs:   {N_JOBS}")
+    per_theta_shape = f"{len(LATITUDE_VALUES)}×{LUT_TIMESTEPS}×{len(WAVELENGTHS_MICRONS)}×{len(EMISSION_ANGLES)}×{len(AZIMUTH_ANGLES)}"
+    print(f"  Per-theta shape: {per_theta_shape}")
+    print(f"  Est. size/theta: {est_size_mb:.1f} MB")
+    print(f"  Total thetas:    {len(THETA_VALUES)} → est. total: {est_size_mb * len(THETA_VALUES):.0f} MB")
+    print(f"  Output dir:      {os.path.abspath(OUTPUT_DIR)}")
+    print(f"{'='*80}\n")
+    
+    # =========================================================================
+    # MAIN LOOP: Process one theta value at a time, save immediately
+    # =========================================================================
+    all_theta_results = []
+    
+    for i_th, theta in enumerate(THETA_VALUES):
+        theta_start = time.time()
+        print(f"\n{'─'*60}")
+        print(f"Theta {i_th+1}/{len(THETA_VALUES)}: {theta:.6f}")
+        print(f"{'─'*60}")
+        
+        # Check if this theta was already completed (resume support)
+        existing_fname = f"{OUTPUT_PREFIX}_theta_{theta:.6f}.h5"
+        existing_fpath = os.path.join(OUTPUT_DIR, existing_fname)
+        if os.path.exists(existing_fpath):
+            try:
+                with h5py.File(existing_fpath, 'r') as f:
+                    n_ok = int(f.attrs.get('n_successful_lats', 0))
+                    n_fail = int(f.attrs.get('n_failed_lats', 0))
+                if n_ok + n_fail == len(LATITUDE_VALUES) and n_fail == 0:
+                    print(f"  SKIPPING: Already completed ({n_ok} lats OK). Delete file to re-run.")
+                    size_mb = os.path.getsize(existing_fpath) / (1024**2)
+                    all_theta_results.append({
+                        'theta': theta, 'elapsed': 0, 'n_ok': n_ok, 'n_fail': n_fail,
+                        'size_mb': size_mb, 'mean_norm_factor': 1.0, 'fpath': existing_fpath
+                    })
+                    continue
+                else:
+                    print(f"  Found partial result ({n_ok} ok, {n_fail} fail). Re-running...")
+            except Exception:
+                print(f"  Found corrupt file. Re-running...")
+        
+        # Build tasks for this theta (all latitudes)
+        tasks = [(theta, OPENING_ANGLES[0], lat) for lat in LATITUDE_VALUES]
+        
+        # Run all latitudes in parallel
+        results = Parallel(n_jobs=N_JOBS, verbose=5)(
+            delayed(process_single_case)(theta, OPENING_ANGLES[0], lat, config)
+            for lat in LATITUDE_VALUES
+        )
+        
+        # Assemble this theta's tensor: (n_lat, n_time, n_wave, n_emi, n_azi)
+        lut_slice = np.full((len(LATITUDE_VALUES), LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS),
+                             len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32)
+        factors_slice = np.full(len(LATITUDE_VALUES), np.nan, dtype=np.float32)
+        lat_status = {}
+        elapsed_per_lat = {}
+        
+        for i_lat, (lat, result) in enumerate(zip(LATITUDE_VALUES, results)):
+            if result is None:
+                lat_status[i_lat] = 'returned_none'
+                continue
+            grid, factor = result
+            if np.isnan(factor):
+                lat_status[i_lat] = 'nan_factor'
+                print(f"  FAILED: lat={lat:.1f}° (returned NaN)")
+            else:
+                lut_slice[i_lat] = grid
+                factors_slice[i_lat] = factor
+                lat_status[i_lat] = 'ok'
+        
+        n_ok = sum(1 for s in lat_status.values() if s == 'ok')
+        n_fail = len(LATITUDE_VALUES) - n_ok
+        theta_elapsed = time.time() - theta_start
+        
+        # Save immediately
+        fpath, size_mb = save_theta_hdf5(
+            theta, 0, lut_slice, factors_slice, lat_status, elapsed_per_lat, OUTPUT_DIR
+        )
+        
+        mean_nf = float(np.nanmean(factors_slice[~np.isnan(factors_slice)])) if n_ok > 0 else np.nan
+        print(f"  Saved: {fpath} ({size_mb:.1f} MB)")
+        print(f"  Results: {n_ok}/{len(LATITUDE_VALUES)} OK, {n_fail} failed")
+        print(f"  Mean norm factor: {mean_nf:.4f}")
+        print(f"  Time: {theta_elapsed/60:.1f} min")
+        
+        all_theta_results.append({
+            'theta': theta, 'elapsed': theta_elapsed, 'n_ok': n_ok, 'n_fail': n_fail,
+            'size_mb': size_mb, 'mean_norm_factor': mean_nf, 'fpath': fpath
+        })
+    
+    # =========================================================================
+    # DIAGNOSTICS
+    # =========================================================================
+    total_elapsed = time.time() - run_start_time
+    print(f"\n{'='*80}")
+    print(f"LUT Generation Complete!")
+    print(f"{'='*80}")
+    print(f"  Total time:     {total_elapsed/3600:.1f} hours ({total_elapsed/60:.1f} min)")
+    print(f"  Theta completed: {len(all_theta_results)}/{len(THETA_VALUES)}")
+    total_ok = sum(r['n_ok'] for r in all_theta_results)
+    total_fail = sum(r['n_fail'] for r in all_theta_results)
+    print(f"  Total cases:    {total_ok + total_fail} (OK: {total_ok}, Failed: {total_fail})")
+    total_size = sum(r['size_mb'] for r in all_theta_results)
+    print(f"  Total disk:     {total_size:.0f} MB")
+    print(f"  Output dir:     {os.path.abspath(OUTPUT_DIR)}")
+    
+    print(f"\nGenerating diagnostics...")
+    generate_diagnostics(OUTPUT_DIR, all_theta_results)
+    print(f"\nDone!")
     print("="*80)
 
 if __name__ == "__main__":
