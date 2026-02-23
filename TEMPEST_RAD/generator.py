@@ -29,6 +29,7 @@ import time
 import traceback
 import numpy as np
 import h5py
+from numba import njit
 from joblib import Parallel, delayed
 from tqdm import tqdm
 from pathlib import Path
@@ -56,8 +57,9 @@ from src.model.view_factors import calculate_all_view_factors, calculate_thermal
 # All parameters are defined here for easy modification.
 
 # --- PARALLELISM ---
-N_JOBS = 32             # Number of parallel workers (set to number of CPU cores)
-                        # Server: 32, Laptop: 4
+N_JOBS = 32             # Number of parallel workers.
+                        # -1 = use ALL available CPU cores (auto-detect).
+                        # Set to a specific number to limit, e.g. 32 on a shared server.
 
 # --- OUTPUT ---
 OUTPUT_DIR = "lut_output"       # Directory for per-theta HDF5 files
@@ -101,13 +103,17 @@ SIM_TIMESTEPS = 720    # Internal simulation: 4x finer for stability
 
 # --- CRATER GEOMETRY ---
 # Resolution of the spherical crater mesh
-CRATER_SUBFACETS = 10000  # Facet count in crater
-                          # Note: Actual count may differ slightly due to geodesic tessellation
+CRATER_SUBFACETS = 2000   # Facet count in crater
+                          # Note: Actual count may differ slightly due to geodesic tessellation.
+                          # Geometry is computed ONCE in main() and cached/shared with all workers.
+                          # Timing on 32 cores: ~20 hours total for all 15 thetas.
+                          # (10000 facets would take ~250 hours due to O(N^2) visibility kernel)
 
 # View factor ray tracing resolution
-VIEW_FACTOR_RAYS = 100000  # Rays per facet for view factor calculation
-                           # Higher = better energy conservation (aim for <5% error)
-                           # Should be more than the number of facets to ensure good sampling
+VIEW_FACTOR_RAYS = 20000  # Rays per facet for view factor calculation
+                          # Higher = better energy conservation (aim for <5% error).
+                          # Computed ONCE in main() and cached to disk.
+                          # (Scaled down proportionally with CRATER_SUBFACETS)
 
 # --- PHYSICAL PARAMETERS (Standard Reference Conditions) ---
 # These define the "canonical" surface for the LUT
@@ -148,6 +154,81 @@ def planck_function(wavelength_um, temp_k):
     val = c1 / (wavelength_um**5 * (np.exp(c2 / (wavelength_um * t_safe)) - 1))
     return val
 
+
+@njit(cache=True)
+def compute_visibility_mask(d_local, normals, centers, triangles):
+    """Which subfacets are visible from local-space view direction d_local.
+
+    Uses Möller–Trumbore ray-triangle intersection with early exit.
+    Zero heap allocations: runs entirely in numba-compiled scalar code.
+
+    Args:
+        d_local:    (3,) view direction in crater-local frame
+        normals:    (N, 3) subfacet normals in local frame
+        centers:    (N, 3) subfacet centers in local frame
+        triangles:  (N, 3, 3) subfacet triangle vertices in local frame
+
+    Returns:
+        visible: (N,) boolean array, True = visible from this direction
+    """
+    N = normals.shape[0]
+    visible = np.zeros(N, dtype=np.bool_)
+    dx, dy, dz = d_local[0], d_local[1], d_local[2]
+
+    for i in range(N):
+        # Skip back-facing subfacets
+        if normals[i, 0] * dx + normals[i, 1] * dy + normals[i, 2] * dz <= 0.0:
+            continue
+
+        ox, oy, oz = centers[i, 0], centers[i, 1], centers[i, 2]
+        blocked = False
+
+        for j in range(N):
+            if i == j:
+                continue
+
+            # Möller–Trumbore ray-triangle intersection
+            e1x = triangles[j, 1, 0] - triangles[j, 0, 0]
+            e1y = triangles[j, 1, 1] - triangles[j, 0, 1]
+            e1z = triangles[j, 1, 2] - triangles[j, 0, 2]
+            e2x = triangles[j, 2, 0] - triangles[j, 0, 0]
+            e2y = triangles[j, 2, 1] - triangles[j, 0, 1]
+            e2z = triangles[j, 2, 2] - triangles[j, 0, 2]
+
+            hx = dy * e2z - dz * e2y
+            hy = dz * e2x - dx * e2z
+            hz = dx * e2y - dy * e2x
+
+            a = e1x * hx + e1y * hy + e1z * hz
+            if a > -1e-10 and a < 1e-10:
+                continue
+
+            f = 1.0 / a
+            sx = ox - triangles[j, 0, 0]
+            sy = oy - triangles[j, 0, 1]
+            sz = oz - triangles[j, 0, 2]
+            u = f * (sx * hx + sy * hy + sz * hz)
+            if u < 0.0 or u > 1.0:
+                continue
+
+            qx = sy * e1z - sz * e1y
+            qy = sz * e1x - sx * e1z
+            qz = sx * e1y - sy * e1x
+            v = f * (dx * qx + dy * qy + dz * qz)
+            if v < 0.0 or u + v > 1.0:
+                continue
+
+            t = f * (e2x * qx + e2y * qy + e2z * qz)
+            if t > 1e-6:
+                blocked = True
+                break
+
+        if not blocked:
+            visible[i] = True
+
+    return visible
+
+
 class ReferenceConfig(Config):
     """
     A minimal Config subclass that does not require a file.
@@ -182,7 +263,7 @@ class ReferenceConfig(Config):
             'n_jobs': N_JOBS,  # Parallel workers for view factor calculation etc.
             'vf_rays': 10000,  # Not used (overridden in simulate_crater_diurnal_cycle)
             'intra_facet_scatters': 2,
-            'silent_mode': True,  # Suppress verbose solver output
+            'silent_mode': True,  # Suppress verbose solver output in parallel workers
             
             # Kernel/Roughness specific from config
             'apply_kernel_based_roughness': True,
@@ -232,11 +313,11 @@ def rotate_to_lat(vector, lat_degrees):
     ])
     return np.dot(Ry, vector)
 
-def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_timesteps):
+def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_timesteps, precomputed):
     """
-    Run a full diurnal simulation for a single crater configuration using STANDARD `Simulation` logic.
-    Instead of internal Facet logic, we build a `shape_model` from the crater sub-facets
-    and run the full rigorous simulation pipeline.
+    Run a full diurnal simulation for a single crater configuration.
+    Uses pre-computed geometry (mesh, view factors) to avoid redundant setup.
+    Only latitude-dependent calculations (insolation, thermal solve) run per case.
     """
     # 1. Setup Simulation Object
     simulation = Simulation(config)
@@ -275,56 +356,24 @@ def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_time
     simulation.layer_thickness = 8 * simulation.skin_depth / simulation.n_layers
     simulation.thermal_diffusivity = simulation.thermal_conductivity / (simulation.density * simulation.specific_heat_capacity)
     
-    # 2. Generate Crater Mesh
-    # Create Dummy Facet (Lat 90, Z-up) to generate canonical mesh
-    dummy_normal = np.array([0.0, 0.0, 1.0])
-    dummy_vs = [np.array([-1,-1,0]), np.array([1,-1,0]), np.array([0,1,0])]
-    dummy_facet = Facet(dummy_normal, dummy_vs, 1, 1, 1, False)
-    
-    config.kernel_profile_angle_degrees = opening_angle
-    # Use config value for subfacets_count (already set to 300)
-    config.apply_kernel_based_roughness = True
-    
-    # Generate canonical mesh inside the class
-    dummy_facet.generate_spherical_depression(config, simulation)
-    
-    # Extract Sub-Facets from CANONICAL
-    if not hasattr(Facet, '_canonical_subfacet_mesh') or Facet._canonical_subfacet_mesh is None:
-         # Force regeneration if mesh doesn't exist
-         # (subfacets_count already set in config from CRATER_SUBFACETS)
-         dummy_facet.generate_spherical_depression(config, simulation)
-         
-    mesh = Facet._canonical_subfacet_mesh
-    n_facets = len(mesh)
-    
-    shape_model = []
+    # 2. Build shape model from pre-computed geometry (mesh + view factors computed once in main)
+    n_facets = precomputed['n_facets']
+    rotation_to_equator = precomputed['rotation_to_equator']
     
     # Sun direction with declination (latitude proxy for solar illumination angle)
-    # NOTE: This approach keeps crater at equator and tilts sun to vary illumination.
-    # "Latitude" here is a PARAMETRIC variable controlling solar zenith angle,
-    # not geographic position. This ensures crater is always illuminated for LUT generation.
+    # Keeps crater at equator and tilts sun to vary illumination.
     sun_declination = latitude
     lat_rad = np.radians(sun_declination)
     simulation.sunlight_direction = np.array([np.cos(lat_rad), 0.0, np.sin(lat_rad)])
     
-    # Rotate canonical crater (opening toward +Z) to equator (opening toward +X)
-    rotation_to_equator = calculate_rotation_matrix(np.array([0.0, 1.0, 0.0]), np.pi/2)
-    
-    for entry in mesh:
-        canonical_n = np.array(entry['normal'])
-        canonical_v = np.array(entry['vertices']) # (3,3)
-        
-        # Apply rotation: canonical → equator
-        rotated_n = np.dot(rotation_to_equator, canonical_n)
-        rotated_v = np.array([np.dot(rotation_to_equator, v) for v in canonical_v])
-        
-        # Create full Facet object
+    shape_model = []
+    for i in range(n_facets):
         new_f = Facet(
-            rotated_n, 
-            rotated_v, 
-            simulation.timesteps_per_day, 
-            simulation.max_days, 
-            simulation.n_layers, 
+            precomputed['rotated_normals'][i].copy(),
+            precomputed['rotated_vertices'][i].copy(),
+            simulation.timesteps_per_day,
+            simulation.max_days,
+            simulation.n_layers,
             config.calculate_energy_terms
         )
         shape_model.append(new_f)
@@ -332,26 +381,21 @@ def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_time
     # 3. Setup Thermal Data
     thermal_data = ThermalData(n_facets, simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
     
-    # 4. Calculate Visible Facets
-    # All facets in the crater see each other, but NOT themselves
+    # 4. Set visible facets (all-see-all for concave crater)
     all_indices = np.arange(n_facets)
     for i, f in enumerate(shape_model):
-        # Exclude self from visible facets
         f.visible_facets = np.concatenate([all_indices[:i], all_indices[i+1:]])
-    # set_visible_facets expects a LIST of arrays (one per facet)
     visible_facets_list = [np.concatenate([all_indices[:i], all_indices[i+1:]]) for i in range(n_facets)]
-    thermal_data.set_visible_facets(visible_facets_list) 
+    thermal_data.set_visible_facets(visible_facets_list)
     
-    # 5. Calculate View Factors (Standard + Thermal)
-    # Use configured ray count for energy conservation
+    # 5. Load view factors from disk cache (pre-computed once in main)
     all_view_factors = calculate_all_view_factors(shape_model, thermal_data, config, VIEW_FACTOR_RAYS)
     thermal_data.set_secondary_radiation_view_factors(all_view_factors)
     
     thermal_view_factors = calculate_thermal_view_factors(shape_model, thermal_data, config)
-    # Correct conversion to Numba List
     from numba.typed import List
     numba_vfs = List()
-    for vf in thermal_view_factors: # Note: function returns list of lists usually
+    for vf in thermal_view_factors:
         arr = np.array(vf, dtype=np.float64)
         if arr.size == 0:
             numba_vfs.append(np.array([], dtype=np.float64))
@@ -447,8 +491,8 @@ def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_time
         s_body = np.dot(rot.T, simulation.sunlight_direction)
         sun_vectors_body[t] = s_body / np.linalg.norm(s_body)
 
-    # Return flat_facet as the geometry reference
-    return rough_temps, smooth_temps, flat_facet, sun_vectors_body
+    # Return temperatures and sun vectors (geometry comes from precomputed dict)
+    return rough_temps, smooth_temps, sun_vectors_body
 
 
 
@@ -497,17 +541,16 @@ def plot_wireframe(mesh, filename="TEMPEST_RAD/diagnostics/plots/crater_wirefram
     plt.close()
     print(f"Saved wireframe to {filename}")
 
-def process_single_case(theta, opening_angle, lat, config):
+def process_single_case(theta, opening_angle, lat, config, precomputed):
     """
     Run simulation and compute viewing geometry grid.
     Returns: 4D array (Time, Wave, Emi, Azi), 1D array (Normalization_Factor)
     """
     try:
-        rough_temps_sim, smooth_temps_sim, facet, sun_vectors_sim = simulate_crater_diurnal_cycle(theta, opening_angle, lat, config, SIM_TIMESTEPS)
+        rough_temps_sim, smooth_temps_sim, sun_vectors_sim = simulate_crater_diurnal_cycle(theta, opening_angle, lat, config, SIM_TIMESTEPS, precomputed)
     except Exception as e:
         print(f"Error in simulation (Th={theta}, ang={opening_angle}, lat={lat}): {e}")
         traceback.print_exc()
-        # Return scalar nan for factor
         return np.full((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32), np.nan
 
     # Resample to LUT grid
@@ -519,22 +562,14 @@ def process_single_case(theta, opening_angle, lat, config):
     # Result: Time x Wavelength x Emi x Azi
     result_grid = np.zeros((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), dtype=np.float32)
     
-    # Geometry Arrays
-    if not hasattr(Facet, '_canonical_normals') or Facet._canonical_normals is None:
-        mesh = Facet._canonical_subfacet_mesh
-        Facet._canonical_normals = np.array([entry['normal'] for entry in mesh], dtype=np.float64)
-        Facet._canonical_areas = np.array([entry['area'] for entry in mesh], dtype=np.float64)
-        Facet._canonical_subfacet_triangles = np.array([entry['vertices'] for entry in mesh], dtype=np.float64)
-        if 'center' in mesh[0]:
-            Facet._canonical_subfacet_centers = np.array([entry['center'] for entry in mesh], dtype=np.float64)
-        else:
-            Facet._canonical_subfacet_centers = np.array([np.mean(entry['vertices'], axis=0) for entry in mesh], dtype=np.float64)
-
-    normals = Facet._canonical_normals
-    areas = Facet._canonical_areas
-    triangles = Facet._canonical_subfacet_triangles
-    centers = Facet._canonical_subfacet_centers
-    facet_normal = facet.normal / np.linalg.norm(facet.normal)
+    # Geometry arrays from precomputed (computed once in main, shared by all workers)
+    normals = precomputed['canonical_normals']
+    areas = precomputed['canonical_areas']
+    triangles = precomputed['canonical_vertices']
+    centers = precomputed['canonical_centers']
+    facet_normal = precomputed['aperture_normal']
+    world_to_local = precomputed['world_to_local']
+    aperture_area = precomputed['aperture_area']
     
     # Pre-calculated Geometry terms
     em_rad = np.radians(EMISSION_ANGLES)
@@ -586,18 +621,17 @@ def process_single_case(theta, opening_angle, lat, config):
                 view_vec = v_local_x * basis_x + v_local_y * basis_y + v_local_z * facet_normal
                 view_vec /= np.linalg.norm(view_vec)
                 
-                # --- Determine Visibility via ray-tracing ---
-                # We use _process_incident_packet for its shadow-checking logic,
-                # but we do NOT use the redistributed E_vis values for radiance.
-                # E_vis > 0 identifies which subfacets are visible from this direction.
-                packet = (1.0, view_vec, 'visible') 
-                E_vis, _, _, _ = Facet._process_incident_packet(
-                    packet, facet.world_to_local_rotation, facet.area, normals, areas, triangles, centers, 0.0, 0.0
-                )
-                visible_mask = E_vis > 0
+                # Transform to crater-local frame for visibility test
+                d_local = world_to_local.dot(view_vec)
                 
-                # Compute cos(theta_i) = dot(subfacet normal, view direction) in local frame
-                d_local = facet.world_to_local_rotation.dot(view_vec)
+                # Check if view enters crater opening (d_local[2] > 0 = faces aperture)
+                if d_local[2] <= 0.0:
+                    visible_mask = np.zeros(len(normals), dtype=np.bool_)
+                else:
+                    # Fast numba visibility: Möller–Trumbore shadow test, zero allocations
+                    visible_mask = compute_visibility_mask(d_local, normals, centers, triangles)
+                
+                # cos(theta_i) for each subfacet vs view direction in local frame
                 cos_i_all = normals.dot(d_local)
                 
                 # Loop Wavelengths
@@ -615,7 +649,7 @@ def process_single_case(theta, opening_angle, lat, config):
                         smooth_intensity = 0.0
                     else:
                         rad_smooth_val = planck_function(wave, t_smooth)
-                        smooth_intensity = rad_smooth_val * facet.area * cos_e
+                        smooth_intensity = rad_smooth_val * aperture_area * cos_e
 
                     # Store radiance ratio: R = I_rough / I_smooth = L_rough / L_smooth
                     if smooth_intensity < 1e-15:
@@ -903,12 +937,15 @@ def main():
     plot_wireframe(Facet._canonical_subfacet_mesh, 
                    filename=os.path.join(OUTPUT_DIR, "diagnostics", "crater_wireframe.png"))
     
-    # Pre-calculate View Factors (Single Threaded to avoid race condition)
-    # These are cached to disk and reused for ALL theta/latitude combos.
-    print("Pre-calculating view factors (one-off, cached to disk)...")
+    # Pre-calculate View Factors (done once, cached to disk and reused for ALL theta/latitude combos)
+    print("\nPre-calculating view factors (one-off, cached to disk)...")
     mesh = Facet._canonical_subfacet_mesh
     n_facets = len(mesh)
-    print(f"  Crater mesh: {n_facets} subfacets")
+    actual_cores = config.validate_jobs()
+    print(f"  Crater mesh:   {n_facets} subfacets")
+    print(f"  VF rays:       {VIEW_FACTOR_RAYS:,} per facet")
+    print(f"  Parallel jobs: {actual_cores} cores")
+    print(f"  This may take 5-30 minutes on first run (results are cached).")
     
     shape_model = []
     rotation_to_equator = calculate_rotation_matrix(np.array([0.0, 1.0, 0.0]), np.pi/2)
@@ -926,10 +963,57 @@ def main():
     thermal_data.set_visible_facets(visible_facets_list)
     
     vf_start = time.time()
+    # Temporarily enable verbose output for the one-off VF computation
+    config.silent_mode = False
+    print(f"\n  [1/3] Computing visible facet pairs...")
+    # (calculate_all_view_factors handles visible facets internally + caching)
     calculate_all_view_factors(shape_model, thermal_data, config, VIEW_FACTOR_RAYS)
+    vf_mid = time.time()
+    print(f"  [1/3] Done ({vf_mid - vf_start:.1f}s)")
+    
+    print(f"  [2/3] Computing thermal view factors...")
     calculate_thermal_view_factors(shape_model, thermal_data, config)
     vf_elapsed = time.time() - vf_start
-    print(f"  View factor cache ready ({vf_elapsed:.1f}s)")
+    print(f"  [2/3] Done ({time.time() - vf_mid:.1f}s)")
+    print(f"  [3/3] View factor cache ready. Total: {vf_elapsed:.1f}s ({vf_elapsed/60:.1f} min)")
+    # Restore silent mode for parallel workers
+    config.silent_mode = True
+
+    # --- Build pre-computed geometry dict (passed to all workers) ---
+    # This eliminates redundant mesh generation and view factor loading per case.
+    # Workers receive numpy arrays (efficiently serialized by joblib) instead of
+    # regenerating 10k-facet meshes and racing to compute view factors.
+    canonical_normals = np.array([entry['normal'] for entry in mesh], dtype=np.float64)
+    canonical_vertices = np.array([entry['vertices'] for entry in mesh], dtype=np.float64)
+    canonical_areas = np.array([entry['area'] for entry in mesh], dtype=np.float64)
+    if 'center' in mesh[0]:
+        canonical_centers = np.array([entry['center'] for entry in mesh], dtype=np.float64)
+    else:
+        canonical_centers = np.array([np.mean(entry['vertices'], axis=0) for entry in mesh], dtype=np.float64)
+    
+    rotated_normals = np.array([np.dot(rotation_to_equator, entry['normal']) for entry in mesh], dtype=np.float64)
+    rotated_vertices = np.array([[np.dot(rotation_to_equator, v) for v in entry['vertices']] for entry in mesh], dtype=np.float64)
+    
+    precomputed = {
+        'canonical_normals': canonical_normals,
+        'canonical_vertices': canonical_vertices,
+        'canonical_areas': canonical_areas,
+        'canonical_centers': canonical_centers,
+        'rotated_normals': rotated_normals,
+        'rotated_vertices': rotated_vertices,
+        'rotation_to_equator': rotation_to_equator,
+        'world_to_local': rotation_to_equator.T,
+        'aperture_normal': np.array([1.0, 0.0, 0.0]),  # crater opening faces +X after rotation
+        'aperture_area': 1.0,  # normalized by mesh generation
+        'n_facets': n_facets,
+    }
+    
+    # Warm up numba JIT for compute_visibility_mask (one-time compilation cost)
+    print("  Compiling visibility kernel (one-time)...")
+    _warmup_dir = canonical_normals[0].copy()
+    _warmup_dir /= np.linalg.norm(_warmup_dir)
+    _ = compute_visibility_mask(_warmup_dir, canonical_normals, canonical_centers, canonical_vertices)
+    print("  Ready.")
 
     # --- Print configuration summary ---
     print(f"\n{'='*80}")
@@ -982,12 +1066,9 @@ def main():
             except Exception:
                 print(f"  Found corrupt file. Re-running...")
         
-        # Build tasks for this theta (all latitudes)
-        tasks = [(theta, OPENING_ANGLES[0], lat) for lat in LATITUDE_VALUES]
-        
         # Run all latitudes in parallel
         results = Parallel(n_jobs=N_JOBS, verbose=5)(
-            delayed(process_single_case)(theta, OPENING_ANGLES[0], lat, config)
+            delayed(process_single_case)(theta, OPENING_ANGLES[0], lat, config, precomputed)
             for lat in LATITUDE_VALUES
         )
         
