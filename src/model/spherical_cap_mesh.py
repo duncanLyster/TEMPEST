@@ -101,7 +101,8 @@ def generate_canonical_spherical_cap(n_subfacets, profile_angle_deg, return_ring
 
     # Use power < 1 to concentrate rings near the rim
     # This helps with shadowing resolution at grazing angles
-    power = 0.5 
+    # Changed from 0.5 to 0.75 to keep high density near rim but increase resolution at the center
+    power = 0.75 
 
     # Determine rings
     ring_counts, actual_n = _compute_equilateral_rings(n_subfacets, phi, sphere_r, power=power)

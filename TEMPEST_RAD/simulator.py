@@ -206,10 +206,7 @@ def rms_to_fraction(rms_angle_deg):
     Heuristic: tan(theta_rms) approx f * tan(50 deg)
     This is a simplified mapping.
     """
-    # If user provides f directly (<= 1.0), assume it's a fraction
-    if rms_angle_deg <= 1.0:
-        return rms_angle_deg
-        
+    
     # Heuristic mapping
     # 0 deg -> 0.0
     # 10 deg -> ~0.15

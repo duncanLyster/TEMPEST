@@ -15,7 +15,7 @@ from src.model.spherical_cap_mesh import generate_canonical_spherical_cap
 PROFILE_ANGLE = 90.0  # hemisphere
 
 parser = argparse.ArgumentParser(description="Export crater STL")
-parser.add_argument("-n", type=int, default=10000, help="Target subfacet count")
+parser.add_argument("-n", type=int, default=2000, help="Target subfacet count")
 args = parser.parse_args()
 TARGET_SUBFACETS = args.n
 

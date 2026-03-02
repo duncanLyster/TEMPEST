@@ -28,83 +28,87 @@ class RoughnessLUT:
         """
         Load a specific subset of the LUT matching the target parameters.
         This saves RAM by avoiding loading the entire 7D tensor.
+
+        Supports two on-disk formats:
+          v2_per_theta  – one file per theta, lut shape (lat, time, wave, emi, azi)
+          v1 legacy     – combined file, lut shape (theta, angle, lat, time, wave, emi, azi)
         """
         try:
             with h5py.File(self.lut_path, 'r') as f:
-                # Load Axes
-                theta_axis = f['theta'][:]
-                wave_axis = f['wavelength'][:]
-                lat_axis = f['latitude'][:]
-                emi_axis = f['emission'][:]
-                azi_axis = f['azimuth'][:]
-                
-                # Find indices
-                # Theta
-                if target_theta is not None:
-                    idx_theta = np.abs(theta_axis - target_theta).argmin()
-                    print(f"LUT: Selected Theta={theta_axis[idx_theta]} (Target={target_theta})")
-                else:
-                    idx_theta = 0 # Default
-                    
-                # RMS / Opening Angle
-                if 'opening_angle' in f:
-                    rms_axis = f['opening_angle'][:]
-                    print("LUT: Using 'opening_angle' axis.")
-                elif 'rms' in f:
-                    rms_axis = f['rms'][:]
-                    print("LUT: Using 'rms' axis.")
-                else:
-                    raise KeyError("LUT missing 'opening_angle' or 'rms' dataset.")
 
-                if target_rms is not None:
-                    idx_rms = np.abs(rms_axis - target_rms).argmin()
-                    print(f"LUT: Selected Angle={rms_axis[idx_rms]} (Target={target_rms})")
-                else:
-                    idx_rms = 0
-                    
-                # Wavelength
-                # Generator Dimensions: (Theta, Angle, Lat, Time, Wave, Emi, Azi)
-                #                        0      1      2     3     4     5    6
-                
-                if target_wavelength is not None:
-                    # Find closest wavelength index
-                    idx_wave = np.abs(wave_axis - target_wavelength).argmin()
-                    print(f"LUT: Selected Wave={wave_axis[idx_wave]} (Target={target_wavelength})")
-                    
-                    if 'correction_factors' in f:
-                        dset_name = 'correction_factors'
-                    else:
-                        dset_name = 'lut'
-                        
-                    # Slice: [th, ang, :, :, wave, :, :]
-                    # Remaining: (Lat, Time, Emi, Azi)
-                    # Note: h5py supports this slicing
-                    lut_subset = f[dset_name][idx_theta, idx_rms, :, :, idx_wave, :, :]
-                    
-                    # Points for Interpolator: (Lat, Time, Emi, Azi)
-                    n_time = lut_subset.shape[1]
+                # Detect format
+                gen_version = f.attrs.get('generator_version', b'')
+                if isinstance(gen_version, bytes):
+                    gen_version = gen_version.decode()
+                is_per_theta = (gen_version == 'v2_per_theta')
+
+                wave_axis = f['wavelength'][:]
+                lat_axis  = f['latitude'][:]
+                emi_axis  = f['emission'][:]
+                azi_axis  = f['azimuth'][:]
+
+                if is_per_theta:
+                    # v2 per-theta: lut shape is (lat, time, wave, emi, azi)
+                    theta_val = float(f.attrs['theta'])
+                    print(f"LUT: v2 per-theta file, Theta={theta_val:.6f}")
+
+                    n_time     = int(f['sun_phase_steps'][()])
                     sun_phases = np.linspace(0, 360, n_time, endpoint=False)
-                    
-                    points = (lat_axis, sun_phases, emi_axis, azi_axis)
-                    self.spectral_mode = False
-                    
-                else:
-                    # Spectral Mode: Keep Wavelength
-                    # Slice: [th, ang, :, :, :, :, :]
-                    # Remaining: (Lat, Time, Wave, Emi, Azi)
-                    if 'correction_factors' in f:
-                        dset_name = 'correction_factors'
+
+                    if target_wavelength is not None:
+                        idx_wave = np.abs(wave_axis - target_wavelength).argmin()
+                        print(f"LUT: Selected Wave={wave_axis[idx_wave]} (Target={target_wavelength})")
+                        lut_subset = f['lut'][:, :, idx_wave, :, :]
+                        points = (lat_axis, sun_phases, emi_axis, azi_axis)
+                        self.spectral_mode = False
                     else:
-                        dset_name = 'lut'
-                        
-                    lut_subset = f[dset_name][idx_theta, idx_rms, :, :, :, :, :]
-                    
-                    n_time = lut_subset.shape[1]
-                    sun_phases = np.linspace(0, 360, n_time, endpoint=False)
-                    
-                    points = (lat_axis, sun_phases, wave_axis, emi_axis, azi_axis)
-                    self.spectral_mode = True
-                    self.axes['wavelength'] = wave_axis
+                        lut_subset = f['lut'][:]
+                        points = (lat_axis, sun_phases, wave_axis, emi_axis, azi_axis)
+                        self.spectral_mode = True
+                        self.axes['wavelength'] = wave_axis
+
+                else:
+                    # v1 legacy: lut shape is (theta, angle, lat, time, wave, emi, azi)
+                    theta_axis = f['theta'][:]
+
+                    if target_theta is not None:
+                        idx_theta = np.abs(theta_axis - target_theta).argmin()
+                        print(f"LUT: Selected Theta={theta_axis[idx_theta]} (Target={target_theta})")
+                    else:
+                        idx_theta = 0
+
+                    if 'opening_angle' in f:
+                        rms_axis = f['opening_angle'][:]
+                        print("LUT: Using 'opening_angle' axis.")
+                    elif 'rms' in f:
+                        rms_axis = f['rms'][:]
+                        print("LUT: Using 'rms' axis.")
+                    else:
+                        raise KeyError("LUT missing 'opening_angle' or 'rms' dataset.")
+
+                    if target_rms is not None:
+                        idx_rms = np.abs(rms_axis - target_rms).argmin()
+                        print(f"LUT: Selected Angle={rms_axis[idx_rms]} (Target={target_rms})")
+                    else:
+                        idx_rms = 0
+
+                    dset_name = 'correction_factors' if 'correction_factors' in f else 'lut'
+
+                    if target_wavelength is not None:
+                        idx_wave = np.abs(wave_axis - target_wavelength).argmin()
+                        print(f"LUT: Selected Wave={wave_axis[idx_wave]} (Target={target_wavelength})")
+                        lut_subset = f[dset_name][idx_theta, idx_rms, :, :, idx_wave, :, :]
+                        n_time = lut_subset.shape[1]
+                        sun_phases = np.linspace(0, 360, n_time, endpoint=False)
+                        points = (lat_axis, sun_phases, emi_axis, azi_axis)
+                        self.spectral_mode = False
+                    else:
+                        lut_subset = f[dset_name][idx_theta, idx_rms, :, :, :, :, :]
+                        n_time = lut_subset.shape[1]
+                        sun_phases = np.linspace(0, 360, n_time, endpoint=False)
+                        points = (lat_axis, sun_phases, wave_axis, emi_axis, azi_axis)
+                        self.spectral_mode = True
+                        self.axes['wavelength'] = wave_axis
 
             # Handle NaNs
             if np.isnan(lut_subset).any():

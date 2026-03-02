@@ -99,34 +99,59 @@ def process_insolation_chunk(normals, positions, visible_facets, rotation_matric
     timesteps = len(rotation_matrices)
     insolation = np.zeros((chunk_size, timesteps))
     
+    # physical softening of the shadow terminator edge
+    # smoothing sun size: roughly 2 degrees. (e.g. 4 timesteps out of 720)
+    window_size = max(1, timesteps // 180)
+    pad_left = window_size // 2
+    
     for i in range(chunk_size):
         normal = normals[i]
         position = positions[i]
         
+        illum_factors = np.zeros(timesteps, dtype=np.float64)
+        cos_zeniths = np.zeros(timesteps, dtype=np.float64)
+        
+        # 1. First pass: compute binary shadow state and zenith angle
         for t in range(timesteps):
             new_normal = np.dot(rotation_matrices[t], normal)
-            new_normal_norm = np.linalg.norm(new_normal)  # Precompute new normal vector norm
+            new_normal_norm = np.linalg.norm(new_normal)
             sun_dot_normal = np.dot(sunlight_direction, new_normal)
             
-            # Calculate cosine of zenith angle
             cos_zenith_angle = sun_dot_normal / (np.linalg.norm(sunlight_direction) * new_normal_norm)
             
             if cos_zenith_angle > 0:
-                illumination_factor = 1
-                
+                cos_zeniths[t] = cos_zenith_angle
                 if len(visible_facets[i]) != 0 and include_shadowing:
-                    illumination_factor = calculate_shadowing(
+                    illum_factors[t] = float(calculate_shadowing(
                         position, 
-                        rotated_sunlight_directions[t:t+1],  # Use slice instead of creating new array
+                        rotated_sunlight_directions[t:t+1],  
                         shape_model_vertices,
                         visible_facets[i]
-                    )
+                    ))
+                else:
+                    illum_factors[t] = 1.0
+                    
+        # 2. Second pass: apply moving average to illumination_factors to simulate solar disk diameter
+        # This mitigates Crank-Nicolson spike artifacts near terminators
+        smoothed_illum = np.zeros(timesteps, dtype=np.float64)
+        for t in range(timesteps):
+            if window_size <= 1:
+                smoothed_illum[t] = illum_factors[t]
+            else:
+                sum_val = 0.0
+                for w in range(window_size):
+                    idx = (t - pad_left + w) % timesteps
+                    sum_val += illum_factors[idx]
+                smoothed_illum[t] = sum_val / window_size
                 
+        # 3. Third pass: calculate final insolation combining smoothed shadow and original zenith angle
+        for t in range(timesteps):
+            if cos_zeniths[t] > 0 and smoothed_illum[t] > 0:
                 insolation[i, t] = (
                     solar_luminosity * 
                     (1 - albedo) * 
-                    illumination_factor * 
-                    cos_zenith_angle / 
+                    smoothed_illum[t] * 
+                    cos_zeniths[t] / 
                     (4 * np.pi * solar_distance_m**2)
                 )
     
