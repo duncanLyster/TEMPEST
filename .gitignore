@@ -83,3 +83,4 @@ notebooks/region_of_interest_analysis_backup.ipynb
 data/config/DGL_*.yaml
 notebooks/DGL_KS_*.ipynb
 scripts/DGL_KS_*validation/
+scripts/DGL_KS_*
