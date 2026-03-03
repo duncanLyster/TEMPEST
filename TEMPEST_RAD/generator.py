@@ -388,19 +388,13 @@ def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_time
     visible_facets_list = [np.concatenate([all_indices[:i], all_indices[i+1:]]) for i in range(n_facets)]
     thermal_data.set_visible_facets(visible_facets_list)
     
-    # 5. Load view factors from disk cache (pre-computed once in main)
-    all_view_factors = calculate_all_view_factors(shape_model, thermal_data, config, VIEW_FACTOR_RAYS)
-    thermal_data.set_secondary_radiation_view_factors(all_view_factors)
+    # 5. Use pre-loaded view factors from precomputed dict (no disk I/O)
+    thermal_data.set_secondary_radiation_view_factors(precomputed['all_view_factors'])
     
-    thermal_view_factors = calculate_thermal_view_factors(shape_model, thermal_data, config)
     from numba.typed import List
     numba_vfs = List()
-    for vf in thermal_view_factors:
-        arr = np.array(vf, dtype=np.float64)
-        if arr.size == 0:
-            numba_vfs.append(np.array([], dtype=np.float64))
-        else:
-            numba_vfs.append(arr.flatten() if arr.ndim > 1 else arr)
+    for arr in precomputed['thermal_view_factors']:
+        numba_vfs.append(arr)
     thermal_data.thermal_view_factors = numba_vfs
 
     # 6. Calculate Insolation (with Shadowing)
@@ -967,12 +961,12 @@ def main():
     config.silent_mode = False
     print(f"\n  [1/3] Computing visible facet pairs...")
     # (calculate_all_view_factors handles visible facets internally + caching)
-    calculate_all_view_factors(shape_model, thermal_data, config, VIEW_FACTOR_RAYS)
+    cached_all_view_factors = calculate_all_view_factors(shape_model, thermal_data, config, VIEW_FACTOR_RAYS)
     vf_mid = time.time()
     print(f"  [1/3] Done ({vf_mid - vf_start:.1f}s)")
     
     print(f"  [2/3] Computing thermal view factors...")
-    calculate_thermal_view_factors(shape_model, thermal_data, config)
+    cached_thermal_view_factors = calculate_thermal_view_factors(shape_model, thermal_data, config)
     vf_elapsed = time.time() - vf_start
     print(f"  [2/3] Done ({time.time() - vf_mid:.1f}s)")
     print(f"  [3/3] View factor cache ready. Total: {vf_elapsed:.1f}s ({vf_elapsed/60:.1f} min)")
@@ -994,6 +988,17 @@ def main():
     rotated_normals = np.array([np.dot(rotation_to_equator, entry['normal']) for entry in mesh], dtype=np.float64)
     rotated_vertices = np.array([[np.dot(rotation_to_equator, v) for v in entry['vertices']] for entry in mesh], dtype=np.float64)
     
+    # Convert view factors to serializable numpy arrays so joblib can pass them
+    # to workers without any disk I/O. This eliminates ~3500 NFS reads per theta.
+    cached_vf_arrays = [np.array(vf, dtype=np.float64) for vf in cached_all_view_factors]
+    cached_tvf_arrays = []
+    for vf in cached_thermal_view_factors:
+        arr = np.array(vf, dtype=np.float64)
+        if arr.size == 0:
+            cached_tvf_arrays.append(np.array([], dtype=np.float64))
+        else:
+            cached_tvf_arrays.append(arr.flatten() if arr.ndim > 1 else arr)
+
     precomputed = {
         'canonical_normals': canonical_normals,
         'canonical_vertices': canonical_vertices,
@@ -1006,6 +1011,9 @@ def main():
         'aperture_normal': np.array([1.0, 0.0, 0.0]),  # crater opening faces +X after rotation
         'aperture_area': 1.0,  # normalized by mesh generation
         'n_facets': n_facets,
+        # Pre-loaded view factors — workers use these directly, zero disk I/O
+        'all_view_factors': cached_vf_arrays,
+        'thermal_view_factors': cached_tvf_arrays,
     }
     
     # Warm up numba JIT for compute_visibility_mask (one-time compilation cost)
