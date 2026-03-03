@@ -82,4 +82,4 @@ notebooks/region_of_interest_analysis_backup.ipynb
 # Ignore DGL_KS comparison configs, notebooks, and scripts
 data/config/DGL_*.yaml
 notebooks/DGL_KS_*.ipynb
-scripts/DGL_KS_*
+scripts/DGL_KS_*validation/
