@@ -176,22 +176,25 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     
     return view_factors
 
-def process_view_factors_chunk(shape_model, thermal_data, start_idx, end_idx, n_rays):
+def process_view_factors_chunk(all_vertices, all_normals, all_areas, visible_facets_list, 
+                               start_idx, end_idx, n_rays):
     """
     Process a chunk of subject facets for view factor calculations.
+    Accepts pre-extracted numpy arrays instead of full shape_model/thermal_data
+    to avoid massive pickle overhead in multiprocessing.
     Returns a list of view factors and any warnings generated.
     """
     chunk_view_factors = []
     warnings = []
     
     for i in range(start_idx, end_idx):
-        visible_indices = thermal_data.visible_facets[i]
+        visible_indices = visible_facets_list[i]
         
-        subject_vertices = np.asarray(shape_model[i].vertices, dtype=np.float64)
-        subject_area = float(shape_model[i].area)
-        subject_normal = np.asarray(shape_model[i].normal, dtype=np.float64)
-        test_vertices = np.array([shape_model[j].vertices for j in visible_indices], dtype=np.float64).reshape(-1, 3, 3)
-        test_areas = np.array([shape_model[j].area for j in visible_indices], dtype=np.float64)
+        subject_vertices = all_vertices[i]
+        subject_area = all_areas[i]
+        subject_normal = all_normals[i]
+        test_vertices = all_vertices[visible_indices].reshape(-1, 3, 3)
+        test_areas = all_areas[visible_indices]
 
         view_factors = calculate_view_factors(
             subject_vertices, subject_normal, subject_area, 
@@ -230,6 +233,12 @@ def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
     actual_n_jobs = config.validate_jobs()
     n_facets = len(shape_model)
     
+    # Pre-extract compact numpy arrays to avoid pickling entire shape_model/thermal_data
+    all_vertices = np.array([facet.vertices for facet in shape_model], dtype=np.float64)
+    all_normals = np.array([facet.normal for facet in shape_model], dtype=np.float64)
+    all_areas = np.array([facet.area for facet in shape_model], dtype=np.float64)
+    visible_facets_list = thermal_data.visible_facets  # list of int64 arrays
+    
     # Calculate chunk size
     if config.chunk_size <= 0:
         config.chunk_size = max(1, n_facets // (actual_n_jobs * 4))
@@ -248,7 +257,8 @@ def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
     try:
         results = Parallel(n_jobs=actual_n_jobs, verbose=10, backend='loky')(
             delayed(process_view_factors_chunk)(
-                shape_model, thermal_data, start_idx, end_idx, n_rays
+                all_vertices, all_normals, all_areas, visible_facets_list,
+                start_idx, end_idx, n_rays
             ) for start_idx, end_idx in chunks
         )
         
@@ -321,6 +331,12 @@ def calculate_thermal_view_factors(shape_model, thermal_data, config):
     actual_n_jobs = config.validate_jobs()
     n_facets = len(shape_model)
     
+    # Pre-extract compact numpy arrays to avoid pickling entire shape_model/thermal_data
+    all_positions = np.array([facet.position for facet in shape_model], dtype=np.float64)
+    all_normals = np.array([facet.normal for facet in shape_model], dtype=np.float64)
+    visible_facets_list = thermal_data.visible_facets
+    vf_list = thermal_data.secondary_radiation_view_factors
+    
     if config.chunk_size <= 0:
         config.chunk_size = max(1, n_facets // (actual_n_jobs * 4))
     
@@ -331,7 +347,8 @@ def calculate_thermal_view_factors(shape_model, thermal_data, config):
     try:
         results = Parallel(n_jobs=actual_n_jobs, verbose=10, backend='loky')(
             delayed(process_thermal_view_factors_chunk)(
-                shape_model, thermal_data, epf_lut, start_idx, end_idx
+                all_positions, all_normals, visible_facets_list, vf_list,
+                epf_lut, start_idx, end_idx
             ) for start_idx, end_idx in chunks
         )
         
@@ -349,13 +366,15 @@ def calculate_thermal_view_factors(shape_model, thermal_data, config):
         print(f"Error calculating thermal view factors: {str(e)}")
         raise
 
-def process_thermal_view_factors_chunk(shape_model, thermal_data, epf_lut, start_idx, end_idx):
-    """Process a chunk of facets for thermal view factor calculation."""
+def process_thermal_view_factors_chunk(all_positions, all_normals, visible_facets_list, vf_list,
+                                       epf_lut, start_idx, end_idx):
+    """Process a chunk of facets for thermal view factor calculation.
+    Accepts pre-extracted numpy arrays to avoid massive pickle overhead."""
     chunk_results = []
     
     for i in range(start_idx, end_idx):
-        visible_facets = thermal_data.visible_facets[i]
-        view_factors = thermal_data.secondary_radiation_view_factors[i]
+        visible_facets = visible_facets_list[i]
+        view_factors = vf_list[i]
         
         # Ensure both arrays have the same length and are not empty
         if len(visible_facets) == 0 or len(view_factors) == 0:
@@ -366,11 +385,11 @@ def process_thermal_view_factors_chunk(shape_model, thermal_data, epf_lut, start
             raise ValueError(f"Mismatch between visible_facets ({len(visible_facets)}) and view_factors ({len(view_factors)}) for facet {i}")
             
         # Calculate emission angles
-        target_centers = np.array([shape_model[idx].position for idx in visible_facets])
-        direction_vectors = target_centers - shape_model[i].position
+        target_centers = all_positions[visible_facets]
+        direction_vectors = target_centers - all_positions[i]
         direction_vectors /= np.linalg.norm(direction_vectors, axis=1)[:, np.newaxis]
         
-        cos_emission = np.einsum('ij,j->i', direction_vectors, shape_model[i].normal)
+        cos_emission = np.einsum('ij,j->i', direction_vectors, all_normals[i])
         cos_emission = np.clip(cos_emission, -1.0, 1.0)
         emission_angles = np.degrees(np.arccos(cos_emission))
         
