@@ -50,14 +50,29 @@ class Simulation:
         # Check if user specified timesteps_per_day in config
         # Note: self.timesteps_per_day is set by load_configuration before this is called
         user_timesteps = getattr(self, 'timesteps_per_day', None)
-        if user_timesteps is not None:
-            return int(user_timesteps)
         
         # Stability calculation (CFL limits)
         # Use a safety factor to ensure const3 is well below 0.5 to prevent ringing
         cfl_safety_factor = 0.8
         cfl_denominator = cfl_safety_factor * (self.layer_thickness**2 / (2 * self.thermal_diffusivity))
         timesteps_cfl = int(round(self.rotation_period_s / cfl_denominator))
+        
+        if user_timesteps is not None:
+            # Warn if user-specified timesteps violate CFL for the explicit solver
+            solver_name = getattr(self, 'temp_solver', '')
+            if solver_name == 'tempest_standard' and int(user_timesteps) < timesteps_cfl:
+                print("\n" + "=" * 80)
+                print("  WARNING: CFL STABILITY VIOLATION (explicit solver)")
+                print("=" * 80)
+                print(f"  You specified timesteps_per_day = {int(user_timesteps)}, but the CFL")
+                print(f"  stability criterion requires at least {timesteps_cfl} timesteps.")
+                print(f"  The explicit solver will likely produce unphysical results (e.g. all")
+                print(f"  temperatures dropping to 2.7 K).")
+                print(f"")
+                print(f"  Fix: either remove 'timesteps_per_day' from your config to let TEMPEST")
+                print(f"  choose automatically, or increase it to >= {timesteps_cfl}.")
+                print("=" * 80 + "\n")
+            return int(user_timesteps)
         delta_t_cfl = self.rotation_period_s / timesteps_cfl
         
         # Calculate insolation coefficient with CFL timestep
