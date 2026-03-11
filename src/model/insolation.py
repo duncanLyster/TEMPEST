@@ -183,15 +183,15 @@ def calculate_shadowing(subject_positions, sunlight_directions, shape_model_vert
         
     return 1 # The facet is not in shadow
 
-def calculate_brdf_values(shape_model, rotation_matrices, rotated_sunlight_directions, brdf_lut, start_idx, end_idx, visible_facets_list):
+def calculate_brdf_values(all_normals, all_positions, rotation_matrices, rotated_sunlight_directions, brdf_lut, start_idx, end_idx, chunk_visible_facets):
     n_timesteps = len(rotation_matrices)
     brdf_values = {}
     n_facets_in_chunk = end_idx - start_idx
     
     # Collect all unique facet indices needed for this chunk
     needed_facets = set(range(start_idx, end_idx))  # Start with facets in chunk
-    for i in range(start_idx, end_idx):
-        needed_facets.update(visible_facets_list[i])  # Add their visible facets
+    for local_i in range(n_facets_in_chunk):
+        needed_facets.update(chunk_visible_facets[local_i])  # Add their visible facets
     needed_facets = sorted(needed_facets)  # Convert to sorted list
     
     # Create mapping from global to local indices
@@ -202,21 +202,22 @@ def calculate_brdf_values(shape_model, rotation_matrices, rotated_sunlight_direc
     rotated_normals = np.zeros((n_needed_facets, n_timesteps, 3))
     rotated_positions = np.zeros((n_needed_facets, n_timesteps, 3))
     
-    # Pre-compute rotated values for needed facets
+    # Pre-compute rotated values for needed facets (using compact numpy arrays)
     for local_idx, global_idx in enumerate(needed_facets):
-        normal_i = shape_model[global_idx].normal
-        position_i = shape_model[global_idx].position
+        normal_i = all_normals[global_idx]
+        position_i = all_positions[global_idx]
         for t in range(n_timesteps):
             rotated_normals[local_idx, t] = np.dot(rotation_matrices[t], normal_i)
             rotated_positions[local_idx, t] = np.dot(rotation_matrices[t], position_i)
     
     # Process facets in this chunk
     for i in range(start_idx, end_idx):
-        local_i = global_to_local[i]
-        visible_facets = visible_facets_list[i]
+        local_i_map = global_to_local[i]
+        local_i = i - start_idx
+        visible_facets = chunk_visible_facets[local_i]
         brdf_values[i] = np.zeros((len(visible_facets), n_timesteps))
         
-        sun_cos = np.einsum('tj,tj->t', rotated_sunlight_directions, rotated_normals[local_i])
+        sun_cos = np.einsum('tj,tj->t', rotated_sunlight_directions, rotated_normals[local_i_map])
         illuminated_timesteps = sun_cos > 0
         
         if not illuminated_timesteps.any():
@@ -228,34 +229,36 @@ def calculate_brdf_values(shape_model, rotation_matrices, rotated_sunlight_direc
             local_target = global_to_local[target_idx]
             
             direction_vectors = (rotated_positions[local_target, illuminated_timesteps] - 
-                               rotated_positions[local_i, illuminated_timesteps])
+                               rotated_positions[local_i_map, illuminated_timesteps])
             
             # Rest of the BRDF calculation remains the same...
 
-def process_scattering_chunk(start_idx, end_idx, input_light, visible_facets_list, 
-                           view_factors_list, timesteps_per_day, albedo, iteration,
-                           brdf_lut=None, shape_model=None, rotation_matrices=None, 
-                           rotated_sunlight_directions=None):
+def process_scattering_chunk(start_idx, end_idx, chunk_input_light, chunk_visible_facets, 
+                           chunk_view_factors, n_facets, timesteps_per_day, albedo, iteration,
+                           brdf_lut=None, all_normals=None, all_positions=None,
+                           rotation_matrices=None, rotated_sunlight_directions=None):
     """
     Process a chunk of facets for scattering calculation.
+    Accepts pre-sliced per-chunk data to minimize memory usage per worker.
     """
-    chunk_scattered_light = np.zeros_like(input_light)
+    chunk_scattered_light = np.zeros((n_facets, timesteps_per_day))
     
     # Only calculate BRDF on first iteration
     if iteration == 0 and brdf_lut is not None:
         brdf_values = calculate_brdf_values(
-            shape_model, rotation_matrices, rotated_sunlight_directions,
-            brdf_lut, start_idx, end_idx, visible_facets_list
+            all_normals, all_positions, rotation_matrices, rotated_sunlight_directions,
+            brdf_lut, start_idx, end_idx, chunk_visible_facets
         )
     else:
         brdf_values = None  # Use default Lambertian scattering for subsequent iterations
     
     for i in range(start_idx, end_idx):
-        visible_facets = visible_facets_list[i]
-        view_factors = view_factors_list[i]
+        local_i = i - start_idx
+        visible_facets = chunk_visible_facets[local_i]
+        view_factors = chunk_view_factors[local_i]
 
         for t in range(timesteps_per_day):
-            current_light = input_light[i, t]
+            current_light = chunk_input_light[local_i, t]
             
             if current_light > 0:
                 for j, (vf_idx, vf) in enumerate(zip(visible_facets, view_factors)):
@@ -270,6 +273,7 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
                     rotation_matrices, rotated_sunlight_directions):
     """
     Apply scattering using BRDF lookup tables. Works with any number of jobs (including 1).
+    Pre-extracts compact numpy arrays and slices per-chunk to minimize worker memory.
     """
     # Initialize BRDF lookup table
     brdf_lut = BRDFLookupTable(config.scattering_lut)
@@ -277,6 +281,10 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
     original_insolation = thermal_data.insolation.copy()
     total_scattered_light = np.zeros_like(original_insolation)
     n_facets = len(shape_model)
+    
+    # Pre-extract compact numpy arrays from shape_model for BRDF calculation
+    all_normals = np.array([facet.normal for facet in shape_model], dtype=np.float64)
+    all_positions = np.array([facet.position for facet in shape_model], dtype=np.float64)
     
     # Convert lists to numpy arrays
     visible_facets_list = [np.array(x) for x in thermal_data.visible_facets]
@@ -302,14 +310,16 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
         delayed_funcs = [
             delayed(process_scattering_chunk)(
                 start_idx, end_idx,
-                input_light,
-                visible_facets_list,
-                view_factors_list,
+                input_light[start_idx:end_idx],           # Only this chunk's input
+                visible_facets_list[start_idx:end_idx],   # Only this chunk's visible facets
+                view_factors_list[start_idx:end_idx],     # Only this chunk's view factors
+                n_facets,
                 simulation.timesteps_per_day,
                 simulation.albedo, 
                 iteration,
                 brdf_lut if iteration == 0 else None,
-                shape_model if iteration == 0 else None,
+                all_normals if iteration == 0 else None,
+                all_positions if iteration == 0 else None,
                 rotation_matrices if iteration == 0 else None,
                 rotated_sunlight_directions if iteration == 0 else None
             )

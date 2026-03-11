@@ -85,3 +85,7 @@ notebooks/DGL_KS_*.ipynb
 scripts/DGL_KS_*validation/
 scripts/DGL_KS_*
 validation/
+
+# Ignore macOS Finder duplicate files
+*\ 2.*
+*\ 2
