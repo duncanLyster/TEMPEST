@@ -28,6 +28,7 @@ class TemperatureSolver:
             return max(temp, 50.0)
 
         # Parallel processing of facets
+        conditional_print(config.silent_mode, f"Calculating initial temperatures for {thermal_data.temperatures.shape[0]} facets...")
         results = Parallel(n_jobs=config.n_jobs)(
             delayed(process_facet)(thermal_data.insolation[i], simulation.emissivity, sigma) 
             for i in range(thermal_data.temperatures.shape[0])

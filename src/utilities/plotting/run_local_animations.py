@@ -5,6 +5,12 @@ from datetime import datetime
 
 from animate_model import animate_model
 
+# Map-style playback options:
+# - Center the mesh on the origin (useful for small surface patches saved in body-centric coordinates)
+# - Keep the mesh geometry fixed so only the colormap changes frame-to-frame
+CENTER_MESH_AT_ORIGIN = False
+ROTATE_MESH = True
+
 def get_output_folders(base_dir):
     """Retrieve all folders in the base directory sorted by modification time."""
     folders = [f for f in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, f))]
@@ -89,6 +95,10 @@ def run_saved_animation(json_file, npz_file):
     # Call the animate_model function; pass output_dir so dome data loads from same folder
     output_dir = os.path.dirname(json_file)
     kwargs['output_dir'] = output_dir
+
+    # Keep the model fixed and recentered (map view)
+    kwargs.setdefault('center_mesh_at_origin', CENTER_MESH_AT_ORIGIN)
+    kwargs.setdefault('rotate_mesh', ROTATE_MESH)
     print("Running animation...")
     animate_model(*args, animation_debug_mode=True, **kwargs)
     print("Animation complete.")

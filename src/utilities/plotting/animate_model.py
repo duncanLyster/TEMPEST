@@ -19,11 +19,22 @@ import numpy as np
 import datetime
 import os
 import pandas as pd
+import re
 from matplotlib.widgets import Button
 from src.utilities.locations import Locations
 from src.utilities.utils import conditional_print
 import h5py
 from src.model.facet import Facet
+
+def sanitize_filename(filename):
+    """Remove or replace special characters in filename to ensure cross-platform compatibility."""
+    # Replace spaces with underscores
+    filename = filename.replace(' ', '_')
+    # Remove special characters that can cause filesystem issues
+    filename = re.sub(r'[^\w\-_]', '', filename)
+    # Replace multiple underscores with single underscore
+    filename = re.sub(r'_+', '_', filename)
+    return filename
 
 def debug_print(state, *args, **kwargs):
     """Print debug messages only if animation_debug_mode is enabled."""
@@ -62,6 +73,7 @@ class AnimationState:
         self.facet_areas = None
         self.last_camera_angles = None  # Only print camera direction when it changes
         self.highlights_need_update = False
+        self.rotate_mesh = True
 
 def get_next_color(state):
     color = state.color_cycle[state.color_index % len(state.color_cycle)]
@@ -206,7 +218,7 @@ def plot_picked_cell_over_time(state, cell_id, plotter, pv_mesh, plotted_variabl
                         df.index.name = 'Local Time (hours)'
                         
                         # Create a valid filename from the axis label
-                        property_name = axis_label.lower().replace(' ', '_')
+                        property_name = sanitize_filename(axis_label.lower())
                         timestamp = datetime.datetime.now().strftime("%H%M%S")
                         filename = os.path.join(run_dir, f'{property_name}{property_suffix}_vs_timestep_{timestamp}.csv')
                         df.to_csv(filename)
@@ -368,9 +380,11 @@ def convert_to_local_time(state, global_time_data, facet_normal, sunlight_direct
     
     return np.roll(global_time_data, shift)
 
-def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction, 
-                  timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity, plot_title, axis_label, animation_frames, 
-                  save_animation, save_animation_name, background_colour, dome_radius_factor=1.0, colour_map='coolwarm', apply_kernel_based_roughness=False, pre_selected_facets=[1220, 845], animation_debug_mode=False, output_dir=None):
+def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction,
+                  timesteps_per_day, solar_distance_au, rotation_period_hr, emissivity, plot_title, axis_label, animation_frames,
+                  save_animation, save_animation_name, background_colour, dome_radius_factor=1.0, colour_map='coolwarm',
+                  apply_kernel_based_roughness=False, pre_selected_facets=[1220, 845], animation_debug_mode=False,
+                  output_dir=None, center_mesh_at_origin=False, rotate_mesh=True):
     """
     Animate a 3D model with temperature or other variable data.
     
@@ -391,11 +405,16 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
         background_colour (str): Background color of the plot
         colour_map (str): Name of the colormap to use
         pre_selected_facets (list): List of facet IDs to pre-select
+        center_mesh_at_origin (bool): Translate the mesh so its bounding-box center is at the origin.
+        rotate_mesh (bool): If False, keep the mesh geometry fixed and only update scalars per frame.
     """
     # Lazy import of pyvista and vtk - only import when animation is actually needed
     # This prevents slow startup when animation features aren't being used
     import pyvista as pv
     import vtk
+
+    # Hack to make background colour white
+    background_colour = 'white'
 
     start_time = time.time()
     # Radiance mode: if HDF5 subfacet data exists, load it instead of STL
@@ -420,7 +439,14 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     if shape_mesh.vectors.shape[0] != plotted_variable_array.shape[0]:
         print("The plotted variable array must have the same number of rows as the number of cells in the shape model.")
         return
-    vertices = shape_mesh.points.reshape(-1, 3)
+    vertices = shape_mesh.points.reshape(-1, 3).copy()
+    original_vertices = vertices.copy()
+
+    if center_mesh_at_origin:
+        mins = vertices.min(axis=0)
+        maxs = vertices.max(axis=0)
+        mesh_center = 0.5 * (mins + maxs)
+        vertices = vertices - mesh_center
     faces = [[3, 3*i, 3*i+1, 3*i+2] for i in range(shape_mesh.vectors.shape[0])]
     pv_mesh = pv.PolyData(vertices, faces)
     pv_mesh.cell_data[axis_label] = plotted_variable_array[:, 0]
@@ -446,9 +472,10 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     state.timesteps_per_day = timesteps_per_day
     state.shape_model_name = path_to_shape_model_file
     state.facet_normals = facet_normals
-    state.original_vertices = vertices  # Store original unrotated vertices for lat/lon calculation
+    state.original_vertices = original_vertices  # Store original unrotated, untranslated vertices for lat/lon calculation
     state.sunlight_direction = sunlight_direction
     state.rotation_axis = rotation_axis
+    state.rotate_mesh = rotate_mesh
     if emissivity is None:
         raise ValueError("emissivity must be specified - it is a critical physical parameter")
     state.simulation_emissivity = emissivity
@@ -703,10 +730,14 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
             state.current_frame = (state.current_frame + 1) % state.timesteps_per_day
             state.cumulative_rotation = (state.current_frame / state.timesteps_per_day) * 2 * math.pi
 
-        # Apply rotation
-        rot_mat = np.array(rotation_matrix(rotation_axis, state.cumulative_rotation))
-        rotated_vertices = vertices.dot(rot_mat.T)
-        pv_mesh.points = rotated_vertices
+        # Apply rotation (optional)
+        if getattr(state, 'rotate_mesh', True):
+            rot_mat = np.array(rotation_matrix(rotation_axis, state.cumulative_rotation))
+            rotated_vertices = vertices.dot(rot_mat.T)
+            pv_mesh.points = rotated_vertices
+        else:
+            # Keep geometry fixed; only update scalars over time
+            pv_mesh.points = vertices
         
         # Highlight meshes will be updated after mesh rotation via update_highlight_mesh()
         

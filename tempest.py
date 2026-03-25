@@ -308,6 +308,8 @@ def main():
 
             sys.exit()
 
+    conditional_print(config.silent_mode, f"Insolation calculation complete. Preparing for thermal simulation...\n")
+
     if config.animate_shadowing:
         conditional_print(config.silent_mode,  f"Preparing shadowing visualisation.\n")
 
@@ -346,9 +348,11 @@ def main():
         fig_histogram.show()
 
     numba_visible_facets = List()
+    conditional_print(config.silent_mode, f"Converting visible facets to numba format...")
     for facets in thermal_data.visible_facets:
         numba_visible_facets.append(np.array(facets, dtype=np.int64))
     thermal_data.visible_facets = numba_visible_facets
+    conditional_print(config.silent_mode, f"Visible facets converted.\n")
 
     if config.animate_secondary_radiation_view_factors:
         selected_facet = 1454  # Change this to the index of the facet you're interested in

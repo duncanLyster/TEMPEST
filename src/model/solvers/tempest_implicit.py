@@ -1,5 +1,6 @@
 import numpy as np
 from numba import jit
+import gc
 from .base_solver import TemperatureSolver
 from src.utilities.utils import conditional_print
 
@@ -288,6 +289,11 @@ class TempestImplicitSolver(TemperatureSolver):
             
             comparison_temps = current_day_temperature[:, 0].copy()
             day += 1
+            
+            # OPTIMIZATION: Explicit garbage collection after each day to free worker memory
+            # This is especially important for high-resolution models (>200k facets)
+            if day % 2 == 0:  # Every 2 days
+                gc.collect()
 
         return {
             "final_day_temperatures": current_day_temperature,
