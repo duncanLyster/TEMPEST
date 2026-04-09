@@ -52,7 +52,7 @@ class Simulation:
         user_timesteps = getattr(self, 'timesteps_per_day', None)
         
         # Stability calculation (CFL limits)
-        # Use a safety factor to ensure const3 is well below 0.5 to prevent ringing
+        # Use a safety factor to ensure const3 is well below 0.5
         cfl_safety_factor = 0.8
         cfl_denominator = cfl_safety_factor * (self.layer_thickness**2 / (2 * self.thermal_diffusivity))
         timesteps_cfl = int(round(self.rotation_period_s / cfl_denominator))
@@ -69,7 +69,7 @@ class Simulation:
                 print(f"  The explicit solver will likely produce unphysical results (e.g. all")
                 print(f"  temperatures dropping to 2.7 K).")
                 print(f"")
-                print(f"  Fix: either remove 'timesteps_per_day' from your config to let TEMPEST")
+                print(f"  Fix: either remove/comment out 'timesteps_per_day' from your config to let TEMPEST")
                 print(f"  choose automatically, or increase it to >= {timesteps_cfl}.")
                 print("=" * 80 + "\n")
             return int(user_timesteps)

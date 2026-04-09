@@ -400,11 +400,9 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
                 pbar.update(1)
                 
         total_scattered_light += scattered_light
-        
-        # OPTIMIZATION: Explicit garbage collection after each iteration to free worker memory
-        # Before next iteration, liberate scattered_light array
-        del scattered_light
-        gc.collect()
+    
+    # OPTIMIZATION: Explicit garbage collection after all iterations to free worker memory
+    gc.collect()
     
     # OPTIMIZATION: Accumulate directly into thermal_data.insolation instead of creating intermediate copies
     # Convert accumulated float32 back to float64 and add to the original insolation

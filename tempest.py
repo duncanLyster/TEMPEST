@@ -743,49 +743,50 @@ def main():
 
     conditional_print(config.silent_mode,  f"Model run complete.\n")
 
-    # Export insolation data for all facets
-    # Note: thermal_data.insolation contains absorbed insolation (insolation * (1-albedo))
-    # Convert to actual insolation by dividing by (1-albedo)
-    conditional_print(config.silent_mode, "Exporting insolation data to CSV...")
-    degrees = np.linspace(0, 360, simulation.timesteps_per_day, endpoint=False)
-    os.makedirs('insolation_data', exist_ok=True)
-    
-    # Convert absorbed insolation to actual insolation
-    # thermal_data.insolation = actual_insolation * (1 - albedo)
-    # Therefore: actual_insolation = thermal_data.insolation / (1 - albedo)
-    one_minus_albedo = 1.0 - simulation.albedo
-    if abs(one_minus_albedo) < 1e-10:
-        conditional_print(config.silent_mode, "WARNING: Albedo is 1.0, cannot convert to actual insolation. Saving absorbed insolation as-is.")
-        actual_insolation = thermal_data.insolation.copy()
-    else:
-        actual_insolation = thermal_data.insolation / one_minus_albedo
-    
-    # Create a combined DataFrame with all facets
-    insolation_dict = {'rotation_deg': degrees}
-    n_facets = len(shape_model)
-    
-    # Add each facet's insolation as a column
-    for idx in range(n_facets):
-        insolation_dict[f'facet_{idx}_insolation_Wm2'] = actual_insolation[idx]
-    
-    # Save combined CSV with all facets
-    df_combined = pd.DataFrame(insolation_dict)
-    combined_csv_path = 'insolation_data/all_facets_insolation.csv'
-    df_combined.to_csv(combined_csv_path, index=False)
-    conditional_print(config.silent_mode, f"Combined insolation data saved to {combined_csv_path}")
-    
-    # Also save individual CSV files for each facet
-    for idx in range(n_facets):
-        try:
-            df_ins = pd.DataFrame({
-                'rotation_deg': degrees, 
-                'insolation_Wm2': actual_insolation[idx]
-            })
-            df_ins.to_csv(f'insolation_data/facet_{idx}.csv', index=False)
-        except Exception as e:
-            conditional_print(config.silent_mode, f"  Error exporting insolation for facet {idx}: {e}")
-    
-    conditional_print(config.silent_mode, f"Insolation data exported for {n_facets} facets")
+    # Export insolation data for all facets (if enabled)
+    if config.save_insolation_data:
+        # Note: thermal_data.insolation contains absorbed insolation (insolation * (1-albedo))
+        # Convert to actual insolation by dividing by (1-albedo)
+        conditional_print(config.silent_mode, "Exporting insolation data to CSV...")
+        degrees = np.linspace(0, 360, simulation.timesteps_per_day, endpoint=False)
+        os.makedirs('insolation_data', exist_ok=True)
+        
+        # Convert absorbed insolation to actual insolation
+        # thermal_data.insolation = actual_insolation * (1 - albedo)
+        # Therefore: actual_insolation = thermal_data.insolation / (1 - albedo)
+        one_minus_albedo = 1.0 - simulation.albedo
+        if abs(one_minus_albedo) < 1e-10:
+            conditional_print(config.silent_mode, "WARNING: Albedo is 1.0, cannot convert to actual insolation. Saving absorbed insolation as-is.")
+            actual_insolation = thermal_data.insolation.copy()
+        else:
+            actual_insolation = thermal_data.insolation / one_minus_albedo
+        
+        # Create a combined DataFrame with all facets
+        insolation_dict = {'rotation_deg': degrees}
+        n_facets = len(shape_model)
+        
+        # Add each facet's insolation as a column
+        for idx in range(n_facets):
+            insolation_dict[f'facet_{idx}_insolation_Wm2'] = actual_insolation[idx]
+        
+        # Save combined CSV with all facets
+        df_combined = pd.DataFrame(insolation_dict)
+        combined_csv_path = 'insolation_data/all_facets_insolation.csv'
+        df_combined.to_csv(combined_csv_path, index=False)
+        conditional_print(config.silent_mode, f"Combined insolation data saved to {combined_csv_path}")
+        
+        # Also save individual CSV files for each facet
+        for idx in range(n_facets):
+            try:
+                df_ins = pd.DataFrame({
+                    'rotation_deg': degrees, 
+                    'insolation_Wm2': actual_insolation[idx]
+                })
+                df_ins.to_csv(f'insolation_data/facet_{idx}.csv', index=False)
+            except Exception as e:
+                conditional_print(config.silent_mode, f"  Error exporting insolation for facet {idx}: {e}")
+        
+        conditional_print(config.silent_mode, f"Insolation data exported for {n_facets} facets")
 
 # Call the main program with interrupt handling
 if __name__ == "__main__":

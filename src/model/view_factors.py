@@ -176,23 +176,34 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     
     return view_factors
 
-def process_view_factors_chunk(all_vertices, all_normals, all_areas, visible_facets_list, 
+def process_view_factors_chunk(all_vertices, all_normals, all_areas, chunk_visible_facets, 
                                start_idx, end_idx, n_rays):
     """
     Process a chunk of subject facets for view factor calculations.
-    Accepts pre-extracted numpy arrays instead of full shape_model/thermal_data
+    Accepts pre-extracted numpy arrays AND ONLY the relevant chunk of visible_facets
     to avoid massive pickle overhead in multiprocessing.
     Returns a list of view factors and any warnings generated.
+    
+    Args:
+        all_vertices: full vertices array for all facets (needed for test vertices lookup)
+        all_normals: normals for all facets
+        all_areas: areas for all facets
+        chunk_visible_facets: visible_facets only for facets in range [start_idx, end_idx)
+                              (length = end_idx - start_idx)
+        start_idx: starting facet index
+        end_idx: ending facet index
+        n_rays: number of rays for view factor calculation
     """
     chunk_view_factors = []
     warnings = []
     
-    for i in range(start_idx, end_idx):
-        visible_indices = visible_facets_list[i]
+    for local_i in range(len(chunk_visible_facets)):
+        global_i = start_idx + local_i
+        visible_indices = chunk_visible_facets[local_i]
         
-        subject_vertices = all_vertices[i]
-        subject_area = all_areas[i]
-        subject_normal = all_normals[i]
+        subject_vertices = all_vertices[global_i]
+        subject_area = all_areas[global_i]
+        subject_normal = all_normals[global_i]
         test_vertices = all_vertices[visible_indices].reshape(-1, 3, 3)
         test_areas = all_areas[visible_indices]
 
@@ -203,7 +214,7 @@ def process_view_factors_chunk(all_vertices, all_normals, all_areas, visible_fac
 
         if np.any(np.isnan(view_factors)) or np.any(np.isinf(view_factors)):
             warnings.append({
-                'facet': i,
+                'facet': global_i,
                 'view_factors': view_factors.copy(),
                 'visible_facets': visible_indices.copy()
             })
@@ -221,13 +232,13 @@ def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
     locations = Locations()
     view_factors_filename = locations.get_view_factors_path(shape_model_hash)
 
-    # Try to load existing view factors first
-    if os.path.exists(view_factors_filename):
+    # Try to load existing view factors first (unless bypass flag is set)
+    if not config.force_recalculate_view_factors and os.path.exists(view_factors_filename):
         with np.load(view_factors_filename, allow_pickle=True) as data:
             conditional_print(config.silent_mode, "Loading existing view factors...")
             return list(data['view_factors'])
 
-    conditional_print(config.silent_mode, "No existing view factors found.")
+    conditional_print(config.silent_mode, "No existing view factors found." if not config.force_recalculate_view_factors else "Recalculating view factors (force_recalculate_view_factors=true)...")
     
     # Get number of jobs and validate
     actual_n_jobs = config.validate_jobs()
@@ -255,9 +266,12 @@ def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
     conditional_print(config.silent_mode, f"Number of chunks: {n_chunks:,}")
 
     try:
+        # MEMORY OPTIMIZATION: Pass only the chunk of visible_facets needed by each worker
+        # instead of the entire list, to avoid duplicating ~79 GB across 32 workers
         results = Parallel(n_jobs=actual_n_jobs, verbose=10, backend='loky')(
             delayed(process_view_factors_chunk)(
-                all_vertices, all_normals, all_areas, visible_facets_list,
+                all_vertices, all_normals, all_areas,
+                visible_facets_list[start_idx:end_idx],  # NEW: Only pass subset needed
                 start_idx, end_idx, n_rays
             ) for start_idx, end_idx in chunks
         )
@@ -321,12 +335,12 @@ def calculate_thermal_view_factors(shape_model, thermal_data, config):
     locations = Locations()
     thermal_vf_filename = locations.get_thermal_view_factors_path(shape_model_hash)
 
-    if os.path.exists(thermal_vf_filename):
+    if not config.force_recalculate_thermal_view_factors and os.path.exists(thermal_vf_filename):
         with np.load(thermal_vf_filename, allow_pickle=True) as data:
             conditional_print(config.silent_mode, "Loading existing thermal view factors...")
             return list(data['thermal_view_factors'])
 
-    conditional_print(config.silent_mode, "Calculating thermal view factors...")
+    conditional_print(config.silent_mode, "Calculating thermal view factors..." if not config.force_recalculate_thermal_view_factors else "Recalculating thermal view factors (force_recalculate_thermal_view_factors=true)...")
     
     actual_n_jobs = config.validate_jobs()
     n_facets = len(shape_model)

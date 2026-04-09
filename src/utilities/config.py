@@ -131,6 +131,13 @@ class Config:
         # Phase curve toggles (legacy keys)
         self.calculate_visible_phase_curve = self.config_data.get('calculate_visible_phase_curve', False)
         self.calculate_thermal_phase_curve = self.config_data.get('calculate_thermal_phase_curve', False)
+        
+        # Cache bypass flags (for testing and debugging)
+        self.force_recalculate_view_factors = self.config_data.get('force_recalculate_view_factors', False)
+        self.force_recalculate_thermal_view_factors = self.config_data.get('force_recalculate_thermal_view_factors', False)
+        
+        # Output flags
+        self.save_insolation_data = self.config_data.get('save_insolation_data', False)
 
     def validate_jobs(self):
         """

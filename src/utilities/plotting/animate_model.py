@@ -523,35 +523,38 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     min_val = np.min(plotted_variable_array)
     max_val = np.max(plotted_variable_array)
 
-    num_labels = 5
-
-    def round_to_nice_number(x):
-        if x == 0:
-            return 0
-        exponent = math.floor(math.log10(abs(x)))
-        coeff = x / (10**exponent)
-        if coeff < 1.5:
-            nice_coeff = 1
-        elif coeff < 3:
-            nice_coeff = 2
-        elif coeff < 7:
-            nice_coeff = 5
-        else:
-            nice_coeff = 10
-        return nice_coeff * (10**exponent)
-
-    nice_min_val = round_to_nice_number(min_val)
-    nice_max_val = round_to_nice_number(max_val)
-
-    labels = np.linspace(nice_min_val, nice_max_val, num_labels)
-
+    # Create 7 labels: min + 5 intermediate + max
+    num_labels = 7
+    labels = np.linspace(min_val, max_val, num_labels)
+    
+    # Determine decimal places based on range - use consistent precision
+    value_range = max_val - min_val
+    if value_range > 0:
+        exponent = math.floor(math.log10(value_range))
+        # Calculate decimal places so we show meaningful variation
+        decimal_places = max(1, -exponent + 1)
+    else:
+        decimal_places = 1
+    
+    # Set up scalar bar with custom labels
+    scalar_bar = plotter.scalar_bar
+    
+    # Create VTK array for label values
     vtk_labels = vtk.vtkDoubleArray()
     vtk_labels.SetNumberOfValues(len(labels))
     for i, label in enumerate(labels):
         vtk_labels.SetValue(i, label)
-
-    plotter.scalar_bar.SetCustomLabels(vtk_labels)
-    plotter.scalar_bar.SetUseCustomLabels(True)
+    
+    scalar_bar.SetCustomLabels(vtk_labels)
+    scalar_bar.SetUseCustomLabels(True)
+    
+    # Set label format string for consistent decimal places
+    format_string = f'%.{decimal_places}f'
+    scalar_bar.SetLabelFormat(format_string)
+    
+    # Configure scalar bar for better visibility
+    scalar_bar.SetNumberOfLabels(num_labels)
+    scalar_bar.GetTitleTextProperty().SetColor(text_color_rgb)
 
     # After creating the plotter and before adding text elements
     # Get the initial data range

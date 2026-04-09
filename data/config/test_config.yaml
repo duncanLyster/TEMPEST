@@ -8,13 +8,13 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "67P_not_to_scale_1666_facets.stl"  # Name of the shape model file in data/shape_models/
+shape_model_file: "500m_ico_sphere_80_facets.stl"  # Name of the shape model file in data/shape_models/
 shape_model_directory: "data/shape_models/"    
 
 # Physical parameters
-thermal_inertia:        100    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
+thermal_inertia:        300    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
 emissivity:             1         
-albedo:                 0.9              
+albedo:                 0.045              
 beaming_factor:         1.0
 
 # Model structure parameters
@@ -87,3 +87,10 @@ calculate_energy_terms: false                   # Whether to calculate and store
 animate_secondary_radiation_view_factors: false # 3D animation showing secondary radiation view factors
 animate_secondary_contributions: false          # 3D animation showing radiative self-heating contributions
 plot_energy_terms: false                        # Plot energy balance terms
+
+# Cache bypass flags (for testing and debugging)
+force_recalculate_view_factors: false           # Set to true to bypass cached view factors
+force_recalculate_thermal_view_factors: false   # Set to true to bypass cached thermal view factors
+
+# Output flags
+save_insolation_data: false                     # Set to true to save insolation data to CSV files (can use significant disk space)

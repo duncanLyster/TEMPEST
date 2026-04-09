@@ -90,3 +90,10 @@ calculate_energy_terms: false                   # Whether to calculate and store
 animate_secondary_radiation_view_factors: false # 3D animation showing secondary radiation view factors
 animate_secondary_contributions: false          # 3D animation showing radiative self-heating contributions
 plot_energy_terms: false                        # Plot energy balance terms
+
+# Cache bypass flags (for testing and debugging)
+force_recalculate_view_factors: false           # Set to true to bypass cached view factors
+force_recalculate_thermal_view_factors: false   # Set to true to bypass cached thermal view factors
+
+# Output flags
+save_insolation_data: false                     # Set to true to save insolation data to CSV files (can use significant disk space)
