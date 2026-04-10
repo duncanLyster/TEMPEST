@@ -359,9 +359,13 @@ def calculate_thermal_view_factors(shape_model, thermal_data, config):
              for i in range(n_chunks)]
 
     try:
+        # MEMORY OPTIMIZATION: Pass only the chunk of visible_facets and vf_list needed by each worker
+        # instead of the entire lists, to avoid duplicating ~gigabytes across 32 workers
         results = Parallel(n_jobs=actual_n_jobs, verbose=10, backend='loky')(
             delayed(process_thermal_view_factors_chunk)(
-                all_positions, all_normals, visible_facets_list, vf_list,
+                all_positions, all_normals,
+                visible_facets_list[start_idx:end_idx],  # NEW: Only pass subset needed
+                vf_list[start_idx:end_idx],              # NEW: Only pass subset needed
                 epf_lut, start_idx, end_idx
             ) for start_idx, end_idx in chunks
         )
@@ -380,15 +384,27 @@ def calculate_thermal_view_factors(shape_model, thermal_data, config):
         print(f"Error calculating thermal view factors: {str(e)}")
         raise
 
-def process_thermal_view_factors_chunk(all_positions, all_normals, visible_facets_list, vf_list,
+def process_thermal_view_factors_chunk(all_positions, all_normals, chunk_visible_facets, chunk_vf_list,
                                        epf_lut, start_idx, end_idx):
     """Process a chunk of facets for thermal view factor calculation.
-    Accepts pre-extracted numpy arrays to avoid massive pickle overhead."""
+    Accepts pre-extracted numpy arrays AND ONLY the relevant chunk of visible_facets and vf_list
+    to avoid massive pickle overhead in multiprocessing.
+    
+    Args:
+        all_positions: full positions array for all facets (needed for target lookup)
+        all_normals: normals for all facets
+        chunk_visible_facets: visible_facets only for facets in range [start_idx, end_idx)
+        chunk_vf_list: view factors only for facets in range [start_idx, end_idx)
+        epf_lut: emission phase function lookup table
+        start_idx: starting facet index
+        end_idx: ending facet index
+    """
     chunk_results = []
     
-    for i in range(start_idx, end_idx):
-        visible_facets = visible_facets_list[i]
-        view_factors = vf_list[i]
+    for local_i in range(len(chunk_visible_facets)):
+        global_i = start_idx + local_i
+        visible_facets = chunk_visible_facets[local_i]
+        view_factors = chunk_vf_list[local_i]
         
         # Ensure both arrays have the same length and are not empty
         if len(visible_facets) == 0 or len(view_factors) == 0:
@@ -396,14 +412,14 @@ def process_thermal_view_factors_chunk(all_positions, all_normals, visible_facet
             continue
         
         if len(visible_facets) != len(view_factors):
-            raise ValueError(f"Mismatch between visible_facets ({len(visible_facets)}) and view_factors ({len(view_factors)}) for facet {i}")
+            raise ValueError(f"Mismatch between visible_facets ({len(visible_facets)}) and view_factors ({len(view_factors)}) for facet {global_i}")
             
         # Calculate emission angles
         target_centers = all_positions[visible_facets]
-        direction_vectors = target_centers - all_positions[i]
+        direction_vectors = target_centers - all_positions[global_i]
         direction_vectors /= np.linalg.norm(direction_vectors, axis=1)[:, np.newaxis]
         
-        cos_emission = np.einsum('ij,j->i', direction_vectors, all_normals[i])
+        cos_emission = np.einsum('ij,j->i', direction_vectors, all_normals[global_i])
         cos_emission = np.clip(cos_emission, -1.0, 1.0)
         emission_angles = np.degrees(np.arccos(cos_emission))
         
