@@ -7,6 +7,7 @@ NOTE: Currently this requires a lot of RAM - look for ways to reduce this and ch
 '''
 
 import time
+import gc
 import numpy as np
 from numba import jit
 from joblib import Parallel, delayed
