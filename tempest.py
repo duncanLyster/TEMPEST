@@ -22,6 +22,7 @@ import sys
 import math
 import argparse
 import time
+import gc
 from pathlib import Path
 from datetime import datetime
 
@@ -414,6 +415,13 @@ def main():
 
     conditional_print(config.silent_mode,  f"Running main simulation loop.\n")
     conditional_print(config.silent_mode,  f"Convergence target: {simulation.convergence_target} K with {config.convergence_method} convergence method.\n")
+
+    # OPTIMIZATION: Clean up shape_model object before solver (not needed anymore, frees ~1-2 GB)
+    # Solver only needs thermal_data (insolation, view factors, visible facets), not the facet objects
+    conditional_print(config.silent_mode, "Freeing shape model from memory for solver phase...")
+    shape_model = None
+    gc.collect()
+    conditional_print(config.silent_mode, "Memory freed.\n")
 
     # Run solver
     solver_start_time = time.time()

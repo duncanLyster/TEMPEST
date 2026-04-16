@@ -82,6 +82,12 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     
     conditional_print(config.silent_mode, 
                     f"Time taken to calculate insolation: {insolation_end - insolation_start:.2f} seconds")
+    
+    # OPTIMIZATION: Explicitly clean up parallel worker pool to free memory before next phase
+    # Loky keeps worker processes alive and they can cache large chunks of data
+    del parallel, results
+    gc.collect()
+    conditional_print(config.silent_mode, "Cleaned up parallel workers.")
 
     if config.n_scatters > 0:
         conditional_print(config.silent_mode, 
@@ -402,7 +408,9 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
         total_scattered_light += scattered_light
     
     # OPTIMIZATION: Explicit garbage collection after all iterations to free worker memory
+    del parallel, delayed_funcs
     gc.collect()
+    conditional_print(config.silent_mode, "Cleaned up scattering workers.")
     
     # OPTIMIZATION: Accumulate directly into thermal_data.insolation instead of creating intermediate copies
     # Convert accumulated float32 back to float64 and add to the original insolation
