@@ -498,7 +498,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.add_key_event('r', lambda: reset_camera(state, plotter))  # Add the new key event for camera reset
 
     cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
-    plotter.add_mesh(cylinder, color='green')
+    # plotter.add_mesh(cylinder, color='green')
 
     sunlight_start = [sunlight_direction[i] * max_dimension for i in range(3)]
     sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], scale=max_dimension * 0.3)
@@ -849,3 +849,220 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
             debug_print(state, f"[ERROR] Frame {state.current_frame} out of bounds for plotted data length {len(ydata)} (facet {facet_id})")
 
     plotter.render()
+def plot_static_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction,
+                     solar_distance_au, rotation_period_hr, emissivity, plot_title, axis_label, 
+                     background_colour='black', dome_radius_factor=1.0, colour_map='coolwarm',
+                     apply_kernel_based_roughness=False):
+    """
+    Create a static 3D visualization of a shape model with scalar values (e.g., peak temperatures).
+    
+    Args:
+        path_to_shape_model_file (str): Path to the STL file
+        plotted_variable_array (np.ndarray): 1D array of values to plot (one per facet)
+        rotation_axis (np.ndarray): Axis of rotation
+        sunlight_direction (np.ndarray): Direction of sunlight
+        solar_distance_au (float): Solar distance in AU
+        rotation_period_hr (float): Rotation period in hours
+        emissivity (float): Emissivity of the surface
+        plot_title (str): Title of the plot
+        axis_label (str): Label for the colorbar
+        background_colour (str): Background color of the plot
+        dome_radius_factor (float): Scale factor for dome radius
+        colour_map (str): Name of the colormap to use
+        apply_kernel_based_roughness (bool): Whether kernel-based roughness is applied
+    
+    User-Editable Parameters (modify these values in the code for advanced customization):
+        - use_orthographic: Set to True for orthographic projection, False for perspective
+        - camera_direction: Camera view direction as [x, y, z]. Default: [0, 0, -1] (view from -z)
+        - show_rotation_axis: Set to False to hide rotation axis cylinder visualization
+        - show_sunlight: Set to False to hide sunlight arrow visualization
+    """
+    # ============================================================================
+    # USER-EDITABLE PARAMETERS (modify these for advanced customization)
+    # ============================================================================
+    use_orthographic = True          # Use orthographic projection (True) or perspective (False)
+    camera_direction = np.array([0, 0, -1])  # View direction (normalize to unit vector)
+    show_rotation_axis = False       # Show/hide rotation axis visualization
+    show_sunlight = False            # Show/hide sunlight direction visualization
+    # ============================================================================
+    
+    # Lazy import of pyvista and vtk
+    import pyvista as pv
+    import vtk
+    
+    start_time = time.time()
+    
+    try:
+        # Load the shape model
+        shape_mesh = mesh.Mesh.from_file(path_to_shape_model_file)
+    except Exception as e:
+        print(f"Failed to load shape model: {e}")
+        return
+    
+    # Validate array dimensions
+    if shape_mesh.vectors.shape[0] != plotted_variable_array.shape[0]:
+        print("The plotted variable array must have the same number of rows as the number of cells in the shape model.")
+        return
+    
+    # Create PyVista mesh
+    vertices = shape_mesh.points.reshape(-1, 3).copy()
+    faces = [[3, 3*i, 3*i+1, 3*i+2] for i in range(shape_mesh.vectors.shape[0])]
+    pv_mesh = pv.PolyData(vertices, faces)
+    pv_mesh.cell_data[axis_label] = plotted_variable_array
+    
+    # Set up the plotter
+    background_colour = 'white'  # Enforce white background
+    text_color = 'black'
+    bar_color = (0, 0, 0)
+    
+    bounding_box = pv_mesh.bounds
+    max_dimension = max(bounding_box[1] - bounding_box[0], 
+                       bounding_box[3] - bounding_box[2], 
+                       bounding_box[5] - bounding_box[4])
+    
+    # Normalize camera direction
+    camera_direction = camera_direction / np.linalg.norm(camera_direction)
+    
+    # Calculate camera position to view from specified direction
+    # Position camera far enough to see the entire object
+    center = np.array(pv_mesh.center)
+    camera_pos = center + camera_direction * max_dimension * 3
+    
+    plotter = pv.Plotter()
+    plotter.enable_anti_aliasing()
+    plotter.background_color = background_colour
+    
+    # Set orthographic or perspective projection
+    if use_orthographic:
+        plotter.camera.parallel_projection = True
+    else:
+        plotter.camera.parallel_projection = False
+    
+    # Set camera position and orientation
+    plotter.camera.position = camera_pos
+    plotter.camera.focal_point = center
+    plotter.camera.up = np.array([0, -1, 0])  # Y-axis points up
+    
+    # For orthographic projection, set parallel_scale to fit the entire model
+    if use_orthographic:
+        # Calculate parallel_scale based on bounding box
+        # parallel_scale is the height of the viewport in world units
+        x_range = bounding_box[1] - bounding_box[0]
+        y_range = bounding_box[3] - bounding_box[2]
+        z_range = bounding_box[5] - bounding_box[4]
+        
+        # For -z view, we care about x and y extents; add 30% padding
+        viewport_height = max(x_range, y_range) * 1.3 / 2
+        plotter.camera.parallel_scale = viewport_height
+    
+    # Add the mesh with the scalar values
+    plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False, 
+                    lighting=False, smooth_shading=True)
+    
+    # Add visualization aids (rotation axis and sunlight direction)
+    if show_rotation_axis:
+        cylinder = pv.Cylinder(center=center, direction=rotation_axis, 
+                              height=max_dimension, radius=max_dimension/200)
+        plotter.add_mesh(cylinder, color='green', opacity=0.3)
+    
+    if show_sunlight:
+        sunlight_start = center + np.array(sunlight_direction) * max_dimension
+        sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], 
+                                 scale=max_dimension * 0.3)
+        plotter.add_mesh(sunlight_arrow, color='yellow')
+    
+    # Set up scalar bar
+    text_color_rgb = (0, 0, 0)
+    plotter.scalar_bar.GetLabelTextProperty().SetColor(bar_color)
+    plotter.scalar_bar.SetPosition(0.3, 0.05)
+    plotter.scalar_bar.GetLabelTextProperty().SetJustificationToCentered()
+    plotter.scalar_bar.SetTitle(axis_label)
+    plotter.scalar_bar.GetTitleTextProperty().SetColor(text_color_rgb)
+    
+    # Set up scalar bar labels
+    min_val = np.min(plotted_variable_array)
+    max_val = np.max(plotted_variable_array)
+    
+    num_labels = 7
+    labels = np.linspace(min_val, max_val, num_labels)
+    
+    # Determine decimal places based on range
+    value_range = max_val - min_val
+    if value_range > 0:
+        exponent = math.floor(math.log10(value_range))
+        decimal_places = max(1, -exponent + 1)
+    else:
+        decimal_places = 1
+    
+    format_string = f'%.{decimal_places}f'
+    scalar_bar = plotter.scalar_bar
+    
+    vtk_labels = vtk.vtkDoubleArray()
+    vtk_labels.SetNumberOfValues(len(labels))
+    for i, label in enumerate(labels):
+        vtk_labels.SetValue(i, label)
+    
+    scalar_bar.SetCustomLabels(vtk_labels)
+    scalar_bar.SetUseCustomLabels(True)
+    scalar_bar.SetLabelFormat(format_string)
+    scalar_bar.SetNumberOfLabels(num_labels)
+    
+    # Add title and information text
+    plotter.add_text(plot_title, position='upper_edge', font_size=12, color=text_color)
+    
+    projection_type = "Orthographic" if use_orthographic else "Perspective"
+    info_text = f"View: {projection_type} from {tuple(np.round(camera_direction, 2))}\nSolar Distance: {solar_distance_au} AU\nRotation Period: {rotation_period_hr} hours"
+    plotter.add_text(info_text, position='upper_right', font_size=10, color=text_color)
+    
+    # Add sliders for min/max scaling
+    data_min = min_val
+    data_max = max_val
+    range_padding = (data_max - data_min) * 0.1
+    
+    def update_min(value):
+        plotter.update_scalar_bar_range((value, data_max))
+        pv_mesh.set_active_scalars(axis_label)
+        plotter.render()
+    
+    def update_max(value):
+        plotter.update_scalar_bar_range((data_min, value))
+        pv_mesh.set_active_scalars(axis_label)
+        plotter.render()
+    
+    plotter.add_slider_widget(
+        callback=update_min,
+        rng=[data_min - range_padding, data_max],
+        value=data_min,
+        title=f"Min {axis_label}",
+        pointa=(0.025, 0.1),
+        pointb=(0.225, 0.1),
+        style='modern'
+    )
+    
+    plotter.add_slider_widget(
+        callback=update_max,
+        rng=[data_min, data_max + range_padding],
+        value=data_max,
+        title=f"Max {axis_label}",
+        pointa=(0.025, 0.22),
+        pointb=(0.225, 0.22),
+        style='modern'
+    )
+    
+    # Display the plot
+    end_time = time.time()
+    print(f'Static plot setup took {end_time - start_time:.2f} seconds.')
+    print(f'Camera position: {camera_pos}, Focal point: {center}')
+    
+    plotter.show()
+    
+    # Clean up
+    plotter.close()
+    plotter.deep_clean()
+    pv.close_all()
+    
+    if 'vtk_labels' in locals():
+        vtk_labels.RemoveAllObservers()
+        del vtk_labels
+    
+    gc.collect()

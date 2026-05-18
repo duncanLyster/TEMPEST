@@ -8,8 +8,9 @@ from animate_model import animate_model
 # Map-style playback options:
 # - Center the mesh on the origin (useful for small surface patches saved in body-centric coordinates)
 # - Keep the mesh geometry fixed so only the colormap changes frame-to-frame
-CENTER_MESH_AT_ORIGIN = False
-ROTATE_MESH = True
+CENTER_MESH_AT_ORIGIN = True
+ROTATE_MESH = False
+COLOUR_MAP = 'RdYlBu_r'
 
 def get_output_folders(base_dir):
     """Retrieve all folders in the base directory sorted by modification time."""
@@ -99,6 +100,7 @@ def run_saved_animation(json_file, npz_file):
     # Keep the model fixed and recentered (map view)
     kwargs.setdefault('center_mesh_at_origin', CENTER_MESH_AT_ORIGIN)
     kwargs.setdefault('rotate_mesh', ROTATE_MESH)
+    kwargs['colour_map'] = COLOUR_MAP
     print("Running animation...")
     animate_model(*args, animation_debug_mode=True, **kwargs)
     print("Animation complete.")

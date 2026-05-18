@@ -1,0 +1,29 @@
+Okay, here is the situation with the WUSTL Deviner PDS node:
+
+1. LEVEL 3 (L3) DATA:
+User already downloaded "tbol" maps from: 
+https://pds-geosciences.wustl.edu/lro/urn-nasa-pds-lro_diviner_derived1/data_derived_gdr_l3/
+
+L3 data are binned over a quasi-monthly basis, separated into a single daytime map and a single nighttime map per month. 
+The user is concerned that because a month is 28 days long, this means the local time sweeps from 6 to 18 hours (a full 12 hour sweep) across the map!
+However, for ANY SPECIFIC LOCATION (like a crater), LRO only passes over it during a few consecutive orbits out of that whole month! It passes over it during roughly ~6 hours of wall-time, which means the local lunar time shifts by practically nothing (about 3 degrees, or 12 minutes of local time). Therefore, even though the map covers a whole 28 day period globally, locally a single pixel only has data from a highly constrained local time.
+But wait! Does L3 average multiple passes from *different* months? No, L3 maps are provided month by month! For instance, "20120114" means January 14 to Feb 10 2012. LRO only sweeps the moon once per month. So each pixel is hit at exactly one solar time during the day and one during the night per month. 
+Conclusion: The user's concern about L3 data being "all over the place" in local time is structurally invalid for *localized* studies! For a specific small crater, the local time in an L3 map is completely constrained to an ~1hr window! Wait... actually if we bin multiple pixels, they are all scanned exactly at the terminator drift rate. Let's check with the `ltim` map from Level 2!
+
+2. LEVEL 2 (L2) DATA:
+Wait! Level 3 DOES NOT provide `ltim` (local time) or `jd` (julian date) maps. We only see `tbol`, `st`, `ra`, `rms`.
+Level 2 (GDR_L2) provides exactly the same time granularities (e.g. 20120114n). And for Level 2, they provide `ltim` maps explicitly! We could download the `ltim` map from Level 2 to prove/check exactly what the local time constraint is for the crater! 
+Oh, but wait, L2 DOES NOT provide `tbol`. L2 only provides `tb3` through `tb9`. The user wants `tbol`... so they HAVE to use L3 for `tbol`, or else calculate it themselves from `tb3-9`.
+But they can use the `ltim` from L2 to perfectly constrain/validate the local time of exactly the same pixels in the L3 map! Because the time chunks (e.g. `20120114n`) perfectly match between L2 and L3.
+
+3. GLOBAL CUMULATIVE PRODUCTS (GCP):
+GCPs are completely different. Instead of binning by Earth-month, they bin the entire 6 year mission directly purely by 0.25 hour local time bins!
+In `/data_derived_gcp/`, you don't download by month. You download by latitude band (e.g. `global_cumul_avg_cyl_00n10n...`). Once downloaded, the `.tab` file has columns: `clon, clat, ltim, t3... tbol`. It gives the average temperature over the whole mission for each specific 0.25 hour local time bin at each location!
+Wait! The user ONLY wants to validate a TPM at *one* specific local time observation. GCP provides the average observed temperature precisely binned at exactly constrained local times!
+However, GCP is provided in huge `156 MB` ASCII `.tab` files for 10-degree latitude bands, which requires downloading the whole file and then filtering it for the crater's lat/lon, rather than displaying an image map straight away.
+
+Strategy options:
+1. Re-assure the user that L3 `tbol` maps actually ARE well constrained locally. Every localized crater on an L3 map is observed at exactly one tight local-time window. They can download the corresponding `ltim` JP2 map from the Level 2 directory to explicitly prove and check the exact local time!
+2. Suggest the GCP datasets. These give perfectly strictly binned local-time `tbol` values across the entire mission!
+
+Option 1 is best because they've already written all the raster streaming code for JP2 images. They just need to stream the L2 `ltim` map to get the exact local time matrix for their crater.

@@ -23,7 +23,7 @@ n_layers:               100          # Number of depth layers in thermal model -
 convergence_method:     "mean"      # Method to determine convergence: 'mean' or 'max' temperature difference between days
 convergence_target:     0.1         # Target temperature difference between days for convergence in K. Higher values will converge faster.
 max_days:               20          # Maximum number of days to run simulation
-min_days:               1           # Minimum number of days to run simulation
+min_days:               3           # Minimum number of days to run simulation
 
 # Orbital and rotational parameters
 solar_distance_au:      5.2           # TEMPEST treats the object as having a perfect circular orbit
@@ -41,7 +41,7 @@ n_scatters:             0           # Set to 0 to disable scattering. 1 or 2 is 
 include_self_heating:   false                # Whether to include thermal radiation between facets
 scattering_lut:         "lambertian.npy"     # Lambertian is the only option currently supported
 emission_lut:           "lambertian_epf.npy" # Lambertian or Lommel-Seeliger are the only options currently supported
-temp_solver:            "tempest_standard"   # Options: "tempest_standard" or "thermprojrs_like"
+temp_solver:            "tempest_standard"   # Options: "tempest_standard" or "tempest_implicit"
 vf_rays:                1000                 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
 
 # TEMPEST Solver parameters: Used with TI and specific_heat_capacity to derive layer depth and skin depth. These should not affect the final temperature distribution once the model has converged.
@@ -50,6 +50,7 @@ specific_heat_capacity: 1000    # J/kg·K
 
 # Animation settings
 animate_final_day_temp_distribution: false  # 3D animation of final day temperatures
+plot_final_day_peak_temp: false             # 3D plot of maximum temperature for each facet (static, non-animated)
 animate_subfacets: false                   # Animate temperatures for sub-facets
 subfacet_facet_index: 37                   # Parent facet index for sub-facet visualization
 animate_shadowing: false                   # 3D animation showing insolation and shadowing

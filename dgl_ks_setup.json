@@ -1,0 +1,23 @@
+{
+  "stl": {
+    "low_poly_98": "/Users/duncan/Desktop/DPhil/TEMPEST/data/shape_models/Itokawa_low_poly.stl",
+    "5k_4915": "/Users/duncan/Desktop/DPhil/TEMPEST/TEMPEST_RAD/diagnostics/DGL_KS_comparison/BinaryThermophysicalModel/TEMPEST_Data/itokawa_5k.stl"
+  },
+  "obj": {
+    "dgl_ks_98": "/Users/duncan/Desktop/DPhil/TEMPEST/TEMPEST_RAD/diagnostics/DGL_KS_comparison/itokawa.obj"
+  },
+  "btpm_temps": {
+    "100_facets_npy": "/Users/duncan/Desktop/DPhil/TEMPEST/TEMPEST_RAD/diagnostics/DGL_KS_comparison/BinaryThermophysicalModel/Output_Data/itokawa_100_facets_T.npy"
+  },
+  "tempest_temps": {
+    "proc0_animation_outputs_2025-08-20_17-07-01": "/Users/duncan/Desktop/DPhil/TEMPEST/data/output/remote_outputs_proc_2/animation_outputs_2025-08-20_17-07-01/combined_animation_data_rough_2025-08-20_17-07-01.h5",
+    "proc1_animation_outputs_2025-08-20_17-05-55": "/Users/duncan/Desktop/DPhil/TEMPEST/data/output/remote_outputs_proc_3/animation_outputs_2025-08-20_17-05-55/combined_animation_data_rough_2025-08-20_17-05-55.h5",
+    "proc2_animation_outputs_2025-08-20_17-07-10": "/Users/duncan/Desktop/DPhil/TEMPEST/data/output/remote_outputs_proc_3/animation_outputs_2025-08-20_17-07-10/combined_animation_data_rough_2025-08-20_17-07-10.h5",
+    "proc3_animation_outputs_2025-08-20_16-56-01": "/Users/duncan/Desktop/DPhil/TEMPEST/data/output/remote_outputs_proc_99/animation_outputs_2025-08-20_16-56-01/combined_animation_data_rough_2025-08-20_16-56-01.h5",
+    "proc4_animation_outputs_2025-08-20_16-56-46": "/Users/duncan/Desktop/DPhil/TEMPEST/data/output/remote_outputs_proc_99/animation_outputs_2025-08-20_16-56-46/combined_animation_data_rough_2025-08-20_16-56-46.h5"
+  },
+  "matching": {
+    "area_based": "/Users/duncan/Desktop/DPhil/TEMPEST/TEMPEST_RAD/diagnostics/DGL_KS_comparison_outputs/DGL_KS_facet_matching_area.npz",
+    "btpm_based": "/Users/duncan/Desktop/DPhil/TEMPEST/TEMPEST_RAD/diagnostics/DGL_KS_comparison_outputs/DGL_KS_facet_matching_btpm.npz"
+  }
+}

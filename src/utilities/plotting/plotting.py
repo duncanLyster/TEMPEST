@@ -96,3 +96,69 @@ def check_remote_and_animate(remote, path_to_shape_model_file, plotted_variable_
             json.dump(json_params, f, indent=2)
 
         print(f"Animation parameters saved in:\nJSON: {json_file}\nNPZ: {npz_file}")
+
+def plot_static_variable(remote, path_to_shape_model_file, plotted_variable_array, rotation_axis, 
+                        sunlight_direction, solar_distance_au, rotation_period_hr, emissivity, **kwargs):
+    """
+    Handles static 3D visualization based on whether remote mode is enabled.
+    For local mode, displays a PyVista 3D plot without animation.
+    For remote mode, saves the visualization parameters to files.
+    
+    Args:
+        remote (bool): Whether running in remote mode
+        path_to_shape_model_file (str): Path to STL file
+        plotted_variable_array (np.ndarray): 1D array of values to plot (one per facet)
+        rotation_axis (np.ndarray): Rotation axis of the body
+        sunlight_direction (np.ndarray): Direction of sunlight
+        solar_distance_au (float): Solar distance in AU
+        rotation_period_hr (float): Rotation period in hours
+        emissivity (float): Surface emissivity
+        **kwargs: Additional parameters like plot_title, axis_label, colour_map, background_colour
+    """
+    if not remote:
+        # Local mode: call the static plotting function from animate_model
+        from src.utilities.plotting.animate_model import plot_static_model
+        
+        # Extract parameters from kwargs
+        plot_title = kwargs.pop('plot_title', 'Peak Temperature Distribution')
+        axis_label = kwargs.pop('axis_label', 'Temperature (K)')
+        background_colour = kwargs.pop('background_colour', 'black')
+        colour_map = kwargs.pop('colour_map', 'coolwarm')
+        dome_radius_factor = kwargs.pop('dome_radius_factor', 1.0)
+        apply_kernel_based_roughness = kwargs.pop('apply_kernel_based_roughness', False)
+        
+        # Call the static plotting function
+        plot_static_model(path_to_shape_model_file, plotted_variable_array, rotation_axis, sunlight_direction,
+                         solar_distance_au, rotation_period_hr, emissivity,
+                         plot_title, axis_label, background_colour, dome_radius_factor=dome_radius_factor,
+                         colour_map=colour_map, apply_kernel_based_roughness=apply_kernel_based_roughness)
+    else:
+        # Remote mode: save parameters to files
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        loc = Locations()
+        output_dir = os.path.join(loc.remote_outputs, f"static_plot_outputs_{timestamp}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Save numpy arrays to NPZ file
+        numpy_arrays = {
+            'plotted_variable_array': plotted_variable_array,
+            'rotation_axis': rotation_axis,
+            'sunlight_direction': sunlight_direction
+        }
+        npz_file = os.path.join(output_dir, 'static_plot_params.npz')
+        np.savez_compressed(npz_file, **numpy_arrays)
+
+        # Save other parameters to JSON file
+        json_params = {
+            'path_to_shape_model_file': path_to_shape_model_file,
+            'solar_distance_au': solar_distance_au,
+            'rotation_period_hr': rotation_period_hr,
+            'emissivity': emissivity,
+            **kwargs
+        }
+
+        json_file = os.path.join(output_dir, 'static_plot_params.json')
+        with open(json_file, 'w') as f:
+            json.dump(json_params, f, indent=2)
+
+        print(f"Static plot parameters saved in:\nJSON: {json_file}\nNPZ: {npz_file}")

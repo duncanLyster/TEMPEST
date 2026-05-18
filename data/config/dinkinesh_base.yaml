@@ -49,6 +49,7 @@ specific_heat_capacity: 1000    # J/kg·K
 
 # Animation settings
 animate_final_day_temp_distribution: true  # 3D animation of final day temperatures
+plot_final_day_peak_temp: false             # 3D plot of maximum temperature for each facet (static, non-animated)
 animate_subfacets: false                   # Animate temperatures for sub-facets
 subfacet_facet_index: 37                   # Parent facet index for sub-facet visualization
 animate_shadowing: false                   # 3D animation showing insolation and shadowing

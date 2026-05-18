@@ -285,7 +285,7 @@ class TempestStandardSolver(TemperatureSolver):
             )
 
             # Check for invalid temperatures
-            for i in range(len(shape_model)):
+            for i in range(len(thermal_data.temperatures)):
                 for time_step in range(simulation.timesteps_per_day):
                     if np.isnan(current_day_temperature[i, time_step]) or np.isinf(current_day_temperature[i, time_step]) or current_day_temperature[i, time_step] < 0:
                         conditional_print(config.silent_mode, f"Invalid temperature {current_day_temperature[i, time_step]} K detected for facet {i} at timestep {time_step}")

@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+import re
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -61,10 +62,10 @@ OBJ_PATH = os.path.join(PROJECT_ROOT, 'TEMPEST_RAD', 'diagnostics',
                          'DGL_KS_comparison', 'itokawa.obj')
 BTPM_TEMP_PATH = os.path.join(PROJECT_ROOT, 'TEMPEST_RAD', 'diagnostics',
                                'DGL_KS_comparison', 'BinaryThermophysicalModel',
-                               'Output_Data', 'itokawa_100_facets_T.npy')
+                               'Output_Data', 'itokawa_98_facets_T.npy')
 BTPM_LT_PATH = os.path.join(PROJECT_ROOT, 'TEMPEST_RAD', 'diagnostics',
                               'DGL_KS_comparison', 'BinaryThermophysicalModel',
-                              'Output_Data', 'itokawa_100_facets_lt.npy')
+                              'Output_Data', 'itokawa_98_facets_lt.npy')
 MATCHING_PATH = os.path.join(PROJECT_ROOT, 'TEMPEST_RAD', 'diagnostics',
                               'DGL_KS_comparison_outputs', 'DGL_KS_facet_matching.npz')
 
@@ -260,9 +261,6 @@ def render_3d_temperature_map(pv_mesh, stl_shape, temperatures, title, cmap, cli
     pl.close()
     return img
 
-print
-
-
 
 # ============================================================================
 # Local-time helpers
@@ -291,28 +289,59 @@ def _compute_noon_indices(normals, rotation_axis, sun_dir, n_timesteps):
     return noon_idx
 
 
+def _load_rotation_and_sun(path):
+    """Return (rotation_axis, sun_dir) from NPZ metadata or sibling config.yaml.
+
+    Some recent TEMPEST runs save only temperatures in NPZ, so we fall back to the
+    run folder's copied config file.
+    """
+    if path.endswith('.npz'):
+        npz = np.load(path, allow_pickle=True)
+        if 'rotation_axis' in npz and 'sunlight_direction' in npz:
+            return npz['rotation_axis'].astype(float), npz['sunlight_direction'].astype(float)
+
+    # Fallback: parse config.yaml in same run directory
+    cfg_path = os.path.join(os.path.dirname(path), 'config.yaml')
+    if not os.path.exists(cfg_path):
+        raise KeyError(
+            f"Could not find rotation metadata in {path} and no sibling config.yaml present"
+        )
+
+    with open(cfg_path, 'r', encoding='utf-8') as f:
+        txt = f.read()
+
+    sun_match = re.search(r'^\s*sunlight_direction\s*:\s*\[([^\]]+)\]', txt, flags=re.MULTILINE)
+    ra_match = re.search(r'^\s*ra_degrees\s*:\s*([-+]?\d*\.?\d+)', txt, flags=re.MULTILINE)
+    dec_match = re.search(r'^\s*dec_degrees\s*:\s*([-+]?\d*\.?\d+)', txt, flags=re.MULTILINE)
+
+    if sun_match is None or ra_match is None or dec_match is None:
+        raise KeyError(
+            f"config.yaml at {cfg_path} is missing sunlight_direction and/or pole coordinates"
+        )
+
+    sun_vals = [float(x.strip()) for x in sun_match.group(1).split(',')]
+    sun_dir = np.array(sun_vals, dtype=float)
+
+    ra_deg = float(ra_match.group(1))
+    dec_deg = float(dec_match.group(1))
+    ra = np.deg2rad(ra_deg)
+    dec = np.deg2rad(dec_deg)
+
+    # Equatorial-to-Cartesian unit vector from (RA, Dec)
+    rotation_axis = np.array([
+        np.cos(dec) * np.cos(ra),
+        np.cos(dec) * np.sin(ra),
+        np.sin(dec)
+    ], dtype=float)
+
+    return rotation_axis, sun_dir
+
+
 def _roll_to_local_time(curve, noon_idx, n_timesteps):
     """Roll a 1-D array so that *noon_idx* maps to the midpoint (local noon = 12 h)."""
     mid = n_timesteps // 2
     shift = mid - noon_idx
     return np.roll(curve, shift)
-
-
-def rms_per_facet(diff_over_time):
-    """Per-facet RMS over time for arrays shaped (n_facets, n_timesteps).
-
-    Ignores NaNs (unmatched facets). Facets with no valid samples return NaN.
-    """
-    diff = np.asarray(diff_over_time, dtype=float)
-    sum_sq = np.nansum(diff ** 2, axis=1)
-    counts = np.sum(~np.isnan(diff), axis=1)
-    mean_sq = np.divide(
-        sum_sq,
-        counts,
-        out=np.full_like(sum_sq, np.nan, dtype=float),
-        where=counts > 0,
-    )
-    return np.sqrt(mean_sq)
 
 
 # ============================================================================
@@ -324,7 +353,7 @@ def plot_diurnal_comparison(local_time_hours, explicit_curves, implicit_curves,
     """Diurnal temperature curves + residuals for all three models."""
     n = len(facet_labels)
     fig, axes = plt.subplots(2, n, figsize=(5 * n, 7), sharex=True,
-                              gridspec_kw={'height_ratios': [2.4, 1], 'hspace': 0.08})
+                              gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.08})
     if n == 1:
         axes = axes.reshape(-1, 1)
 
@@ -347,7 +376,7 @@ def plot_diurnal_comparison(local_time_hours, explicit_curves, implicit_curves,
                     label='Sorli BTPM')
         if i == 0:
             ax_top.set_ylabel('Temperature (K)')
-        ax_top.set_title(f'{label}', fontsize=11)
+        ax_top.set_title(f'Point {i + 1} ({label})', fontsize=11)
         ax_top.set_xlim(0, 24)
         ax_top.set_xticks([0, 6, 12, 18, 24])
         if i == 0:
@@ -391,11 +420,11 @@ def main():
     parser.add_argument('--tempest-output', type=str, default=None,
                         help='(Legacy) single TEMPEST output path.')
     parser.add_argument('--facets', type=int, nargs='+', default=[15, 45, 57],
-                        help='STL facet indices for diurnal curves (default: 15 45 57).')
+                        help='STL facet indices for diurnal curves (default: 15 45 55).')
     parser.add_argument('--timestep', type=int, default=-1,
                         help='Timestep for 3D snapshots (0=first, -1=peak mean temp, default: -1).')
     parser.add_argument('--cmap', type=str, default='magma')
-    parser.add_argument('--diff-cmap', type=str, default='Reds')
+    parser.add_argument('--diff-cmap', type=str, default='viridis')
     parser.add_argument('--camera', type=float, nargs=9, default=None,
                         help='Camera: posX posY posZ focalX focalY focalZ upX upY upZ')
     parser.add_argument('--pick-camera', action='store_true')
@@ -490,10 +519,10 @@ def main():
     im_snap = implicit_temps[:, ts]
     bt_snap = btpm_temps[:, ts]
 
-    # RMS temperature differences (per facet) over the full diurnal cycle
-    rms_ex_bt = rms_per_facet(explicit_temps - btpm_temps)
-    rms_im_bt = rms_per_facet(implicit_temps - btpm_temps)
-    rms_ex_im = rms_per_facet(explicit_temps - implicit_temps)
+    # Difference maps are RMS over all timesteps (per facet), not single-snapshot deltas.
+    diff_ex_bt_rms = np.sqrt(np.nanmean((explicit_temps - btpm_temps) ** 2, axis=1))
+    diff_im_bt_rms = np.sqrt(np.nanmean((implicit_temps - btpm_temps) ** 2, axis=1))
+    diff_ex_im_rms = np.sqrt(np.nanmean((explicit_temps - implicit_temps) ** 2, axis=1))
 
     # ------------------------------------------------------------------
     # 6. Select facets for diurnal curves
@@ -520,13 +549,12 @@ def main():
         if np.isnan(btpm_temps[fi, 0]):
             print(f"WARNING: Facet {fi} has no BTPM match")
 
-    # Label facets as 1, 2, 3 in the output (regardless of actual facet index)
-    facet_labels = [f'Facet {i+1}' for i in range(len(selected_facets))]
+    facet_labels = [f'Facet {fi}' for fi in selected_facets]
     facet_colors = [FACET_COLORS_HEX[i % len(FACET_COLORS_HEX)]
                     for i in range(len(selected_facets))]
     facet_3d_colors = [FACET_3D_COLORS_HEX[i % len(FACET_3D_COLORS_HEX)]
                        for i in range(len(selected_facets))]
-    print(f"Diurnal comparison facets: {selected_facets} (labeled as 1, 2, 3 in output)")
+    print(f"Diurnal comparison facets: {selected_facets}")
 
     # ------------------------------------------------------------------
     # 7. Camera
@@ -546,7 +574,7 @@ def main():
         extent = np.ptp(pv_mesh.points, axis=0).max()
         cam_pos = [(extent * 0.8, extent * 2.5, extent * 1.0),
                     (0, 0, 0),
-                    (0, 0, -1)]
+                    (0, 0, 1)]
 
     wsize = tuple(args.window_size)
 
@@ -560,22 +588,19 @@ def main():
     vmax_t = float(np.ceil(all_temps.max()))
     temp_clim = (vmin_t, vmax_t)
 
-    # RMS-difference colour limits (common across all RMS panels)
-    rms_max_ex_bt = float(np.max(np.nan_to_num(rms_ex_bt, nan=0.0)))
-    rms_max_im_bt = float(np.max(np.nan_to_num(rms_im_bt, nan=0.0)))
-    rms_max_bt = max(rms_max_ex_bt, rms_max_im_bt)
-    rms_max_solver = float(np.max(np.nan_to_num(rms_ex_im, nan=0.0)))
-    rms_max_all = max(rms_max_bt, rms_max_solver)
-    if rms_max_all < 0.01:
-        rms_max_all = 0.01
-    # Common 0→max scale across ALL RMS-difference panels
-    diff_clim = (0.0, rms_max_all)
+    max_rms_bt = float(max(np.nanmax(diff_ex_bt_rms),
+                           np.nanmax(diff_im_bt_rms)))
+    max_rms_solver = float(np.nanmax(diff_ex_im_rms))
+    if max_rms_solver < 0.01:
+        max_rms_solver = 0.01
+    # Common scale across all RMS difference panels
+    max_rms_all = max(max_rms_bt, max_rms_solver)
+    diff_clim = (0.0, max_rms_all)
 
     print(f"Temperature range: {vmin_t:.0f}–{vmax_t:.0f} K")
-    print(f"Max RMS(Explicit−BTPM): {rms_max_ex_bt:.2f} K")
-    print(f"Max RMS(Implicit−BTPM): {rms_max_im_bt:.2f} K")
-    print(f"Max RMS(Explicit−Implicit): {rms_max_solver:.2f} K")
-    print(f"Common RMS-diff scale: 0–{rms_max_all:.2f} K")
+    print(f"Max RMS(Explicit−BTPM): {max_rms_bt:.2f} K")
+    print(f"Max RMS(Explicit−Implicit): {max_rms_solver:.2f} K")
+    print(f"Common RMS diff scale: 0–{max_rms_all:.2f} K")
 
     # ------------------------------------------------------------------
     # 9. Render 3D panels
@@ -599,21 +624,21 @@ def main():
         pv_mesh, temperatures=bt_snap, title='Sorli BTPM',
         cmap=args.cmap, clim=temp_clim, **render_kw)
 
-    print("Rendering RMS(Explicit−BTPM) …")
+    print("Rendering RMS(Explicit−BTPM) difference …")
     img_diff_ex_bt = render_3d_temperature_map(
-        pv_mesh, temperatures=np.where(np.isnan(rms_ex_bt), 0, rms_ex_bt),
+        pv_mesh, temperatures=np.where(np.isnan(diff_ex_bt_rms), 0, diff_ex_bt_rms),
         title='RMS(Explicit − BTPM)', cmap=args.diff_cmap, clim=diff_clim,
         **render_kw)
 
-    print("Rendering RMS(Implicit−BTPM) …")
+    print("Rendering RMS(Implicit−BTPM) difference …")
     img_diff_im_bt = render_3d_temperature_map(
-        pv_mesh, temperatures=np.where(np.isnan(rms_im_bt), 0, rms_im_bt),
+        pv_mesh, temperatures=np.where(np.isnan(diff_im_bt_rms), 0, diff_im_bt_rms),
         title='RMS(Implicit − BTPM)', cmap=args.diff_cmap, clim=diff_clim,
         **render_kw)
 
-    print("Rendering RMS(Explicit−Implicit) …")
+    print("Rendering RMS(Explicit−Implicit) difference …")
     img_diff_ex_im = render_3d_temperature_map(
-        pv_mesh, temperatures=np.where(np.isnan(rms_ex_im), 0, rms_ex_im),
+        pv_mesh, temperatures=diff_ex_im_rms,
         title='RMS(Explicit − Implicit)', cmap=args.diff_cmap, clim=diff_clim,
         **render_kw)
 
@@ -634,9 +659,7 @@ def main():
     # 10. Compute per-facet local time & diurnal comparison plot
     # ------------------------------------------------------------------
     print("Computing per-facet local solar time …")
-    npz_data = np.load(explicit_path)
-    rotation_axis = npz_data['rotation_axis']
-    sun_dir = npz_data['sunlight_direction'].astype(float)
+    rotation_axis, sun_dir = _load_rotation_and_sun(explicit_path)
     noon_indices = _compute_noon_indices(stl_normals, rotation_axis, sun_dir, n_timesteps)
 
     # Build a common local-time axis: 0 → 24 h with noon at midpoint
@@ -689,10 +712,11 @@ def main():
         gs_plots = gridspec.GridSpecFromSubplotSpec(
             3, 3,
             subplot_spec=gs[7, :],
-            height_ratios=[2.0, 0.20, 0.9],
+            height_ratios=[2.5, 0.20, 0.9],
             hspace=0.0, wspace=0.10)
 
         # ---- Row 0: temperature maps ----
+        row0_axes = []
         for col, (img, title) in enumerate([
             (img_explicit, 'TEMPEST (Explicit)'),
             (img_implicit, 'TEMPEST (Implicit)'),
@@ -700,8 +724,9 @@ def main():
         ]):
             ax = fig.add_subplot(gs[0, col])
             ax.imshow(_crop_3d(img))
-            ax.set_title(title, fontweight='bold', pad=20)
+            ax.set_title(title)
             ax.axis('off')
+            row0_axes.append(ax)
 
         # Shared temp colourbar (row 1, centre column only)
         cbar_ax0 = fig.add_subplot(gs[1, 1])
@@ -719,7 +744,7 @@ def main():
         ]):
             ax = fig.add_subplot(gs[3, col])
             ax.imshow(_crop_3d(img))
-            ax.set_title(title, fontweight='bold', pad=20)
+            ax.set_title(title)
             ax.axis('off')
 
         # Shared diff colourbar (row 5, centre column only)
@@ -746,7 +771,7 @@ def main():
             ax.set_xticks([0, 6, 12, 18, 24])
             if i == 0:
                 ax.legend(fontsize=12, loc='best')
-            ax.set_title(f'{label}')
+            ax.set_title(f'Point {i + 1} ({label})')
             ax.grid(True, alpha=0.3)
 
         # ---- Plots row 2 (gs_plots row 2): residuals ----
@@ -788,9 +813,8 @@ def main():
     print(f"\nFacets: {selected_facets}")
     print(f"Timestep: {ts}")
     print(f"Temp range: {temp_clim[0]:.0f}–{temp_clim[1]:.0f} K")
-    print(f"RMS(Explicit−BTPM) max: {rms_max_ex_bt:.2f} K")
-    print(f"RMS(Implicit−BTPM) max: {rms_max_im_bt:.2f} K")
-    print(f"RMS(Explicit−Implicit) max: {rms_max_solver:.2f} K")
+    print(f"RMS(Explicit−BTPM) max: {max_rms_bt:.2f} K")
+    print(f"RMS(Explicit−Implicit) max: {max_rms_solver:.2f} K")
 
 
 if __name__ == '__main__':

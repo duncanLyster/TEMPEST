@@ -62,7 +62,7 @@ from src.utilities.utils import (
     conditional_tqdm,
     rays_triangles_intersection
 )
-from src.utilities.plotting.plotting import check_remote_and_animate
+from src.utilities.plotting.plotting import check_remote_and_animate, plot_static_variable
 
 
 def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
@@ -445,8 +445,8 @@ def main():
         fig_temperature = plt.figure(figsize=(10, 6))
         conditional_print(config.silent_mode, f"Preparing temperature curve plot.\n")
         
-        if config.plotted_facet_index >= len(shape_model):
-            conditional_print(config.silent_mode, f"Facet index {config.plotted_facet_index} out of range. Please select a facet index between 0 and {len(shape_model) - 1}.")
+        if config.plotted_facet_index >= thermal_data.temperatures.shape[0]:
+            conditional_print(config.silent_mode, f"Facet index {config.plotted_facet_index} out of range. Please select a facet index between 0 and {thermal_data.temperatures.shape[0] - 1}.")
         else:
             # Get the temp data for the facet
             temperature_data = result["final_day_temperatures"][config.plotted_facet_index]
@@ -502,11 +502,11 @@ def main():
         conditional_print(config.silent_mode, f"Preparing temperature curve plot for {len(config.plot_temp_curve)} facet(s).\n")
         
         # Validate all facet indices
-        invalid_indices = [idx for idx in config.plot_temp_curve if idx < 0 or idx >= len(shape_model)]
+        invalid_indices = [idx for idx in config.plot_temp_curve if idx < 0 or idx >= thermal_data.temperatures.shape[0]]
         if invalid_indices:
             conditional_print(config.silent_mode, 
                 f"ERROR: Invalid facet indices {invalid_indices}. "
-                f"Valid facet indices are between 0 and {len(shape_model) - 1}.")
+                f"Valid facet indices are between 0 and {thermal_data.temperatures.shape[0] - 1}.")
             sys.exit(1)
         
         # Create x-axis in degrees
@@ -611,6 +611,29 @@ def main():
             save_animation_name='temperature_animation.gif', 
             background_colour='black')
         conditional_print(config.silent_mode, "Animation window closed, continuing...")
+
+    if config.plot_final_day_peak_temp:
+        conditional_print(config.silent_mode, f"Preparing peak temperature plot.\n")
+        
+        # Calculate peak temperature for each facet
+        final_day_temps = result["final_day_temperatures"]
+        peak_temperatures = np.max(final_day_temps, axis=1)
+        
+        plot_static_variable(
+            config.remote, config.path_to_shape_model_file,
+            peak_temperatures,
+            simulation.rotation_axis,
+            simulation.sunlight_direction,
+            simulation.solar_distance_au,
+            simulation.rotation_period_hours,
+            config.emissivity,
+            apply_kernel_based_roughness=False,
+            dome_radius_factor=config.kernel_dome_radius_factor,
+            colour_map='coolwarm',
+            plot_title='Peak Temperature Distribution',
+            axis_label='Temperature (K)',
+            background_colour='black')
+        conditional_print(config.silent_mode, "Peak temperature plot window closed, continuing...")
 
     if config.plot_final_day_comparison and not config.silent_mode:
         conditional_print(config.silent_mode,  f"Saving final day temperatures to CSV file.\n")
@@ -771,7 +794,7 @@ def main():
         
         # Create a combined DataFrame with all facets
         insolation_dict = {'rotation_deg': degrees}
-        n_facets = len(shape_model)
+        n_facets = thermal_data.temperatures.shape[0]
         
         # Add each facet's insolation as a column
         for idx in range(n_facets):

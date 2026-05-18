@@ -374,8 +374,7 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
         else:
             input_light = scattered_light
         
-        # Create parallel executor
-        parallel = Parallel(n_jobs=actual_n_jobs, verbose=0)
+        # Create delayed functions
         delayed_funcs = [
             delayed(process_scattering_chunk)(
                 start_idx, end_idx,
@@ -396,21 +395,23 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
             for start_idx, end_idx in chunks
         ]
         
-        # OPTIMIZATION: Accumulate scattered light in float32, then add to float64 total
-        # Process chunks with real-time progress bar
-        # Workers return sparse (dest_indices, compact_array) to avoid allocating
-        # a full n_facets output array per worker (saves ~900 MB per worker at 314k facets)
-        scattered_light = np.zeros((n_facets, timesteps), dtype=np.float32)
-        with tqdm(total=len(chunks), desc=f"Iteration {iteration + 1}/{config.n_scatters}") as pbar:
-            for dest_indices, compact_result in parallel(delayed_funcs):
-                scattered_light[dest_indices] += compact_result.astype(np.float32)
-                pbar.update(1)
-                
+        # Use context manager to ensure proper thread pool cleanup between iterations
+        # This prevents resource contention that causes performance degradation on iteration 2+
+        with Parallel(n_jobs=actual_n_jobs, verbose=0, backend='threading') as parallel:
+            # Accumulate scattered light in float32, then add to float64 total
+            # Process chunks with real-time progress bar
+            # Workers return sparse (dest_indices, compact_array) to avoid allocating
+            # a full n_facets output array per worker (saves ~900 MB per worker at 314k facets)
+            scattered_light = np.zeros((n_facets, timesteps), dtype=np.float32)
+            with tqdm(total=len(chunks), desc=f"Iteration {iteration + 1}/{config.n_scatters}") as pbar:
+                for dest_indices, compact_result in parallel(delayed_funcs):
+                    scattered_light[dest_indices] += compact_result.astype(np.float32)
+                    pbar.update(1)
+        
         total_scattered_light += scattered_light
+        gc.collect()  # Clean up after each iteration to free worker memory
     
-    # OPTIMIZATION: Explicit garbage collection after all iterations to free worker memory
-    del parallel, delayed_funcs
-    gc.collect()
+    # OPTIMIZATION: Final cleanup after all iterations complete
     conditional_print(config.silent_mode, "Cleaned up scattering workers.")
     
     # OPTIMIZATION: Accumulate directly into thermal_data.insolation instead of creating intermediate copies

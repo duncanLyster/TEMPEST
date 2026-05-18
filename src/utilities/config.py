@@ -117,6 +117,7 @@ class Config:
         self.animate_secondary_radiation_view_factors = self.config_data.get('animate_secondary_radiation_view_factors', False)
         self.animate_secondary_contributions = self.config_data.get('animate_secondary_contributions', False)
         self.animate_final_day_temp_distribution = self.config_data.get('animate_final_day_temp_distribution', True)
+        self.plot_final_day_peak_temp = self.config_data.get('plot_final_day_peak_temp', False)
         # Sub-facet temperatures animation
         self.animate_subfacets = self.config_data.get('animate_subfacets', False)
         self.subfacet_facet_index = self.config_data.get('subfacet_facet_index', 0)
