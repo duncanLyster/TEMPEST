@@ -137,6 +137,10 @@ class Config:
         self.force_recalculate_view_factors = self.config_data.get('force_recalculate_view_factors', False)
         self.force_recalculate_thermal_view_factors = self.config_data.get('force_recalculate_thermal_view_factors', False)
         
+        # Insolation caching options
+        self.use_insolation_cache = self.config_data.get('use_insolation_cache', True)
+        self.force_recalculate_insolation = self.config_data.get('force_recalculate_insolation', False)
+        
         # Output flags
         self.save_insolation_data = self.config_data.get('save_insolation_data', False)
 

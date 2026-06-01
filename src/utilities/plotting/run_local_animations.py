@@ -10,7 +10,7 @@ from animate_model import animate_model
 # - Keep the mesh geometry fixed so only the colormap changes frame-to-frame
 CENTER_MESH_AT_ORIGIN = True
 ROTATE_MESH = False
-COLOUR_MAP = 'RdYlBu_r'
+COLOUR_MAP = 'Greys_r' #'RdYlBu_r'
 
 def get_output_folders(base_dir):
     """Retrieve all folders in the base directory sorted by modification time."""

@@ -96,5 +96,9 @@ plot_energy_terms: false                        # Plot energy balance terms
 force_recalculate_view_factors: false           # Set to true to bypass cached view factors
 force_recalculate_thermal_view_factors: false   # Set to true to bypass cached thermal view factors
 
+# Insolation caching options - cache scattered light results for faster reruns with different thermal properties
+use_insolation_cache: true                      # Set to true to cache and reuse insolation results
+force_recalculate_insolation: false             # Set to true to bypass cached insolation results (forces recalculation)
+
 # Output flags
 save_insolation_data: false                     # Set to true to save insolation data to CSV files (can use significant disk space)

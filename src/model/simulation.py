@@ -55,7 +55,7 @@ class Simulation:
         # Use a safety factor to ensure const3 is well below 0.5
         cfl_safety_factor = 0.8
         cfl_denominator = cfl_safety_factor * (self.layer_thickness**2 / (2 * self.thermal_diffusivity))
-        timesteps_cfl = int(round(self.rotation_period_s / cfl_denominator))
+        timesteps_cfl = int(np.ceil(self.rotation_period_s / cfl_denominator))
         
         if user_timesteps is not None:
             # Warn if user-specified timesteps violate CFL for the explicit solver

@@ -18,14 +18,40 @@ from src.utilities.utils import (
     calculate_rotation_matrix
 )   
 from src.model.scattering import BRDFLookupTable
+from src.model.insolation_cache import InsolationCache
+from src.utilities.locations import Locations
 from tqdm import tqdm
 
 def calculate_insolation(thermal_data, shape_model, simulation, config):
     ''' 
     This function calculates the insolation for each facet of the body. It calculates the angle between the sun and each facet, and then calculates the insolation for each facet factoring in shadows. It writes the insolation to the data cube.
+    
+    Supports caching of scattered light insolation results to enable faster reruns when only thermal properties change.
 
     TODO: Parallelise this function.
     '''
+    # Initialize cache if enabled
+    cache = None
+    locations = Locations()
+    cache_dir = locations.other_cached_data
+    
+    if config.use_insolation_cache and not config.force_recalculate_insolation:
+        cache = InsolationCache(cache_dir)
+        
+        # Try to load from cache
+        n_facets = len(shape_model)
+        shape_model_path = config.path_to_shape_model_file if hasattr(config, 'path_to_shape_model_file') else ""
+        
+        cached_insolation = cache.load_insolation(
+            config, simulation, shape_model_path, n_facets, config.silent_mode
+        )
+        
+        if cached_insolation is not None:
+            conditional_print(config.silent_mode, 
+                            "Using cached insolation results (direct + scattered light)")
+            thermal_data.insolation = cached_insolation
+            return thermal_data
+    
     # Initialize insolation array with zeros for all facets and timesteps
     insolation_array = np.zeros((len(shape_model), simulation.timesteps_per_day))
     
@@ -99,6 +125,13 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
         scattering_end = time.time()
         conditional_print(config.silent_mode, 
                         f"Time taken to apply light scattering: {scattering_end - scattering_start:.2f} seconds")
+    
+    # Save to cache if enabled
+    if config.use_insolation_cache and cache is not None:
+        shape_model_path = config.path_to_shape_model_file if hasattr(config, 'path_to_shape_model_file') else ""
+        cache.save_insolation(
+            thermal_data.insolation, config, simulation, shape_model_path, config.silent_mode
+        )
 
     return thermal_data
 
@@ -411,7 +444,7 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
         total_scattered_light += scattered_light
         gc.collect()  # Clean up after each iteration to free worker memory
     
-    # OPTIMIZATION: Final cleanup after all iterations complete
+    # Final cleanup after all iterations complete
     conditional_print(config.silent_mode, "Cleaned up scattering workers.")
     
     # OPTIMIZATION: Accumulate directly into thermal_data.insolation instead of creating intermediate copies
