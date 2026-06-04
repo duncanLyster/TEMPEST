@@ -248,8 +248,7 @@ class TempestStandardSolver(TemperatureSolver):
             "specific_heat_capacity",
             "thermal_conductivity",
             "n_layers",
-            "convergence_target",
-            "beaming_factor"
+            "convergence_target"
         ]
 
     def solve(self, thermal_data, shape_model, simulation, config):
@@ -260,7 +259,7 @@ class TempestStandardSolver(TemperatureSolver):
 
         # Initialize constants
         const1 = simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
-        const2 = simulation.emissivity * simulation.beaming_factor * 5.67e-8 * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
+        const2 = simulation.emissivity * 5.67e-8 * simulation.delta_t / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
         const3 = simulation.thermal_diffusivity * simulation.delta_t / simulation.layer_thickness**2
         self_heating_const = 5.670374419e-8 * simulation.delta_t * simulation.emissivity**2 / (simulation.layer_thickness * simulation.density * simulation.specific_heat_capacity)
         # Subsurface heating constant (converts flux W/m² to temperature change)
@@ -314,7 +313,6 @@ class TempestStandardSolver(TemperatureSolver):
                     thermal_data.insolation,
                     simulation.delta_t,
                     simulation.emissivity,
-                    simulation.beaming_factor,
                     simulation.density,
                     simulation.specific_heat_capacity,
                     simulation.layer_thickness,
