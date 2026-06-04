@@ -30,8 +30,16 @@ solar_distance_au:      5.2           # TEMPEST treats the object as having a pe
 solar_luminosity:       3.8642e+26  # Watts (leave this for any solar system objects)
 sunlight_direction:     [1, 0, 0]   # Direction of the Sun relative to the object
 rotation_period_hours:  85.2          # Rotation period of the object relative to the Sun
-ra_degrees:             0           # Right ascension of the object's pole (0 is the vernal equinox)
-dec_degrees:            90          # Declination of the object's pole (90 is the north pole) BUG: setting to 0 causes the model to crash
+
+# Axial orientation and seasonality
+obliquity_degrees:      0             # Tilt of rotation axis from orbital plane normal (0=perpendicular to orbit, 90=in orbital plane)
+north_pole_solar_longitude_degrees: 0  # Azimuthal angle (0-360°) where northern pole points relative to orbital position
+                                        # 0° = pole faces the sun, 90° = pole is 90° ahead in orbit, 180° = pole faces away 
+                                        # BUG: Seasonal effects not fully implemented yet, so this parameter may have unexpected effects on convergence time and final temperature distribution. Use with caution.
+
+# Shape model coordinate frame adjustment (applied to STL file before orbital dynamics)
+shape_model_rotation_x_degrees: 90     # Rotation around X axis (for shape model alignment correction)
+shape_model_rotation_z_degrees: 0     # Rotation around Z axis (for latitude or orientation testing)
 
 # Advanced modelling options
 n_jobs:                 2          # Number of CPU cores to use for parallel processing (if set higher than available cores, the model will run on the available cores)

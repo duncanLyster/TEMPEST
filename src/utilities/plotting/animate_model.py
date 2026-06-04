@@ -502,7 +502,7 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
 
     sunlight_start = [sunlight_direction[i] * max_dimension for i in range(3)]
     sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], scale=max_dimension * 0.3)
-    plotter.add_mesh(sunlight_arrow, color='yellow')
+    # plotter.add_mesh(sunlight_arrow, color='yellow')
 
     plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False, lighting=False, smooth_shading=True)
 

@@ -32,12 +32,8 @@ class Simulation:
         self.timesteps_per_day = self.calculate_adaptive_timesteps() # Adaptive timestep for low thermal inertia stability
         self.delta_t = self.rotation_period_s / self.timesteps_per_day
         
-        # Compute unit vector from RA and Dec
-        ra_radians = np.radians(self.ra_degrees)
-        dec_radians = np.radians(self.dec_degrees)
-        self.rotation_axis = np.array([np.cos(ra_radians) * np.cos(dec_radians), 
-                                       np.sin(ra_radians) * np.cos(dec_radians), 
-                                       np.sin(dec_radians)])
+        # Compute rotation axis vector
+        self._compute_rotation_axis()
 
     def calculate_adaptive_timesteps(self):
         """
@@ -89,6 +85,47 @@ class Simulation:
             return adaptive_timesteps
         else:
             return timesteps_cfl
+
+    def _compute_rotation_axis(self):
+        """
+        Compute the rotation axis unit vector from orbital/seasonal parameters.
+        
+        Uses obliquity and north_pole_solar_longitude if available (new system).
+        Falls back to RA/Dec if provided (legacy system for backwards compatibility).
+        
+        Coordinate system:
+        - Orbital plane is XY, with sunlight along +X
+        - Orbital normal (north) is +Z
+        
+        obliquity: Tilt of rotation axis from orbital normal (degrees)
+        north_pole_solar_longitude: Azimuthal angle in orbital plane where pole faces sun (degrees)
+        """
+        obliquity = getattr(self, 'obliquity_degrees', 0)
+        north_pole_lon = getattr(self, 'north_pole_solar_longitude_degrees', 0)
+        ra = getattr(self, 'ra_degrees', None)
+        dec = getattr(self, 'dec_degrees', None)
+        
+        if (obliquity != 0 or north_pole_lon != 0) or (ra is None and dec is None):
+            # Use new obliquity/north_pole_solar_longitude system
+            obliquity_rad = np.radians(obliquity)
+            north_pole_lon_rad = np.radians(north_pole_lon)
+            
+            # Rotation axis in orbital frame (Z = orbital normal, XY = orbital plane with sun at +X)
+            # Component perpendicular to orbital plane (Z component)
+            z_component = np.cos(obliquity_rad)
+            # Component in orbital plane, tilted by north_pole_solar_longitude
+            xy_magnitude = np.sin(obliquity_rad)
+            x_component = xy_magnitude * np.cos(north_pole_lon_rad)
+            y_component = xy_magnitude * np.sin(north_pole_lon_rad)
+            
+            self.rotation_axis = np.array([x_component, y_component, z_component])
+        else:
+            # Use legacy RA/Dec system for backwards compatibility
+            ra_radians = np.radians(ra)
+            dec_radians = np.radians(dec)
+            self.rotation_axis = np.array([np.cos(ra_radians) * np.cos(dec_radians), 
+                                           np.sin(ra_radians) * np.cos(dec_radians), 
+                                           np.sin(dec_radians)])
 
 class ThermalData:
     def __init__(self, n_facets, timesteps_per_day, n_layers, max_days, calculate_energy_terms):

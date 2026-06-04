@@ -10,7 +10,7 @@ from animate_model import animate_model
 # - Keep the mesh geometry fixed so only the colormap changes frame-to-frame
 CENTER_MESH_AT_ORIGIN = True
 ROTATE_MESH = False
-COLOUR_MAP = 'Greys_r' #'RdYlBu_r'
+COLOUR_MAP = 'RdBu_r'  # Diverging colormap for temperature (red=hot, blue=cold)
 
 def get_output_folders(base_dir):
     """Retrieve all folders in the base directory sorted by modification time."""
@@ -101,10 +101,26 @@ def run_saved_animation(json_file, npz_file):
     kwargs.setdefault('center_mesh_at_origin', CENTER_MESH_AT_ORIGIN)
     kwargs.setdefault('rotate_mesh', ROTATE_MESH)
     kwargs['colour_map'] = COLOUR_MAP
+
+    # Remove placeholder entries from kwargs
+    kwargs.pop('rotation_axis', None)
+    kwargs.pop('sunlight_direction', None)
+    kwargs.pop('shape_model', None)
+
     print("Running animation...")
     animate_model(*args, animation_debug_mode=True, **kwargs)
     print("Animation complete.")
 
+# Function to plot histogram of temperature distribution (for debugging)
+def plot_temperature_histogram(plotted_variable_array):
+    import matplotlib.pyplot as plt
+    plt.figure(figsize=(8, 6))
+    plt.hist(plotted_variable_array.flatten(), bins=50, color='blue', alpha=0.7)
+    plt.title('Histogram of Plotted Variable (Temperature)')
+    plt.xlabel('Temperature (K)')
+    plt.ylabel('Frequency')
+    plt.grid(True)
+    plt.show()
 
 def main():
     # Determine base directory for saved animations relative to project root
@@ -138,6 +154,14 @@ def main():
     if not os.path.exists(json_file) or not os.path.exists(npz_file):
         print(f"Required files not found in {selected_folder}. Exiting.")
         return
+    
+    # Optional: Plot histogram of temperature distribution for debugging
+    npz_data = np.load(npz_file, allow_pickle=True)
+    plotted_variable_array = npz_data['plotted_variable_array']
+    if plotted_variable_array is not None:
+        plot_temperature_histogram(plotted_variable_array)
+    else:
+        print("WARNING: plotted_variable_array is None (solver detected invalid temperatures)")
     
     # Run the saved animation
     run_saved_animation(json_file, npz_file)

@@ -65,7 +65,7 @@ from src.utilities.utils import (
 from src.utilities.plotting.plotting import check_remote_and_animate, plot_static_variable
 
 
-def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms):
+def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_energy_terms, config=None):
     ''' 
     This function reads in the shape model of the body from a .stl file and return an array of facets, each with its own area, position, and normal vector.
 
@@ -102,6 +102,54 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_
             facet = Facet(normal, vertices, timesteps_per_day, max_days, n_layers, calculate_energy_terms)
             shape_model.append(facet)
 
+    # Apply shape model rotations if specified
+    if config is not None:
+        shape_model = apply_shape_model_rotation(shape_model, config)
+
+    return shape_model
+
+def apply_shape_model_rotation(shape_model, config):
+    """
+    Apply shape model rotations to align the STL file coordinates.
+    
+    This rotates the shape model itself (separate from orbital dynamics).
+    Useful for correcting alignment issues or testing different latitudes.
+    
+    Rotations are applied around the shape model's center of mass to avoid orbital motion.
+    Rotations are applied in order: X rotation first, then Z rotation.
+    """
+    rotation_x = getattr(config, 'shape_model_rotation_x_degrees', 0)
+    rotation_z = getattr(config, 'shape_model_rotation_z_degrees', 0)
+    
+    if rotation_x == 0 and rotation_z == 0:
+        return shape_model  # No rotation needed
+    
+    # Calculate the center of mass of the shape model
+    all_vertices = np.array([v for facet in shape_model for v in facet.vertices])
+    center_of_mass = np.mean(all_vertices, axis=0)
+    
+    # Build rotation matrix: first X rotation, then Z rotation
+    rotation_matrix = np.eye(3)
+    
+    if rotation_x != 0:
+        rot_x = calculate_rotation_matrix(np.array([1, 0, 0]), np.radians(rotation_x))
+        rotation_matrix = np.dot(rot_x, rotation_matrix)
+    
+    if rotation_z != 0:
+        rot_z = calculate_rotation_matrix(np.array([0, 0, 1]), np.radians(rotation_z))
+        rotation_matrix = np.dot(rot_z, rotation_matrix)
+    
+    # Apply rotation to all facets around the center of mass
+    for facet in shape_model:
+        # Translate vertices to origin, rotate, then translate back
+        facet.vertices = np.array([
+            np.dot(rotation_matrix, v - center_of_mass) + center_of_mass 
+            for v in facet.vertices
+        ])
+        # Rotate normal
+        facet.normal = np.dot(rotation_matrix, facet.normal)
+        facet.normal = facet.normal / np.linalg.norm(facet.normal)  # Renormalize
+    
     return shape_model
 
 def save_shape_model(shape_model, filename, config):
@@ -196,7 +244,8 @@ def main():
             simulation.timesteps_per_day,
             simulation.n_layers,
             simulation.max_days,
-            config.calculate_energy_terms
+            config.calculate_energy_terms,
+            config
         )
     except Exception as e:
         print(f"Failed to load shape model: {e}")
@@ -328,7 +377,8 @@ def main():
                           animation_frames=200, 
                           save_animation=False, 
                           save_animation_name='shadowing_animation.gif', 
-                          background_colour = 'black')
+                          background_colour = 'black',
+                          shape_model=shape_model)
 
     conditional_print(config.silent_mode,  f"Calculating initial temperatures.\n")
 
@@ -609,7 +659,9 @@ def main():
             animation_frames=200, 
             save_animation=False, 
             save_animation_name='temperature_animation.gif', 
-            background_colour='black')
+            background_colour='black',
+            shape_model=shape_model
+            )
         conditional_print(config.silent_mode, "Animation window closed, continuing...")
 
     if config.plot_final_day_peak_temp:

@@ -74,8 +74,18 @@ class Config:
         self.solar_luminosity = self.config_data.get('solar_luminosity', 3.86420167e+26)
         self.sunlight_direction = self.config_data.get('sunlight_direction', [1, 0, 0])
         self.rotation_period_hours = self.config_data.get('rotation_period_hours', 24)
-        self.ra_degrees = self.config_data.get('ra_degrees', 0)
-        self.dec_degrees = self.config_data.get('dec_degrees', 90)
+        
+        # NEW: Obliquity and seasonal parameters
+        self.obliquity_degrees = self.config_data.get('obliquity_degrees', 0)
+        self.north_pole_solar_longitude_degrees = self.config_data.get('north_pole_solar_longitude_degrees', 0)
+        
+        # DEPRECATED: Legacy RA/Dec parameters (for backwards compatibility)
+        self.ra_degrees = self.config_data.get('ra_degrees', None)
+        self.dec_degrees = self.config_data.get('dec_degrees', None)
+        
+        # Shape model rotation parameters (apply rotation to STL coordinates)
+        self.shape_model_rotation_x_degrees = self.config_data.get('shape_model_rotation_x_degrees', 0)
+        self.shape_model_rotation_z_degrees = self.config_data.get('shape_model_rotation_z_degrees', 0)
         
         # Surface Roughness Model settings (kernel-based)
         self.apply_kernel_based_roughness = self.config_data.get('apply_kernel_based_roughness', False)

@@ -179,7 +179,7 @@ def get_visible_facets_filename(shape_model_hash):
 @jit(nopython=True)
 def calculate_rotation_matrix(axis, theta):
     '''Return the rotation matrix associated with counterclockwise rotation about the given axis by theta radians.'''
-    axis = np.asarray(axis)
+    axis = np.asarray(axis, dtype=np.float64)
     axis = axis / np.sqrt(np.dot(axis, axis))
     a = np.cos(theta / 2.0)
     b, c, d = -axis * np.sin(theta / 2.0)

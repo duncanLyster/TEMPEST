@@ -77,9 +77,10 @@ class InsolationCache:
             'timesteps_per_day': int(simulation.timesteps_per_day),
             'include_shadowing': bool(config.include_shadowing),
             'scattering_lut': str(config.scattering_lut),
-            'beaming_factor': float(config.beaming_factor),
-            'ra_degrees': float(config.ra_degrees),
-            'dec_degrees': float(config.dec_degrees),
+            'obliquity_degrees': float(getattr(config, 'obliquity_degrees', 0)),
+            'north_pole_solar_longitude_degrees': float(getattr(config, 'north_pole_solar_longitude_degrees', 0)),
+            'shape_model_rotation_x_degrees': float(getattr(config, 'shape_model_rotation_x_degrees', 0)),
+            'shape_model_rotation_z_degrees': float(getattr(config, 'shape_model_rotation_z_degrees', 0)),
         }
         
         # Convert to JSON for consistent hashing
