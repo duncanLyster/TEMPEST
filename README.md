@@ -1,5 +1,7 @@
-# TEMPEST v1.0.0 - Thermophysical Body Model
-This Python script simulates diurnal temperature variations of a solar system body based on a given shape model. Initially designed for ESAs Comet Interceptor Mission planning as part of my research at the University of Oxford, it's adaptable for asteroids and other planetary bodies like Enceladus' surface fractures. As of 17 November 2025 it is stable and a range of test shape models converge well, but it is still under development to improve ease of use, computation speed, and validity in a wider range of parameter spaces. 
+# TEMPEST v2.0.0 - Thermophysical Body Model
+This Python script simulates diurnal temperature variations of a solar system body based on a given shape model. Initially designed for ESAs Comet Interceptor Mission planning as part of my research at the University of Oxford, it's adaptable for asteroids and other planetary bodies like Enceladus' surface fractures. As of 25 June 2026 it is stable and a range of test shape models converge well, but it is still under development to improve ease of use, computation speed, and validity in a wider range of parameter spaces. 
+
+V2 brings roughness capability into TEMPEST for the first time with the TEMPEST_RAD module and is accompanied by a paper submitted to MNRAS on 23 June 2026. I will update this repo over the next couple of weeks to include all correct documentation and a reference to the paper pre-print which explains the roughness scheme in detail. 
 
 ## Features
 - Simulates temperature variations considering material and model properties.
@@ -8,7 +10,7 @@ This Python script simulates diurnal temperature variations of a solar system bo
 - SI units are standard, exceptions are clearly stated.
 
 ## How to Get Started
-You can watch this video which takes you through from download to running TEMPEST on your own computer: https://youtu.be/0_YJEAbp2vQ
+You can watch this video which takes you through from download to running TEMPEST v1 on your own computer: https://youtu.be/0_YJEAbp2vQ
 
 1. Download this repository as a .zip file by clicking on the V1.0.0 "Tagged Release". Download and expand the .zip. 
 2. Open a terminal window and navigate to the TEMPEST folder you have downloaded (this may trigger a package update that could take a few minutes)
