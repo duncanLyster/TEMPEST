@@ -1,61 +1,0 @@
-
-Derived model parameters:
-Number of timesteps per day: 497
-Layer thickness: 0.007280951965713647 m
-Thermal inertia: 700 W m^-2 K^-1 s^0.5
-Thermal parameter (Theta): 3.8382  [LUT grid: 0.0316]
-Subsolar temperature: 350.0 K
-Skin depth: 0.040955354807139265 m
-
- Number of facets: 98
-Loading existing visible facets...
-Converting visible facets:   0%|          | 0/98 [00:00<?, ?it/s]Converting visible facets: 100%|██████████| 98/98 [00:00<00:00, 348931.91it/s]
-[Parallel(n_jobs=4)]: Using backend LokyBackend with 4 concurrent workers.
-Visible facets load time: 0.02 seconds
-Loading existing view factors...
-Recalculating thermal view factors (force_recalculate_thermal_view_factors=true)...
-[Parallel(n_jobs=4)]: Done   1 tasks      | elapsed:    0.9s
-Time taken to calculate view factors: 0.92 seconds
-Extracting shape model data for 98 facets...
-Shape model data extracted. Processing 1 chunks in parallel...
-Combining insolation results from parallel chunks...
-Time taken to calculate insolation: 7.65 seconds
-Applying light scattering with 2 iterations...
-Iteration 1/2:   0%|          | 0/1 [00:00<?, ?it/s]Iteration 1/2: 100%|██████████| 1/1 [00:00<00:00, 20.15it/s]
-Iteration 2/2:   0%|          | 0/1 [00:00<?, ?it/s]Iteration 2/2: 100%|██████████| 1/1 [00:00<00:00,  1.84it/s]Iteration 2/2: 100%|██████████| 1/1 [00:00<00:00,  1.84it/s]
-Time taken to apply light scattering: 0.70 seconds
-Insolation calculation complete. Preparing for thermal simulation...
-
-Calculating initial temperatures.
-
-Calculating initial temperatures for 98 facets...
-Initial temperatures calculated for 98 facets.
-Saving temps:   0%|          | 0/98 [00:00<?, ?it/s]Saving temps: 100%|██████████| 98/98 [00:00<00:00, 616254.56it/s]
-Initial temperatures saved for all facets.
-Time taken to calculate initial temperatures: 0.02 seconds
-Converting visible facets to numba format...
-Visible facets converted.
-
-Running main simulation loop.
-
-Convergence target: 0.1 K with mean convergence method.
-
-Day: 0 | Mean Error: 1.737215 K | Max Error: 4.245399 K | 0.5s
-Day: 1 | Mean Error: 14.721303 K | Max Error: 32.721183 K | 0.1s
-Day: 2 | Mean Error: 0.778325 K | Max Error: 1.578945 K | 0.1s
-Day: 3 | Mean Error: 0.228257 K | Max Error: 0.621328 K | 0.1s
-Day: 4 | Mean Error: 0.120842 K | Max Error: 0.563782 K | 0.1s
-Day: 5 | Mean Error: 0.091232 K | Max Error: 0.523649 K | 0.1s
-Convergence target achieved after 6 days.
-Final temperature error: 0.0912320656307367 K
-Max temperature error: 0.5236493942766458 K
-Solver execution time: 0.9229371547698975 seconds
-Full run time: 11.277381181716919 seconds
-Preparing temperature animation.
-
-Animation setup took 0.19 seconds.
-Animation window closed, continuing...
-Saving temperature arrays for TEMPEST_RAD...
-Saved temperatures to output/run_2026-04-10_14-38-15
-Model run complete.
-

@@ -196,36 +196,20 @@ def plot_all_temp_curves(directory='temperature_curves', facet_idx=None, debug=F
     # ============================================================================
     curve_config = {
         # TI=60 cases
-        (60.0, 0.0, None): {  # Light, dense, unheated region
+        (40.0, 0.0, None): {  # Light, dense, unheated region
             'color': '#1f77b4',  # Dark blue
             'label': 'Bright, porous, \nunheated region',
             'linestyle': '--'
         },
-        (60.0, '>0', None): {  # Dark, porous, conductively heated
+        (40.0, '>0', None): {  # Dark, porous, conductively heated
             'color': '#ff7f0e',  # Rust red
             'label': 'Bright, porous, \nconductively heated',
             'linestyle': '--'
         },
         # TI=100 cases
-        (100.0, 0.0, None): {  # Dark, porous, unheated region
+        (80.0, 0.0, None): {  # Dark, porous, unheated region
             'color': '#6b9bd4',  # Darker blue
             'label': 'Dark, dense, \nunheated region',
-            'linestyle': '-'
-        },
-        (100.0, '>0', None): {  # Fallback for TI=100 heated (if needed)
-            'color': '#ff7f0e',  # Orange
-            'label': 'TI=100, heated',
-            'linestyle': '-'
-        },
-        # TI=200 cases
-        (200.0, 0.0, None): {  # Dark, porous, unheated region
-            'color': '#aec7e8',  # Light blue
-            'label': 'Dark, porous, unheated region',
-            'linestyle': '-'
-        },
-        (200.0, '>0', None): {  # Dark, porous, conductively heated
-            'color': '#d62728',  # Rust red
-            'label': 'Dark, porous, conductively heated',
             'linestyle': '-'
         },
     }

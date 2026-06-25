@@ -1,25 +1,0 @@
-================================================================================
-TEMPEST Roughness LUT Generator (Per-Theta Saving)
-================================================================================
-
-Estimated file size per theta: 406.1 MB (uncompressed float32)
-
-Generating geometry preview...
-Using 33 rings (power=0.5): points per ring = [6, 18, 30, 42, 53, 64, 75, 86, 96, 106, 115, 125, 134, 142, 151, 159, 167, 175, 182, 190, 197, 203, 210, 216, 222, 228, 233, 239, 244, 249, 253, 258, 262]
-Warning: target 10000, got 9998 facets.
-Triangulating Rings:   0%|          | 0/32 [00:00<?, ?it/s]Triangulating Rings:  50%|█████     | 16/32 [00:00<00:00, 143.39it/s]Triangulating Rings:  97%|█████████▋| 31/32 [00:00<00:00, 101.83it/s]Triangulating Rings: 100%|██████████| 32/32 [00:00<00:00, 105.37it/s]
-[Parallel(n_jobs=4)]: Using backend LokyBackend with 4 concurrent workers.
-Scaled geometry by factor 1.000048 to normalize opening area (0.999904 → 1.000000).
-Saved wireframe to lut_output/diagnostics/crater_wireframe.png
-Pre-calculating view factors (one-off, cached to disk)...
-  Crater mesh: 9998 subfacets
-/Users/duncan/Desktop/DPhil/TEMPEST/venv/lib/python3.13/site-packages/joblib/externals/loky/backend/resource_tracker.py:359: UserWarning: resource_tracker: There appear to be 10 leaked semlock objects to clean up at shutdown
-  warnings.warn(
-/Users/duncan/Desktop/DPhil/TEMPEST/venv/lib/python3.13/site-packages/joblib/externals/loky/backend/resource_tracker.py:359: UserWarning: resource_tracker: There appear to be 2 leaked folder objects to clean up at shutdown
-  warnings.warn(
-/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:324: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-97942-uemr5_qy'}
-  warnings.warn(
-/Users/duncan/Desktop/DPhil/TEMPEST/venv/lib/python3.13/site-packages/joblib/externals/loky/backend/resource_tracker.py:375: UserWarning: resource_tracker: /var/folders/s0/bdhfq4xd0bv2l81msn973wb40000gs/T/joblib_memmapping_folder_97942_e3202f5ab57e4052bbc74e2d8ca4daf2_ac32cd15f6f84216916cfd43250ed9df: FileNotFoundError(2, 'No such file or directory')
-  warnings.warn(f"resource_tracker: {name}: {e!r}")
-/Users/duncan/Desktop/DPhil/TEMPEST/venv/lib/python3.13/site-packages/joblib/externals/loky/backend/resource_tracker.py:375: UserWarning: resource_tracker: /var/folders/s0/bdhfq4xd0bv2l81msn973wb40000gs/T/joblib_memmapping_folder_97942_e3202f5ab57e4052bbc74e2d8ca4daf2_d10ccd6f4ae94c96b6e4605c0a08ce85: FileNotFoundError(2, 'No such file or directory')
-  warnings.warn(f"resource_tracker: {name}: {e!r}")

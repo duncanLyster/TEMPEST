@@ -8,15 +8,15 @@ silent_mode: false                  # Set to true when running batch jobs (suppr
 remote: false                       # Set to true when running on a remote server (suppresses plotting)
 
 # File paths
-shape_model_file: "1D.stl"  # Name of the shape model file in data/shape_models/
+shape_model_file: "ico_sphere_80_facets.stl"  # Name of the shape model file in data/shape_models/
 shape_model_directory: "data/shape_models/"    
 
 # Physical parameters
 thermal_inertia:        60    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
-emissivity:             0.98         
+emissivity:             0.95         
 albedo:                 0.7              
 beaming_factor:         1.0
-subsurface_heating_flux: 0  # W/m² - Endogenic heating flux (e.g., tidal heating). Set to 0 to disable.
+subsurface_heating_flux: 0  # W/m² - Endogenic heating flux (e.g., tidal heating). Set to 0 to disable. Note, this only works with the "tempest_standard" solver, not the "tempest_implicit" solver.
 
 # Model structure parameters
 n_layers:               100          # Number of depth layers in thermal model - try increasing this if the model doesn't converge
@@ -57,7 +57,7 @@ density: 1000                   # kg/m³
 specific_heat_capacity: 1000    # J/kg·K
 
 # Animation settings
-animate_final_day_temp_distribution: false  # 3D animation of final day temperatures
+animate_final_day_temp_distribution: true  # 3D animation of final day temperatures
 plot_final_day_peak_temp: false             # 3D plot of maximum temperature for each facet (static, non-animated)
 animate_subfacets: false                   # Animate temperatures for sub-facets
 subfacet_facet_index: 37                   # Parent facet index for sub-facet visualization
@@ -70,7 +70,7 @@ use_precomputed_viewed_temps: true         # Whether to use precomputed viewed-t
 plotted_facet_index: 1220                 # Index of facet to plot detailed temperature evolution
 plot_insolation_curve: false              # Plot insolation for a facet
 plot_temp_curve: [0]                     # List of facet indices to plot diurnal temperature curves (e.g., [0, 5, 10] or [0] for single facet). Set to [] or null to disable.
-save_temp_curve_data: true             # Save diurnal temperature curve data to CSV files for later plotting
+save_temp_curve_data: false             # Save diurnal temperature curve data to CSV files for later plotting
 plot_initial_temp_histogram: false        # Plot initial temperature distribution of all facets
 plot_final_day_all_layers_temp_distribution: false # Plot final day temperature distribution for all layers including subsurface
 plot_final_day_comparison: false          # Plot final day temperature distribution against the same from previous run (if it exists)

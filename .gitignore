@@ -14,22 +14,13 @@ __pycache__/
 
 # Ignore output and temporary files
 output/
-outputs/
-plots/
 remote_results/
 
 # Ignore private data
 private/
 
-# Ignore shape models and large data files
-data/shape_models/
-data/model_setups/
-
 # Ignore large Diviner data files (too big for remote)
 global_cumul_avg_cyl_*.tab.txt
-
-# Ignore flyby moon scripts
-scripts/flyby_sim/
 
 # Ignore profile outputs and debugging files
 *.dot
@@ -77,15 +68,11 @@ data/config/optimiser_runs/
 DGL_KS_comparison/
 DGL_KS_comparison_outputs/
 
+# Ignore deprecated TEMPEST_RAD scripts and files
+TEMPEST_RAD/deprecated/
+
 # Ignore ROI backup notebook
 notebooks/region_of_interest_analysis_backup.ipynb
-
-# Ignore DGL_KS comparison configs, notebooks, and scripts
-data/config/DGL_*.yaml
-notebooks/DGL_KS_*.ipynb
-scripts/DGL_KS_*validation/
-scripts/DGL_KS_*
-validation/
 
 # Ignore macOS Finder duplicate files
 *\ 2.*

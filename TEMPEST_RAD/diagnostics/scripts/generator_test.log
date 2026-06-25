@@ -1,87 +1,0 @@
-Initializing SPECTRAL LUT Generator...
-Tasks: 20
-Output: 5x1x4x90x5x10x10
-  0%|          | 0/20 [00:00<?, ?it/s]Using 5 rings: points per ring = [6, 12, 16, 19, 20]
-Warning: target 100, got 112 facets.
-Using 5 rings: points per ring = [6, 12, 16, 19, 20]
-Warning: target 100, got 112 facets.
-Triangulating Rings:   0%|          | 0/4 [00:00<?, ?it/s]Using 5 rings: points per ring = [6, 12, 16, 19, 20]
-Warning: target 100, got 112 facets.
-Triangulating Rings:   0%|          | 0/4 [00:00<?, ?it/s]Triangulating Rings:   0%|          | 0/4 [00:00<?, ?it/s]Triangulating Rings: 100%|██████████| 4/4 [00:00<00:00, 944.93it/s]
-Triangulating Rings: 100%|██████████| 4/4 [00:00<00:00, 845.16it/s]
-Triangulating Rings: 100%|██████████| 4/4 [00:00<00:00, 954.88it/s]
-Using 5 rings: points per ring = [6, 12, 16, 19, 20]
-Warning: target 100, got 112 facets.
-Scaled geometry by factor 1.008286 to normalize opening area (0.983632 → 1.000000).
-Using 3 rings: points per ring = [6, 10, 12]
-Warning: target 36, got 38 facets.
-Triangulating Rings:   0%|          | 0/2 [00:00<?, ?it/s]Scaled geometry by factor 1.008286 to normalize opening area (0.983632 → 1.000000).
-Using 3 rings: points per ring = [6, 10, 12]
-Warning: target 36, got 38 facets.
-Triangulating Rings:   0%|          | 0/2 [00:00<?, ?it/s]Triangulating Rings:   0%|          | 0/4 [00:00<?, ?it/s]Triangulating Rings: 100%|██████████| 2/2 [00:00<00:00, 1807.11it/s]
-Triangulating Rings: 100%|██████████| 2/2 [00:00<00:00, 1710.91it/s]
-Scaled geometry by factor 1.008286 to normalize opening area (0.983632 → 1.000000).
-Using 3 rings: points per ring = [6, 10, 12]
-Warning: target 36, got 38 facets.
-Triangulating Rings:   0%|          | 0/2 [00:00<?, ?it/s]Triangulating Rings: 100%|██████████| 2/2 [00:00<00:00, 1745.08it/s]
-Triangulating Rings: 100%|██████████| 4/4 [00:00<00:00, 1149.12it/s]
-Scaled geometry by factor 1.008286 to normalize opening area (0.983632 → 1.000000).
-Using 3 rings: points per ring = [6, 10, 12]
-Warning: target 36, got 38 facets.
-Triangulating Rings:   0%|          | 0/2 [00:00<?, ?it/s]Triangulating Rings: 100%|██████████| 2/2 [00:00<00:00, 2123.16it/s]
-Scaled geometry by factor 1.023327 to normalize opening area (0.954930 → 1.000000).
-Notice: View factor energy conservation required correction (Max missing: 49.8% at subfacet 5)
-        F_sd was scaled to ensure sum(F_ss) + sum(F_sd) = 1.0
-Loading existing view factors...
-Loading existing thermal view factors...
-Initial temperatures calculated for 126 facets.
-Saving temps:   0%|          | 0/126 [00:00<?, ?it/s]Saving temps: 100%|██████████| 126/126 [00:00<00:00, 708421.32it/s]
-Scaled geometry by factor 1.023327 to normalize opening area (0.954930 → 1.000000).
-Notice: View factor energy conservation required correction (Max missing: 49.8% at subfacet 5)
-        F_sd was scaled to ensure sum(F_ss) + sum(F_sd) = 1.0
-Loading existing view factors...
-Loading existing thermal view factors...
-Initial temperatures calculated for 126 facets.
-Saving temps:   0%|          | 0/126 [00:00<?, ?it/s]Saving temps: 100%|██████████| 126/126 [00:00<00:00, 529011.32it/s]
-Scaled geometry by factor 1.023327 to normalize opening area (0.954930 → 1.000000).
-Notice: View factor energy conservation required correction (Max missing: 49.8% at subfacet 5)
-        F_sd was scaled to ensure sum(F_ss) + sum(F_sd) = 1.0
-Loading existing view factors...
-Loading existing thermal view factors...
-Initial temperatures calculated for 126 facets.
-Saving temps:   0%|          | 0/126 [00:00<?, ?it/s]Saving temps: 100%|██████████| 126/126 [00:00<00:00, 523249.81it/s]
-Scaled geometry by factor 1.023327 to normalize opening area (0.954930 → 1.000000).
-Notice: View factor energy conservation required correction (Max missing: 49.8% at subfacet 5)
-        F_sd was scaled to ensure sum(F_ss) + sum(F_sd) = 1.0
-Loading existing view factors...
-Loading existing thermal view factors...
-Initial temperatures calculated for 126 facets.
-Saving temps:   0%|          | 0/126 [00:00<?, ?it/s]Saving temps: 100%|██████████| 126/126 [00:00<00:00, 327233.62it/s]
-Initial temperatures saved for all facets.
-Starting Implicit Solver (Crank-Nicolson)...
-Day: 0 | Mean Error: nan K | Max Error: nan K
-Day: 1 | Mean Error: nan K | Max Error: nan K
-Day: 2 | Mean Error: nan K | Max Error: nan K
-Initial temperatures calculated for 1 facets.
-Saving temps:   0%|          | 0/1 [00:00<?, ?it/s]Saving temps: 100%|██████████| 1/1 [00:00<00:00, 22919.69it/s]
-Initial temperatures saved for all facets.
-Starting Implicit Solver (Crank-Nicolson)...
-Day: 0 | Mean Error: nan K | Max Error: nan K
-Day: 1 | Mean Error: nan K | Max Error: nan K
-Day: 2 | Mean Error: nan K | Max Error: nan K
-Initial temperatures calculated for 1 facets.
-Saving temps:   0%|          | 0/1 [00:00<?, ?it/s]Saving temps: 100%|██████████| 1/1 [00:00<00:00, 53092.46it/s]
-Initial temperatures saved for all facets.
-Starting Implicit Solver (Crank-Nicolson)...
-Day: 0 | Mean Error: nan K | Max Error: nan K
-Day: 1 | Mean Error: nan K | Max Error: nan K
-Day: 2 | Mean Error: nan K | Max Error: nan K
-Initial temperatures calculated for 1 facets.
-Saving temps:   0%|          | 0/1 [00:00<?, ?it/s]Saving temps: 100%|██████████| 1/1 [00:00<00:00, 45590.26it/s]
-Initial temperatures saved for all facets.
-Starting Implicit Solver (Crank-Nicolson)...
-Day: 0 | Mean Error: nan K | Max Error: nan K
-Day: 1 | Mean Error: nan K | Max Error: nan K
-Day: 2 | Mean Error: nan K | Max Error: nan K
-Initial temperatures calculated for 1 facets.
-Saving temps:   0%|          | 0/1 [00:00<?, ?it/s]Saving temps: 100%|██████████| 1/1 [00:00<00:00, 39945.75it/s]

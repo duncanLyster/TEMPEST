@@ -654,30 +654,44 @@ def process_single_case(theta, opening_angle, lat, config, precomputed):
                         # at extreme viewing geometries (e~89°) or Wien-tail conditions
                         result_grid[t_idx, i_w, i_e, i_a] = np.clip(ratio, 0.0, 50.0)
 
-    # --- PER-(TIME, WAVELENGTH) NORMALIZATION ---
-    # For energy conservation, the cos(e)*sin(e)-weighted average of R over
-    # all viewing directions must equal 1.0 at each timestep and wavelength.
-    # This ensures that applying R to a Lambertian smooth surface conserves
-    # total emitted power, regardless of T_smooth.
+    # --- PER-TIMESTEP BOLOMETRIC NORMALIZATION ---
+    # A single scalar α(t) is applied to all wavelengths simultaneously, so
+    # the Planck-weighted bolometric angular mean of R equals 1.0 per timestep.
+    # This conserves total emitted power while leaving the spectral shape of R
+    # free, preserving the inter-wavelength redistribution driven by the T^4
+    # non-linearity: hot sub-facets contribute disproportionately at Wien-regime
+    # wavelengths, and per-wavelength normalisation would erase this signal.
     #
-    # Constraint: ∫ R(e,φ) * cos(e) * sin(e) de dφ = π
-    #            ⟹ <R>_{cos·sin} = 1.0
-    #
-    # We enforce this independently for each (t, λ) slice.
-    norm_factors_tw = np.zeros((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS)))
+    # Constraint: ∑_λ w_λ · ∫ R(λ,e,φ) cos(e) sin(e) de dφ = π · ∑_λ w_λ
+    #             w_λ = B(λ, T_smooth) · Δλ   (Planck-weighted bandwidth)
+    wave_arr = np.array(WAVELENGTHS_MICRONS)
+    dwave = np.gradient(wave_arr)
+
+    norm_factors_t = np.zeros(LUT_TIMESTEPS)
     for t_idx in range(LUT_TIMESTEPS):
-        for i_w in range(len(WAVELENGTHS_MICRONS)):
-            raw_slice = result_grid[t_idx, i_w, :, :]  # (Emi, Azi)
-            weighted_sum = np.sum(raw_slice * cse_weights)
-            if weighted_sum > 1e-15:
-                alpha = ref_integral / weighted_sum
-            else:
-                alpha = 1.0
-            result_grid[t_idx, i_w, :, :] *= alpha
-            norm_factors_tw[t_idx, i_w] = alpha
-    
-    # Diagnostic: average normalization factor across all timesteps/wavelengths
-    norm_factor = float(np.mean(norm_factors_tw))
+        t_sm = smooth_temps[t_idx]
+
+        # Planck weights; fall back to bandwidth-only for very cold timesteps
+        # (nightside) where the Wien exponential underflows.
+        if t_sm > 50.0:
+            planck_w = planck_function(wave_arr, t_sm) * dwave
+        else:
+            planck_w = dwave.copy()
+        planck_total = np.sum(planck_w)
+
+        # Bolometric-weighted angular integral across all wavelengths
+        total_weighted = sum(
+            planck_w[i_w] * np.sum(result_grid[t_idx, i_w, :, :] * cse_weights)
+            for i_w in range(len(WAVELENGTHS_MICRONS))
+        )
+
+        expected = planck_total * ref_integral  # π · ∑ w_λ
+        alpha = expected / total_weighted if total_weighted > 1e-15 else 1.0
+        result_grid[t_idx, :, :, :] *= alpha
+        norm_factors_t[t_idx] = alpha
+
+    # Diagnostic: average normalization factor across all timesteps
+    norm_factor = float(np.mean(norm_factors_t))
                 
     return result_grid, norm_factor
 
