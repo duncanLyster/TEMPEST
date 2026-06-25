@@ -20,11 +20,9 @@ import datetime
 import os
 import pandas as pd
 import re
-from matplotlib.widgets import Button
 from src.utilities.locations import Locations
 from src.utilities.utils import conditional_print
 import h5py
-from src.model.facet import Facet
 
 def sanitize_filename(filename):
     """Remove or replace special characters in filename to ensure cross-platform compatibility."""
@@ -413,9 +411,6 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     import pyvista as pv
     import vtk
 
-    # Hack to make background colour white
-    background_colour = 'white'
-
     start_time = time.time()
     # Radiance mode: if HDF5 subfacet data exists, load it instead of STL
     base, _ = os.path.splitext(path_to_shape_model_file)
@@ -439,6 +434,15 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     if shape_mesh.vectors.shape[0] != plotted_variable_array.shape[0]:
         print("The plotted variable array must have the same number of rows as the number of cells in the shape model.")
         return
+
+    # Downsample timesteps for animation if there are too many
+    max_animation_timesteps = 360
+    if plotted_variable_array.shape[1] > max_animation_timesteps:
+        indices = np.linspace(0, plotted_variable_array.shape[1] - 1, max_animation_timesteps, dtype=int)
+        plotted_variable_array = plotted_variable_array[:, indices]
+        timesteps_per_day = max_animation_timesteps
+        print(f"Downsampled animation to {max_animation_timesteps} timesteps for display.")
+
     vertices = shape_mesh.points.reshape(-1, 3).copy()
     original_vertices = vertices.copy()
 
@@ -498,11 +502,11 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.add_key_event('r', lambda: reset_camera(state, plotter))  # Add the new key event for camera reset
 
     cylinder = pv.Cylinder(center=(0, 0, 0), direction=rotation_axis, height=max_dimension, radius=max_dimension/200)
-    # plotter.add_mesh(cylinder, color='green')
+    plotter.add_mesh(cylinder, color='green')
 
     sunlight_start = [sunlight_direction[i] * max_dimension for i in range(3)]
     sunlight_arrow = pv.Arrow(start=sunlight_start, direction=[-d for d in sunlight_direction], scale=max_dimension * 0.3)
-    # plotter.add_mesh(sunlight_arrow, color='yellow')
+    plotter.add_mesh(sunlight_arrow, color='yellow')
 
     plotter.add_mesh(pv_mesh, scalars=axis_label, cmap=colour_map, show_edges=False, lighting=False, smooth_shading=True)
 
@@ -608,7 +612,6 @@ def animate_model(path_to_shape_model_file, plotted_variable_array, rotation_axi
     plotter.background_color = background_colour
 
     def update_callback(caller, event):
-        # Always update display (advances time if not paused, recomputes shading)
         update(None, None, state, plotter, pv_mesh, plotted_variable_array, vertices, rotation_axis, axis_label)
 
     if save_animation:
@@ -788,14 +791,7 @@ def update(caller, event, state, plotter, pv_mesh, plotted_variable_array, verti
             state.highlights_need_update = False
 
     except Exception as e:
-        debug_print(state, f"Error updating mesh: {e}")
-        debug_print(state, f"Debug info: current_frame={state.current_frame}, shape of plotted_variable_array={plotted_variable_array.shape}")
-        # Don't return here, just fall back to raw data
-        try:
-            pv_mesh.cell_data[axis_label] = plotted_variable_array[:, state.current_frame]
-            plotter.update_scalar_bar_range((state.current_min, state.current_max))
-        except:
-            pass
+        print(f"Animation update error: {e}")
         return
 
     if state.fig is not None and state.ax is not None:
