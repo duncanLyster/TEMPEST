@@ -49,7 +49,7 @@ If you use TEMPEST in any academic publication, presentation, or public derivati
 > *TEMPEST: A Modular Thermophysical Model for Airless Bodies with Support for Surface Roughness and Non-Periodic Heating.*  
 > Submitted to EPSC-DPS Joint Meeting 2025.
 
-Please also include the copyright notice and license file in any redistributed form.
+Please also include the TEMPEST version number used, as well as the copyright notice and license file in any redistributed form.
 
 ## Licence
 
