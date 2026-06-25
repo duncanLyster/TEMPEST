@@ -12,24 +12,24 @@ shape_model_file: "ico_sphere_80_facets.stl"  # Name of the shape model file in 
 shape_model_directory: "data/shape_models/"    
 
 # Physical parameters
-thermal_inertia:        60    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
+thermal_inertia:        100    # W m⁻² K⁻¹ s⁻½ - This is the main parameter that controls the thermal evolution of the body
 emissivity:             0.95         
-albedo:                 0.7              
+albedo:                 0.1              
 beaming_factor:         1.0
 subsurface_heating_flux: 0  # W/m² - Endogenic heating flux (e.g., tidal heating). Set to 0 to disable. Note, this only works with the "tempest_standard" solver, not the "tempest_implicit" solver.
 
 # Model structure parameters
-n_layers:               100          # Number of depth layers in thermal model - try increasing this if the model doesn't converge
+n_layers:               45          # Number of depth layers in thermal model - try increasing this if the model doesn't converge
 convergence_method:     "mean"      # Method to determine convergence: 'mean' or 'max' temperature difference between days
 convergence_target:     0.1         # Target temperature difference between days for convergence in K. Higher values will converge faster.
 max_days:               20          # Maximum number of days to run simulation
 min_days:               3           # Minimum number of days to run simulation
 
 # Orbital and rotational parameters
-solar_distance_au:      5.2           # TEMPEST treats the object as having a perfect circular orbit
+solar_distance_au:      1           # TEMPEST treats the object as having a perfect circular orbit
 solar_luminosity:       3.8642e+26  # Watts (leave this for any solar system objects)
 sunlight_direction:     [1, 0, 0]   # Direction of the Sun relative to the object
-rotation_period_hours:  85.2          # Rotation period of the object relative to the Sun
+rotation_period_hours:  10          # Rotation period of the object relative to the Sun
 
 # Axial orientation and seasonality
 obliquity_degrees:      0             # Tilt of rotation axis from orbital plane normal (0=perpendicular to orbit, 90=in orbital plane)
@@ -47,9 +47,10 @@ chunk_size:             10          # Number of facets to process in each parall
 include_shadowing:      true        # Recommended to keep this as True for most cases
 n_scatters:             0           # Set to 0 to disable scattering. 1 or 2 is recommended for most cases. 3 is almost always unnecessary.
 include_self_heating:   false                # Whether to include thermal radiation between facets
-scattering_lut:         "lambertian.npy"     # Lambertian is the only option currently supported
+scattering_lut:         "lambertian.npy"     # Lambertian is the only option currently provided
 emission_lut:           "lambertian_epf.npy" # Lambertian or Lommel-Seeliger are the only options currently supported
-temp_solver:            "tempest_standard"   # Options: "tempest_standard" or "tempest_implicit"
+temp_solver:            "tempest_standard"   # Options: "tempest_standard" (explicit) or "tempest_implicit"
+# timesteps_per_day:      360         # Number of timesteps per day. Uncomment to override TEMPEST automatic timestep calculation. 
 vf_rays:                1000                 # Number of rays to use for view factor calculations. 1000 is recommended for most cases.
 
 # TEMPEST Solver parameters: Used with TI and specific_heat_capacity to derive layer depth and skin depth. These should not affect the final temperature distribution once the model has converged.
@@ -69,7 +70,7 @@ use_precomputed_viewed_temps: true         # Whether to use precomputed viewed-t
 # Plotting settings for individual facet properties 
 plotted_facet_index: 1220                 # Index of facet to plot detailed temperature evolution
 plot_insolation_curve: false              # Plot insolation for a facet
-plot_temp_curve: [0]                     # List of facet indices to plot diurnal temperature curves (e.g., [0, 5, 10] or [0] for single facet). Set to [] or null to disable.
+plot_temp_curve: []                     # List of facet indices to plot diurnal temperature curves (e.g., [0, 5, 10] or [0] for single facet). Set to [] or null to disable.
 save_temp_curve_data: false             # Save diurnal temperature curve data to CSV files for later plotting
 plot_initial_temp_histogram: false        # Plot initial temperature distribution of all facets
 plot_final_day_all_layers_temp_distribution: false # Plot final day temperature distribution for all layers including subsurface
