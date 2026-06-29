@@ -39,6 +39,7 @@ Feel free to fork the project for custom enhancements or issue tracking on GitHu
 
 ## Get involved!
 Use this form to report bugs, request new features, or share general feedback about TEMPEST: https://forms.gle/5URtNJFHyysvVmtWA
+
 Follow this link to join the TEMPEST mailing list and be notified (occasionally and tastefully) of updates, news, and publications: https://forms.gle/MG8RKgb6ETR35wBi7
 
 ## Author and Acknowledgements
