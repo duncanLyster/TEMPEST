@@ -10,9 +10,9 @@ V2 brings roughness capability into TEMPEST for the first time with the TEMPEST_
 - SI units are standard, exceptions are clearly stated.
 
 ## How to Get Started
-You can watch this video which takes you through from download to running TEMPEST v1 on your own computer: https://youtu.be/0_YJEAbp2vQ
+You can watch this (slightly outdated but still useful) video which takes you through from download to running TEMPEST v1 on your own computer: https://youtu.be/0_YJEAbp2vQ
 
-1. Download this repository as a .zip file by clicking on the V1.0.0 "Tagged Release". Download and expand the .zip. 
+1. Download this repository as a .zip file by clicking on the V2.0.0 "Tagged Release". Download and expand the .zip. 
 2. Open a terminal window and navigate to the TEMPEST folder you have downloaded (this may trigger a package update that could take a few minutes)
 3. Ensure you have Python 3.x installed and selected (you can download at https://www.python.org/ then check this using `python --version`) 
 4. Ensure all dependencies are installed `pip install -r requirements.txt`
@@ -30,12 +30,16 @@ Use and Integrated Development Environment (IDE) for example VS Code (download a
 If your shape model is not in ASCII .stl format, you can use Blender (download at https://www.blender.org/) to convert it.
 
 ## Model Architecture
-See below flowchart from my 2024 EPSC poster presentation (https://presentations.copernicus.org/EPSC2024/EPSC2024-1121_presentation.pdf) which gives more detail on the model architecture. 
+See below flowchart from the TEMPEST paper pre-print which gives more detail on the model architecture. 
 
 ![TEMPEST Flowchart](documentation/flowchart.jpg)
 
 ## Contribution
-Feel free to fork the project for custom enhancements or issue tracking on GitHub: https://github.com/duncanLyster/TEMPEST
+Feel free to fork the project for custom enhancements or issue tracking on GitHub! 
+
+## Get involved!
+Use this form to report bugs, request new features, or share general feedback about TEMPEST: https://forms.gle/5URtNJFHyysvVmtWA
+Follow this link to join the TEMPEST mailing list and be notified (occasionally and tastefully) of updates, news, and publications: https://forms.gle/MG8RKgb6ETR35wBi7
 
 ## Author and Acknowledgements
 Duncan Lyster | Started: 15 Feb 2024
