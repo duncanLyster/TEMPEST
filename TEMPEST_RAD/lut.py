@@ -11,13 +11,46 @@ import os
 from scipy.interpolate import RegularGridInterpolator
 from src.utilities.utils import conditional_print
 
+SIGMA_SB = 5.670374419e-8
+AU_M = 1.496e11
+# Solar luminosity the generator used when it built the LUTs, for files written
+# before reference_tss was stored as an attribute.
+_GENERATOR_SOLAR_LUMINOSITY = 3.828e26
+
+
 class RoughnessLUT:
-    def __init__(self, lut_path, target_theta=None, target_rms=None, target_wavelength=None):
+    def __init__(self, lut_path, target_theta=None, target_rms=None, target_wavelength=None,
+                 target_tss=None):
+        """
+        target_tss : subsolar temperature of the body this LUT is being applied to (K).
+
+        R = I_rough/I_smooth is a ratio of Planck functions over subfacets that all
+        scale as T = T_ss * g(Theta, geometry). The lambda^5 cancels and every
+        exponential is exp(c2 / (lambda T_ss g)), so R depends on the PRODUCT
+        lambda*T_ss, not on lambda alone. Matching Theta fixes the diurnal shape but
+        not the temperature scale.
+
+        The LUT is built at its own reference T_ss (set by (1-A)S/eps at the
+        reference heliocentric distance). Applying it to a body at a different T_ss
+        requires reading it at
+
+            lambda_LUT = lambda_body * (T_ss_body / T_ss_LUT)
+
+        so that both sit the same distance into the Wien tail. Omitting this
+        under-applies beaming for a colder body -- ~8% at 10 um and up to 44% at
+        short wavelengths for Dinkinesh (T_ss 258 K) against the 1 AU reference
+        (386 K). See docs/HANDOFF_solver_delta_t_bug.md, Prompt 6.
+
+        Pass None to disable the rescale and reproduce the historical behaviour.
+        """
         self.lut_path = lut_path
         self.interpolator = None
         self.axes = {}
         self.is_loaded = False
-        
+        self.target_tss = target_tss
+        self.reference_tss = None
+        self.wavelength_scale = 1.0
+
         # Load only the subset if targets are provided
         if os.path.exists(lut_path):
             self.load_subset(target_theta, target_rms, target_wavelength)
@@ -41,6 +74,21 @@ class RoughnessLUT:
                 if isinstance(gen_version, bytes):
                     gen_version = gen_version.decode()
                 is_per_theta = (gen_version == 'v2_per_theta')
+
+                # Reference subsolar temperature of this LUT. Stored directly by
+                # newer generator runs; recomputed from the reference conditions
+                # otherwise. Needed for the lambda*T_ss rescale (see __init__).
+                if 'reference_tss' in f.attrs:
+                    self.reference_tss = float(f.attrs['reference_tss'])
+                elif all(k in f.attrs for k in
+                         ('reference_albedo', 'reference_emissivity', 'solar_distance_au')):
+                    A = float(f.attrs['reference_albedo'])
+                    eps = float(f.attrs['reference_emissivity'])
+                    au = float(f.attrs['solar_distance_au'])
+                    S = _GENERATOR_SOLAR_LUMINOSITY / (4 * np.pi * (au * AU_M) ** 2)
+                    self.reference_tss = ((1 - A) * S / (eps * SIGMA_SB)) ** 0.25
+                if self.target_tss is not None and self.reference_tss:
+                    self.wavelength_scale = float(self.target_tss) / self.reference_tss
 
                 wave_axis = f['wavelength'][:]
                 lat_axis  = f['latitude'][:]
@@ -189,7 +237,19 @@ class RoughnessLUT:
             if wavelength is None:
                 # Default to first wavelength if none provided
                 wavelength = self.axes['wavelength'][0]
-                
+
+            # R depends on lambda*T_ss, so read the LUT at the wavelength that puts
+            # it the same distance into the Wien tail as the body is (see __init__).
+            wavelength = wavelength * self.wavelength_scale
+            wl_axis = self.axes['wavelength']
+            if wavelength < wl_axis[0] - 1e-9:
+                if not getattr(self, '_warned_wl_floor', False):
+                    print(f"  WARNING: rescaled wavelength {wavelength:.3f} um is below the "
+                          f"LUT axis floor {wl_axis[0]:.3f} um; clamping. Regenerate the LUT "
+                          f"with a shorter-wavelength node to remove this.")
+                    self._warned_wl_floor = True
+                wavelength = float(wl_axis[0])
+
             # Broadcast wavelength to match other arrays
             n = len(latitudes)
             waves = np.full(n, wavelength)

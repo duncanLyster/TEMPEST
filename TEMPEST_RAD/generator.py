@@ -161,6 +161,22 @@ if 'LUT_LATITUDE_VALUES' in os.environ:
 # inter-facet scattering iterations inside the crater (1 = single bounce; higher =
 # converges the multiple-scattering absorption/beaming enhancement)
 N_SCATTERS_ENV = int(os.environ.get('LUT_N_SCATTERS', '1'))
+# Reference conditions. Overridable so the LUT's dependence on the absolute
+# temperature scale can be tested: R = I_rough/I_smooth is a ratio of Planck
+# functions, so it depends on the product lambda*T_ss rather than on lambda
+# alone, and T_ss is set by (1-A)S/eps. Changing these changes what the stored
+# ratios mean -- they are not free knobs for production runs.
+REFERENCE_ALBEDO     = float(os.environ.get('LUT_REFERENCE_ALBEDO', REFERENCE_ALBEDO))
+REFERENCE_EMISSIVITY = float(os.environ.get('LUT_REFERENCE_EMISSIVITY', REFERENCE_EMISSIVITY))
+SOLAR_DISTANCE_AU    = float(os.environ.get('LUT_SOLAR_DISTANCE_AU', SOLAR_DISTANCE_AU))
+ROTATION_PERIOD_HOURS = float(os.environ.get('LUT_ROTATION_PERIOD_HOURS', ROTATION_PERIOD_HOURS))
+# Wavelength axis. Because R depends on lambda*T_ss, applying a LUT to a colder
+# body reads it at lambda*(T_ss_body/T_ss_LUT) < lambda, so the axis needs to
+# extend BELOW the shortest wavelength any body will be modelled at. Dinkinesh
+# (T_ss 258 K vs the 1 AU reference 386 K) scales by 0.665, so a 4 um band needs
+# a 2.66 um node.
+if 'LUT_WAVELENGTHS' in os.environ:
+    WAVELENGTHS_MICRONS = [float(x) for x in os.environ['LUT_WAVELENGTHS'].split(',')]
 
 def planck_function(wavelength_um, temp_k):
     """
@@ -784,6 +800,12 @@ def save_theta_hdf5(theta_val, opening_angle_idx, lut_slice, factors_slice,
         f.attrs['lut_timesteps'] = LUT_TIMESTEPS
         f.attrs['view_factor_rays'] = VIEW_FACTOR_RAYS
         f.attrs['reference_albedo'] = REFERENCE_ALBEDO
+        # Subsolar temperature this LUT was built at. R depends on lambda*T_ss, so
+        # consumers need this to rescale the wavelength axis for a body at a
+        # different temperature scale (see TEMPEST_RAD/lut.py).
+        _S_ref = SOLAR_LUMINOSITY / (4 * np.pi * (SOLAR_DISTANCE_AU * 1.496e11) ** 2)
+        f.attrs['reference_tss'] = float(
+            ((1 - REFERENCE_ALBEDO) * _S_ref / (REFERENCE_EMISSIVITY * 5.670374419e-8)) ** 0.25)
         f.attrs['reference_emissivity'] = REFERENCE_EMISSIVITY
         f.attrs['rotation_period_hours'] = ROTATION_PERIOD_HOURS
         f.attrs['solar_distance_au'] = SOLAR_DISTANCE_AU
