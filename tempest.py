@@ -234,15 +234,6 @@ def main():
     # Load setup parameters from JSON file
     simulation = Simulation(config)
 
-    # ============================================================================
-    # NOTE: Adaptive timestep calculation is used by default
-    # If you need to override timesteps_per_day for testing, uncomment below:
-    # ============================================================================
-    # original_timesteps = simulation.timesteps_per_day
-    # simulation.timesteps_per_day = 5000  # Override timesteps (WARNING: Can be very slow!)  delta_t follows automatically
-    # conditional_print(config.silent_mode, f"WARNING: Overriding timesteps_per_day from {original_timesteps} to {simulation.timesteps_per_day}")
-    # ============================================================================
-
     # Setup simulation
     try:
         shape_model = read_shape_model(
@@ -495,8 +486,7 @@ def main():
     conditional_print(config.silent_mode,  f"Running main simulation loop.\n")
     conditional_print(config.silent_mode,  f"Convergence target: {simulation.convergence_target} K with {config.convergence_method} convergence method.\n")
 
-    # OPTIMIZATION: Clean up shape_model object before solver (not needed anymore, frees ~1-2 GB)
-    # Solver only needs thermal_data (insolation, view factors, visible facets), not the facet objects
+    # The solver only needs thermal_data, so free the facet objects
     conditional_print(config.silent_mode, "Freeing shape model from memory for solver phase...")
     shape_model = None
     gc.collect()
@@ -827,9 +817,7 @@ def main():
         # Notify user
         conditional_print(config.silent_mode, f"Thermal phase curve data exported to {output_csv_path}")
 
-    # ============================================================================
-    # SAVE OUTPUTS FOR TEMPEST_RAD (Unconditional)
-    # ============================================================================
+    # Save temperatures for TEMPEST_RAD
     conditional_print(config.silent_mode, "Saving temperature arrays for TEMPEST_RAD...")
     
     # Each model run gets its own timestamped folder so runs never overwrite

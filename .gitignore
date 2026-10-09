@@ -19,6 +19,9 @@ remote_results/
 # Ignore private data
 private/
 
+# Ignore per-project working repos (each has its own private remote)
+projects/
+
 # Ignore large Diviner data files (too big for remote)
 global_cumul_avg_cyl_*.tab.txt
 
@@ -80,3 +83,7 @@ notebooks/region_of_interest_analysis_backup.ipynb
 # Ignore macOS Finder duplicate files
 *\ 2.*
 *\ 2
+data/shape_models/dinkinesh_5000_aligned.stl
+data/shape_models/dinkinesh.stl
+data/shape_models/selam_two_lobes.stl
+*run_summary.txt

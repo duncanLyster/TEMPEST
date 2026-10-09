@@ -1,17 +1,16 @@
 # Tempest Standard Solver
-# This solver is a standard solver for the Tempest model. It is a simple solver that uses a 
-# simple forward Euler method to solve the temperature equation. It is based on thermprojrs of 
-# Spencer et al. 1989, Icarus 78 with a key modification. The base layer temperature is fixed 
-# at the end of each day to the previous day's mean surface temperature (T^4)^0.25. This is 
-# leads to very fast convergence of the model.
+# Explicit time stepping (second-order Runge-Kutta for the surface node, forward Euler for the
+# subsurface), based on thermprojrs (Spencer et al. 1989, Icarus 78) with one modification: at
+# the end of each day the base layer is set to the previous day's radiative mean surface
+# temperature <T^4>^(1/4), which speeds up convergence.
 
 # Limitations: (Read this is you are getting weird results)
 # The model works well when the diurnal curve is "curvy", but not when it has sharp transitions, 
 # and it may crash or give you strange behaviour, like very high surface temps, or a midday dip.
 # This is common for explicit time-stepping solvers. You are most likely to run into issues looking 
 # at low thermal inertias at low solar distances. If this happens you can increase the number of 
-# timesteps per day, but it will quickly become very computationally expensive. An implicit solver 
-# may be a better option, but is yet to be implemented in TEMPEST. 
+# timesteps per day, but it will quickly become very computationally expensive, or use the
+# semi-implicit solver (temp_solver: tempest_implicit).
 
 
 import time
@@ -145,100 +144,6 @@ def calculate_temperatures(temperatures, layer_temperatures, insolation, visible
     return temperatures
 
 
-@jit(nopython=True)
-def calculate_temperatures_stable(temperatures, layer_temperatures, insolation, visible_facets_list, 
-                        view_factors_list, const1, const2, const3, self_heating_const,
-                        timesteps_per_day, n_layers, include_self_heating, subsurface_const):
-    
-    n_facets = temperatures.shape[0]
-    
-    # Initialize column pointers
-    current_column = 0 
-    prev_column = 0    
-    
-    for time_step in range(timesteps_per_day):
-        # Column swapping logic
-        if time_step % 2 == 0:
-            prev_column = 0
-            current_column = 1
-        else:
-            prev_column = 1
-            current_column = 0
-        
-        for i in range(n_facets):
-            # --- Surface Calculation (Skin/Half-Node Model) ---
-            prev_temp = layer_temperatures[i, prev_column, 0]
-            prev_temp_layer1 = layer_temperatures[i, prev_column, 1]
-
-            # 1. Flux terms multiplied by 2.0 because surface node has half-mass (dx/2)
-            insolation_term = insolation[i, time_step] * const1 * 2.0
-            re_emitted_radiation_term = -const2 * (prev_temp**4) * 2.0
-            subsurface_term = subsurface_const * 2.0
-            
-            secondary_radiation_term = 0.0
-            if include_self_heating:
-                secondary_radiation_term = 2.0 * calculate_secondary_radiation(
-                    layer_temperatures[:, prev_column, 0], 
-                    visible_facets_list[i], 
-                    view_factors_list[i], 
-                    self_heating_const
-                )
-            
-            # 2. Conduction multiplied by 2.0 (flux acts on half-mass)
-            conducted_heat_term = (const3 * 2.0) * (prev_temp_layer1 - prev_temp)
-            
-            new_temp = (prev_temp + 
-                    insolation_term + 
-                    re_emitted_radiation_term + 
-                    conducted_heat_term + 
-                    secondary_radiation_term +
-                    subsurface_term)
-
-            temperatures[i, time_step] = new_temp
-            layer_temperatures[i, current_column, 0] = new_temp
-            
-            # --- Subsurface Calculation ---
-            for layer in range(1, n_layers - 1):
-                prev_layer = layer_temperatures[i, prev_column, layer]
-                prev_layer_plus = layer_temperatures[i, prev_column, layer + 1]
-                prev_layer_minus = layer_temperatures[i, prev_column, layer - 1]
-
-                layer_temperatures[i, current_column, layer] = (
-                    prev_layer + 
-                    const3 * (prev_layer_plus - 2 * prev_layer + prev_layer_minus)
-                )
-
-            # 3. Bottom Boundary Condition
-            layer_temperatures[i, current_column, n_layers - 1] = layer_temperatures[i, current_column, n_layers - 2]
-
-    # --- End of Day Updates ---
-    
-    # 1. Standardize Output Column (Ensure valid data is in col 0)
-    final_col = current_column
-    if final_col == 1:
-        for i in range(n_facets):
-            for layer in range(n_layers):
-                layer_temperatures[i, 0, layer] = layer_temperatures[i, 1, layer]
-
-    # 2. FAST CONVERGENCE: Set Deep Boundary to Radiative Mean
-    # Calculate the radiative mean of the day just finished.
-    # We set the bottom boundary
-    # for the START of the next day.
-    for i in range(n_facets):
-        # Calculate Radiative Mean: (Mean(T^4))^0.25
-        # This is physically where the deep temperature tends to converge.
-        sum_rad = 0.0
-        for t in range(timesteps_per_day):
-            sum_rad += temperatures[i, t]**4
-        
-        mean_rad_temp = (sum_rad / timesteps_per_day)**0.25
-        
-        # Update the deepest layer in 'column 0' (ready for next function call)
-        # Note: Only update the very bottom. The layers between will adjust via conduction in the next day.
-        layer_temperatures[i, 0, n_layers - 1] = mean_rad_temp
-
-    return temperatures
-
 class TempestStandardSolver(TemperatureSolver):
     def __init__(self):
         super().__init__("tempest_standard")
@@ -364,7 +269,7 @@ class TempestStandardSolver(TemperatureSolver):
             error_history.append(convergence_error)
             day += 1
             
-            # OPTIMIZATION: Explicit garbage collection after each day to free worker memory
+            # Free worker memory on large models
             # This is especially important for high-resolution models (>200k facets)
             if day % 2 == 0:  # Every 2 days
                 gc.collect()

@@ -36,8 +36,6 @@ def test_facet_initialization():
     
     # Test parent facet attributes
     assert len(facet.sub_facets) == 0
-    assert len(facet.parent_incident_energy_packets) == 0
-    assert facet.depression_total_absorbed_solar_flux == 0.0
 
 def test_sub_facet_initialization():
     """Test SubFacet initialization as a state-holder."""

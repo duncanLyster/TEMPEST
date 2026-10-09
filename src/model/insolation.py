@@ -115,8 +115,7 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     conditional_print(config.silent_mode, 
                     f"Time taken to calculate insolation: {insolation_end - insolation_start:.2f} seconds")
     
-    # OPTIMIZATION: Explicitly clean up parallel worker pool to free memory before next phase
-    # Loky keeps worker processes alive and they can cache large chunks of data
+    # Release the worker pool's memory before scattering
     del parallel, results
     gc.collect()
     conditional_print(config.silent_mode, "Cleaned up parallel workers.")
@@ -453,8 +452,7 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
     # Get number of jobs and create chunks
     actual_n_jobs = config.validate_jobs()
     
-    # OPTIMIZATION: For large models, reduce chunk_size to control per-worker memory
-    # Default was n_facets // (n_jobs * 4), now we use n_facets // (n_jobs * 8) for better memory distribution
+    # Smaller chunks than elsewhere, to limit per-worker memory
     if config.chunk_size <= 0:
         config.chunk_size = max(1, n_facets // (actual_n_jobs * 8))
     else:
@@ -465,8 +463,7 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
     chunks = [(i * config.chunk_size, min((i + 1) * config.chunk_size, n_facets)) 
              for i in range((n_facets + config.chunk_size - 1) // config.chunk_size)]
     
-    # OPTIMIZATION: Initialize total_scattered_light as float32 to save 50% memory for accumulation
-    # (intermediate precision sufficient for radiation calculation)
+    # float32 accumulator to halve memory
     timesteps = simulation.timesteps_per_day
     total_scattered_light = np.zeros((n_facets, timesteps), dtype=np.float32)
     
@@ -518,8 +515,7 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
     # Final cleanup after all iterations complete
     conditional_print(config.silent_mode, "Cleaned up scattering workers.")
     
-    # OPTIMIZATION: Accumulate directly into thermal_data.insolation instead of creating intermediate copies
-    # Convert accumulated float32 back to float64 and add to the original insolation
+    # Add the scattered light to the direct insolation in place
     thermal_data.insolation = initial_insolation + total_scattered_light.astype(np.float64)
     
     # Clean up large temporary arrays
