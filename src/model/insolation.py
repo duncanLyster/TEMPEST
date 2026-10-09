@@ -121,6 +121,11 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     gc.collect()
     conditional_print(config.silent_mode, "Cleaned up parallel workers.")
 
+    # Shadowing (above) needs every candidate facet; scattering and self-heating only
+    # need the pairs with a non-zero view factor.
+    if config.n_scatters > 0 or config.include_self_heating:
+        drop_zero_view_factor_pairs(thermal_data, config.silent_mode)
+
     if config.n_scatters > 0:
         conditional_print(config.silent_mode, 
                         f"Applying light scattering with {config.n_scatters} iterations...")
@@ -139,6 +144,47 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
         )
 
     return thermal_data
+
+def drop_zero_view_factor_pairs(thermal_data, silent_mode=False):
+    """
+    Remove facet pairs whose view factor and thermal view factor are both zero.
+
+    The visible-facet search is only a horizon test, so on extended terrain most
+    candidates are never hit by a view-factor ray. They contribute nothing to scattering
+    or self-heating but use a lot of memory. Call this after shadowing, which needs the
+    full candidate lists.
+    """
+    from numba.typed import List
+
+    visible = thermal_data.visible_facets
+    view_factors = thermal_data.secondary_radiation_view_factors
+    thermal_vfs = thermal_data.thermal_view_factors
+    if any(len(np.ravel(view_factors[i])) != len(visible[i]) for i in range(len(visible))):
+        conditional_print(silent_mode, "View factors do not match the visible-facet lists; not trimming.")
+        return
+
+    new_visible, new_vfs, new_thermal = [], [], List()
+    n_before = n_after = 0
+    for i in range(len(visible)):
+        vis = np.asarray(visible[i], dtype=np.int64)
+        vf = np.asarray(view_factors[i], dtype=np.float64).ravel()
+        tvf = np.asarray(thermal_vfs[i], dtype=np.float64).ravel()
+        keep = vf != 0
+        if len(tvf) == len(vis):
+            keep |= tvf != 0
+            tvf = tvf[keep]
+        new_visible.append(vis[keep])
+        new_vfs.append(vf[keep])
+        new_thermal.append(tvf.copy())
+        n_before += len(vis)
+        n_after += int(keep.sum())
+
+    thermal_data.visible_facets = new_visible
+    thermal_data.secondary_radiation_view_factors = new_vfs
+    thermal_data.thermal_view_factors = new_thermal
+    gc.collect()
+    conditional_print(silent_mode, f"Facet pairs with non-zero view factor: {n_after:,} of {n_before:,}")
+
 
 def resolve_albedo_array(simulation, n_facets):
     """Per-facet albedo array: simulation.albedo_map if set, else the scalar albedo."""

@@ -14,6 +14,7 @@ import hashlib
 import numpy as np
 from pathlib import Path
 from src.utilities.utils import conditional_print
+from src.model.view_factors import VIEW_FACTOR_CACHE_TAG
 
 
 def _albedo_map_digest(simulation):
@@ -87,6 +88,8 @@ class InsolationCache:
             'timesteps_per_day': int(simulation.timesteps_per_day),
             'include_shadowing': bool(config.include_shadowing),
             'scattering_lut': str(config.scattering_lut),
+            # Scattered light depends on how the view factors were computed
+            'view_factors': VIEW_FACTOR_CACHE_TAG if config.n_scatters > 0 else None,
             'obliquity_degrees': float(getattr(config, 'obliquity_degrees', 0)),
             'north_pole_solar_longitude_degrees': float(getattr(config, 'north_pole_solar_longitude_degrees', 0)),
             'shape_model_rotation_x_degrees': float(getattr(config, 'shape_model_rotation_x_degrees', 0)),

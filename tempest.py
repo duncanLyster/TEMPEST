@@ -98,7 +98,10 @@ def read_shape_model(filename, timesteps_per_day, n_layers, max_days, calculate_
         shape_mesh = stl_mesh_module.Mesh.from_file(filename)
         shape_model = []
         for i in range(len(shape_mesh.vectors)):
-            normal = shape_mesh.normals[i]
+            normal = np.asarray(shape_mesh.normals[i], dtype=np.float64)
+            norm = np.linalg.norm(normal)
+            if norm > 0:
+                normal = normal / norm
             vertices = shape_mesh.vectors[i]
             facet = Facet(normal, vertices, timesteps_per_day, max_days, n_layers, calculate_energy_terms)
             shape_model.append(facet)

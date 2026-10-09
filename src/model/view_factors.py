@@ -19,6 +19,12 @@ from src.utilities.utils import (
     get_shape_model_hash
 )
 
+# Appended to cached view-factor filenames. Bump it whenever the way view factors are
+# computed changes, so old caches are not silently reused.
+#   v2: cosine-weighted ray directions (Aug 2026)
+#   v3: rays credited to the nearest hit only (Oct 2026)
+VIEW_FACTOR_CACHE_TAG = "v3"
+
 @jit(nopython=True)
 def calculate_visible_facets_chunk(positions, normals, start_idx, end_idx):
     """Calculate potentially visible facets for a chunk of the shape model.
@@ -286,6 +292,7 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
     '''
 
     ray_sources = random_points_in_triangle(subject_vertices[0], subject_vertices[1], subject_vertices[2], n_rays)
+    n_hat = subject_normal / np.sqrt(np.sum(subject_normal**2))  # sampling below needs a unit normal
 
     # Cosine-weighted (Lambertian) direction sampling: d = normalize(n_hat + u) with
     # u uniform on the unit sphere gives p(d) = cos(theta)/pi, so the hit fraction is
@@ -302,9 +309,9 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
             un = (ux * ux + uy * uy + uz * uz) ** 0.5
             if un < 1e-12:
                 continue
-            dx = ux / un + subject_normal[0]
-            dy = uy / un + subject_normal[1]
-            dz = uz / un + subject_normal[2]
+            dx = ux / un + n_hat[0]
+            dy = uy / un + n_hat[1]
+            dz = uz / un + n_hat[2]
             dn = (dx * dx + dy * dy + dz * dz) ** 0.5
             if dn > 1e-9:
                 ray_directions[i, 0] = dx / dn
@@ -312,12 +319,21 @@ def calculate_view_factors(subject_vertices, subject_normal, subject_area, test_
                 ray_directions[i, 2] = dz / dn
                 good = True
 
+    # Each ray is credited only to the nearest facet it hits; anything further along
+    # the ray is occluded by it.
     intersections = np.zeros((n_rays, len(test_vertices)), dtype=np.bool_)
     for i in prange(n_rays):
         ray_origin = ray_sources[i]
         ray_dir = ray_directions[i]
-        intersect, _ = rays_triangles_intersection(ray_origin, ray_dir.reshape(1, 3), test_vertices)
-        intersections[i] = intersect[0]
+        intersect, t_hit = rays_triangles_intersection(ray_origin, ray_dir.reshape(1, 3), test_vertices)
+        nearest = -1
+        nearest_t = np.inf
+        for k in range(len(test_vertices)):
+            if intersect[0, k] and t_hit[0, k] < nearest_t:
+                nearest_t = t_hit[0, k]
+                nearest = k
+        if nearest >= 0:
+            intersections[i, nearest] = True
 
     view_factors = np.sum(intersections, axis=0).astype(np.float64) / n_rays
 
@@ -377,7 +393,7 @@ def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
     """
     shape_model_hash = get_shape_model_hash(shape_model) + getattr(config, 'visibility_cache_suffix', '')
     locations = Locations()
-    view_factors_filename = locations.get_view_factors_path(shape_model_hash)
+    view_factors_filename = locations.get_view_factors_path(f"{shape_model_hash}_{VIEW_FACTOR_CACHE_TAG}")
 
     # Try to load existing view factors first (unless bypass flag is set)
     if not config.force_recalculate_view_factors and os.path.exists(view_factors_filename):
@@ -480,7 +496,7 @@ def calculate_thermal_view_factors(shape_model, thermal_data, config):
     
     shape_model_hash = get_shape_model_hash(shape_model) + getattr(config, 'visibility_cache_suffix', '')
     locations = Locations()
-    thermal_vf_filename = locations.get_thermal_view_factors_path(shape_model_hash)
+    thermal_vf_filename = locations.get_thermal_view_factors_path(f"{shape_model_hash}_{VIEW_FACTOR_CACHE_TAG}")
 
     if not config.force_recalculate_thermal_view_factors and os.path.exists(thermal_vf_filename):
         with np.load(thermal_vf_filename, allow_pickle=True) as data:
