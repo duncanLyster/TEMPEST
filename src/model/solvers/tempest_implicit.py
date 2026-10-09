@@ -38,10 +38,7 @@ def solve_tridiagonal(a, b, c, d):
 def calculate_secondary_radiation(temperatures, visible_facets, view_factors, self_heating_const):
     if len(visible_facets) == 0 or len(view_factors) == 0:
         return 0.0
-    # self_heating_const already includes epsilon etc? No, usually separate.
-    # But here we just return the flux (W/m2) or temperature term?
-    # In standard solver: self_heating_const * sum(T^4 * VF).
-    # We will assume self_heating_const scales correctly to W/m2 or energy balance term.
+    # sum_j F_ij T_j^4; the caller multiplies by eps^2 * sigma
     return np.sum(temperatures[visible_facets]**4 * view_factors)
 
 @jit(nopython=True)
@@ -62,13 +59,8 @@ def solve_implicit_timestep(T_old, insolation, T_surface_rad_coupling,
     rad_linear_coeff = 4 * epsilon * sigma * T_surf_old**3
     rad_const_term = -3 * epsilon * sigma * T_surf_old**4
     
-    # Net flux into surface (excluding conduction to layer 1)
-    # Flux_in = S_abs + F_rad + F_coupling - rad_flux
-    # Balance: Flux_in + k(T1 - T0)/dz = rho*c*dz/2 * (T0_new - T0_old)/dt
-    # Rearranging for T0_new, T1_new...
-    
-    # We construct the tridiagonal matrix directly here for the specific timestep
-    # because the surface coefficients depend on T_old (linearization).
+    # The tridiagonal system is built every timestep because the surface row depends
+    # on T_old through the linearised emission.
     
     # Matrix diagonals
     # Lower (a), Main (b), Upper (c)
@@ -77,40 +69,25 @@ def solve_implicit_timestep(T_old, insolation, T_surface_rad_coupling,
     c = np.zeros(n_layers - 1, dtype=np.float64) # index i corresponds to row i
     rhs = np.zeros(n_layers, dtype=np.float64)
     
-    # --- Surface Node (i=0) ---
-    # Equation: alpha * T0_new - beta * T1_new = gamma * T0_old + Insolation + Rad_Coupling - Radiation
-    # Radiation term: epsilon * sigma * T^4 -> linearized
-    # We incorporate linearized radiation into the implicit matrix (b[0]) and RHS
-    
-    # Let's verify coefficients passed from outside:
-    # alpha includes conduction + heat capacity term
-    # beta is conduction term
-    # gamma is heat capacity term
-    # So: (alpha + rad_linear_coeff) * T0_new - beta * T1_new = gamma * T0_old + Insolation + Coupling - rad_const_term
-    
+    # --- Surface node (i = 0), fully implicit ---
+    # (alpha + 4 eps sigma T_old^3) T0_new - beta T1_new
+    #     = gamma T0_old + insolation + self-heating + 3 eps sigma T_old^4
+    # alpha = heat capacity / dt + conductance, beta = conductance, gamma = heat capacity / dt
+
     b[0] = alpha + rad_linear_coeff
     c[0] = -beta
     rhs[0] = gamma * T_surf_old + insolation + T_surface_rad_coupling - rad_const_term
     
-    # --- Interior Nodes (i=1 to N-2) ---
-    # Crank-Nicolson: -p * T_{i-1}^{n+1} + (1 + 2p) * T_i^{n+1} - p * T_{i+1}^{n+1} = ...
-    # Here passed as p, q, r
-    # p = lambda/2
-    # q = 1 + lambda
-    # r = 1 - lambda
-    # s = lambda/2
-    # Equation: -p T_{i-1} + q T_i - p T_{i+1} = s T_{i-1}^n + r T_i^n + s T_{i+1}^n
-    
-    # Note: 'a' is lower diagonal. a[i-1] is for row i.
+    # --- Interior nodes, Crank-Nicolson (p = s = lambda/2, q = 1 + lambda, r = 1 - lambda) ---
+    # -p T_{i-1} + q T_i - p T_{i+1} = s T_{i-1}^n + r T_i^n + s T_{i+1}^n
+    # a is the lower diagonal: a[i-1] belongs to row i.
     for i in range(1, n_layers - 1):
         a[i-1] = -p
         b[i]   = q
         c[i]   = -p
         rhs[i] = s * T_old[i-1] + r * T_old[i] + s * T_old[i+1]
         
-    # --- Bottom Node (Adiabatic) ---
-    # T_{N-1} = T_{N-2} (Zero flux)
-    # Simple implementation: T_{N-1} - T_{N-2} = 0
+    # --- Bottom node: zero flux, T_{N-1} = T_{N-2} ---
     a[n_layers-2] = -1.0
     b[n_layers-1] = 1.0
     rhs[n_layers-1] = 0.0
@@ -118,7 +95,7 @@ def solve_implicit_timestep(T_old, insolation, T_surface_rad_coupling,
     # Solve
     T_new = solve_tridiagonal(a, b, c, rhs)
     
-    # Floor check
+    # Floor at the cosmic background temperature
     for i in range(n_layers):
         if T_new[i] < 2.7:
             T_new[i] = 2.7
@@ -147,61 +124,42 @@ def run_implicit_solver(temperatures, layer_temperatures, insolation,
     r = 1.0 - lamb
     s = lamb / 2.0
     
-    # Surface boundary coefficients (Half-node)
-    # Capacity term: C_surf = rho * c * dx / 2
-    # Cond term: K_eff = k / dx
-    # Balance: C_surf * (T_new - T_old)/dt = -K_eff * (T_new - T_layer1_new + T_old - T_layer1_old)/2 + Fluxes
-    # We use Fully Implicit for surface conduction to avoid oscillations coupled with radiation
-    # Or Crank-Nicolson. Let's use Fully Implicit for surface-to-layer1 conduction for robustness.
-    # Eq: rho*c*dx/2 * (T0_new - T0_old)/dt = -k/dx * (T0_new - T1_new) + Radiation + Solar
-    
-    # Let's use Fully Implicit for the surface node equation
+    # Surface node: half-layer heat capacity rho*c*dx/2, conductance k/dx, solved fully
+    # implicitly to avoid oscillations from the coupling with radiation:
+    #   (c_surf/dt + k/dx) T0_new - (k/dx) T1_new = (c_surf/dt) T0_old + fluxes
     c_surf = density * specific_heat * layer_thickness / 2.0
     k_eff = thermal_conductivity / layer_thickness
     
-    # (c_surf/dt) * T0_new - (c_surf/dt) * T0_old = -k_eff * T0_new + k_eff * T1_new + Fluxes
-    # (c_surf/dt + k_eff) * T0_new - k_eff * T1_new = (c_surf/dt) * T0_old + Fluxes
-    
+
     alpha_surf = (c_surf / sim_dt) + k_eff
     beta_surf = k_eff
     gamma_surf = (c_surf / sim_dt)
     
     # Loop over timesteps
     for t in range(timesteps):
-        # Look ahead for insolation? Or average? 
-        # Implicit usually takes value at t+1 or average. Let's use average for smoothness.
         t_next = 0 if t == timesteps - 1 else t + 1
         
-        # Self-heating loop (simple relaxation or lagged)
-        # Since we process facets in parallel/sequence, we lag self-heating by one timestep
-        # Using T from previous timestep for self-heating view factors
-        
+        # Self-heating uses the other facets' temperatures from the previous timestep
+
         for i in range(n_facets):
             # Get previous state
             T_old_layers = layer_temperatures[i, 0, :].copy() # 0 is current/old state
             
-            # Insolation (Average of current and next for Crank-Nicolson consistency)
+            # Insolation averaged over the step
             sol_flux = 0.5 * (insolation[i, t] + insolation[i, t_next])
             
             # Self heating flux
             rad_coupling = 0.0
             if self_heating_enabled:
-                # Use surface temp from previous step
-                # Note: We need the temperatures of OTHER facets. 
-                # layer_temperatures[:, 0, 0] contains surface temps of all facets at start of step
                 rad_coupling = calculate_secondary_radiation(
                     layer_temperatures[:, 0, 0],
                     visible_facets_list[i],
                     view_factors_list[i],
-                    1.0 # multiplier, epsilon/sigma handled inside?
+                    1.0
                 )
-                # calculate_secondary_radiation sums T^4 * VF. 
-                # We need Flux = epsilon * sigma * sum(T^4 * VF) ?
-                # Wait, view factors usually include area ratios.
-                # Standard formula: Q_i = ... + epsilon_i * sum(F_ij * sigma * T_j^4)
-                # But assume blackbody emission from neighbors? 
-                # Usually: Flux_in = epsilon * sigma * sum(T^4 * VF)
-                rad_coupling *= (emissivity * sigma)
+                # Absorbed flux = eps^2 * sigma * sum(F_ij * T_j^4): j emits eps*sigma*T_j^4
+                # and i absorbs a fraction eps of it (Kirchhoff), as in the explicit solver.
+                rad_coupling *= (emissivity**2 * sigma)
 
             # Solve
             T_new_layers = solve_implicit_timestep(
@@ -213,11 +171,7 @@ def run_implicit_solver(temperatures, layer_temperatures, insolation,
                 emissivity, sigma
             )
             
-            # Update storage (we use column 1 as 'new' then swap, or just overwrite since we need old for next facet?)
-            # Actually we need T_old of all facets for self-heating of next facet?
-            # Ideally we update all 'new' buffers then swap.
-            # But here `layer_temperatures` has 2 columns. 
-            # We read from col 0 (old), write to col 1 (new).
+            # Column 0 holds the old state (read by other facets' self-heating), column 1 the new
             layer_temperatures[i, 1, :] = T_new_layers
             temperatures[i, t] = T_new_layers[0] # Store surface temp
             
@@ -290,8 +244,7 @@ class TempestImplicitSolver(TemperatureSolver):
             comparison_temps = current_day_temperature[:, 0].copy()
             day += 1
             
-            # OPTIMIZATION: Explicit garbage collection after each day to free worker memory
-            # This is especially important for high-resolution models (>200k facets)
+            # Free worker memory on large models
             if day % 2 == 0:  # Every 2 days
                 gc.collect()
 
