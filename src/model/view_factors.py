@@ -43,6 +43,131 @@ def calculate_visible_facets_chunk(positions, normals, start_idx, end_idx):
         
     return potentially_visible_indices
 
+@jit(nopython=True)
+def _visible_from_candidates(positions, normals, cand_flat, cand_start, cand_count,
+                             start_idx, end_idx):
+    """Apply the mutual-horizon test to a precomputed candidate list per facet.
+
+    Same two tests as calculate_visible_facets_chunk -- j must lie above i's
+    tangent plane and i above j's -- but evaluated only against spatial
+    neighbours rather than the whole model.
+    """
+    chunk = end_idx - start_idx
+    out = [np.empty(0, dtype=np.int64) for _ in range(chunk)]
+    epsilon = 1e-10
+
+    for k in range(chunk):
+        i = start_idx + k
+        count = cand_count[i]
+        if count == 0:
+            continue
+        base = cand_start[i]
+        keep = np.empty(count, dtype=np.int64)
+        m = 0
+        pix, piy, piz = positions[i, 0], positions[i, 1], positions[i, 2]
+        nix, niy, niz = normals[i, 0], normals[i, 1], normals[i, 2]
+        for t in range(count):
+            j = cand_flat[base + t]
+            if j == i:
+                continue
+            rx = pix - positions[j, 0]
+            ry = piy - positions[j, 1]
+            rz = piz - positions[j, 2]
+            # j above i's plane
+            if rx * nix + ry * niy + rz * niz >= epsilon:
+                continue
+            # i above j's plane
+            if -(rx * normals[j, 0] + ry * normals[j, 1] + rz * normals[j, 2]) >= epsilon:
+                continue
+            keep[m] = j
+            m += 1
+        out[k] = keep[:m].copy()
+
+    return out
+
+
+def auto_interaction_distance(positions, min_solar_elevation_deg=5.0):
+    """Distance beyond which one facet cannot shadow another.
+
+    Uses the full relief of the patch as the obstacle height, so the result is
+    relief / tan(min_solar_elevation_deg). This is conservative, because real relief
+    is not a single vertical step. For production runs, set max_interaction_distance_m
+    from a convergence test instead.
+    """
+    if len(positions) == 0:
+        return 0.0
+    # Relief is the spread in radial distance (the patch sits on a sphere).
+    radii = np.linalg.norm(positions, axis=1)
+    relief = float(np.max(radii) - np.min(radii))
+    return relief / np.tan(np.radians(max(min_solar_elevation_deg, 0.05)))
+
+
+def calculate_visible_facets_local(positions, normals, max_distance, n_jobs, chunk_size,
+                                   silent_mode=False):
+    """Visible-facet search limited to facets within max_distance.
+
+    The global search keeps a large fraction of all pairs on extended terrain, so
+    terrain runs need a distance cutoff. Neighbours are found one chunk at a time to
+    keep peak memory bounded.
+    """
+    from scipy.spatial import cKDTree
+
+    n_facets = len(positions)
+    start_time = time.time()
+
+    tree = cKDTree(positions)
+    chunk_size = max(1, int(chunk_size))
+    n_chunks = (n_facets + chunk_size - 1) // chunk_size
+
+    all_visible_indices = []
+    total_candidates = 0
+
+    for ci in range(n_chunks):
+        lo = ci * chunk_size
+        hi = min(lo + chunk_size, n_facets)
+
+        neighbours = tree.query_ball_point(positions[lo:hi], max_distance,
+                                           workers=max(1, n_jobs))
+        counts = np.array([len(x) for x in neighbours], dtype=np.int64)
+        starts = np.zeros(len(counts), dtype=np.int64)
+        if len(counts) > 1:
+            np.cumsum(counts[:-1], out=starts[1:])
+        flat = np.fromiter((j for nb in neighbours for j in nb),
+                           dtype=np.int64, count=int(counts.sum()))
+        del neighbours
+        total_candidates += int(counts.sum())
+
+        # _visible_from_candidates indexes by global facet id, so pad to full length.
+        full_counts = np.zeros(n_facets, dtype=np.int64)
+        full_starts = np.zeros(n_facets, dtype=np.int64)
+        full_counts[lo:hi] = counts
+        full_starts[lo:hi] = starts
+
+        all_visible_indices.extend(
+            _visible_from_candidates(positions, normals, flat,
+                                     full_starts, full_counts, lo, hi))
+        del flat, full_counts, full_starts, counts, starts
+
+        if not silent_mode and (ci % max(1, n_chunks // 20) == 0 or ci == n_chunks - 1):
+            elapsed = time.time() - start_time
+            print(f"\rCalculating visible facets (local): {100*(ci+1)/n_chunks:0.1f}% | "
+                  f"Elapsed: {elapsed/60:0.1f}min", end="")
+    if not silent_mode:
+        print()
+
+    conditional_print(silent_mode,
+                      f"Spatial cull at {max_distance:,.0f} m: "
+                      f"{total_candidates/max(n_facets,1):,.0f} candidates/facet "
+                      f"(vs {n_facets:,} for the global search)")
+    total_pairs = sum(len(v) for v in all_visible_indices)
+    conditional_print(silent_mode,
+                      f"Facet visibility: {n_facets**2:,} possible -> {total_pairs:,} pairs "
+                      f"({total_pairs/max(n_facets,1):,.0f}/facet, "
+                      f"{100*(1 - total_pairs/max(n_facets**2,1)):.3f}% culled) "
+                      f"in {time.time()-start_time:.1f}s")
+    return all_visible_indices
+
+
 def calculate_visible_facets(positions, normals, n_jobs, chunk_size, silent_mode=False):
     """Parallel wrapper for calculate_visible_facets using joblib.
 
@@ -102,6 +227,22 @@ def calculate_visible_facets(positions, normals, n_jobs, chunk_size, silent_mode
 def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, normals, vertices, config):
     locations = Locations()
     shape_model_hash = get_shape_model_hash(shape_model)
+
+    # max_interaction_distance_m: None = global search, 0 = derive from relief,
+    # > 0 = cutoff in metres. Each cutoff gets its own cache entry.
+    max_distance = getattr(config, 'max_interaction_distance_m', None)
+    if max_distance is not None:
+        max_distance = float(max_distance)
+        if max_distance == 0:
+            max_distance = auto_interaction_distance(
+                positions, getattr(config, 'min_solar_elevation_degrees', 5.0))
+            conditional_print(silent_mode,
+                              f"Auto interaction distance: {max_distance:,.0f} m "
+                              f"(relief / tan({getattr(config, 'min_solar_elevation_degrees', 5.0)} deg))")
+    # View factors are stored per visible facet, so their caches need the same suffix
+    config.visibility_cache_suffix = f"_r{max_distance:.0f}" if max_distance is not None else ""
+    shape_model_hash += config.visibility_cache_suffix
+
     visible_facets_filename = locations.get_visible_facets_path(shape_model_hash)
 
     ################## Calculate/load visible facets ##################
@@ -122,7 +263,11 @@ def calculate_and_cache_visible_facets(silent_mode, shape_model, positions, norm
 
         actual_n_jobs = config.validate_jobs()
         conditional_print(silent_mode, f"Calculating visible facets using {actual_n_jobs} parallel jobs...")
-        visible_indices = calculate_visible_facets(positions, normals, config.n_jobs, config.chunk_size)
+        if max_distance is not None:
+            visible_indices = calculate_visible_facets_local(
+                positions, normals, max_distance, actual_n_jobs, config.chunk_size, silent_mode)
+        else:
+            visible_indices = calculate_visible_facets(positions, normals, config.n_jobs, config.chunk_size)
 
         calculate_visible_facets_end = time.time()
 
@@ -230,7 +375,7 @@ def calculate_all_view_factors(shape_model, thermal_data, config, n_rays):
     Calculate view factors for all facets using parallel processing.
     Works with any number of jobs (including 1).
     """
-    shape_model_hash = get_shape_model_hash(shape_model)
+    shape_model_hash = get_shape_model_hash(shape_model) + getattr(config, 'visibility_cache_suffix', '')
     locations = Locations()
     view_factors_filename = locations.get_view_factors_path(shape_model_hash)
 
@@ -333,7 +478,7 @@ def calculate_thermal_view_factors(shape_model, thermal_data, config):
     # Initialize EPF lookup table here instead of in tempest.py
     epf_lut = EPFLookupTable(config.emission_lut)
     
-    shape_model_hash = get_shape_model_hash(shape_model)
+    shape_model_hash = get_shape_model_hash(shape_model) + getattr(config, 'visibility_cache_suffix', '')
     locations = Locations()
     thermal_vf_filename = locations.get_thermal_view_factors_path(shape_model_hash)
 

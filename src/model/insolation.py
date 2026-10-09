@@ -79,6 +79,11 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
     normals = np.array([facet.normal for facet in shape_model], dtype=np.float64)
     positions = np.array([facet.position for facet in shape_model], dtype=np.float64)
     shape_model_vertices = np.array([facet.vertices for facet in shape_model], dtype=np.float64)
+    albedo_arr = resolve_albedo_array(simulation, n_facets)
+    if getattr(simulation, 'albedo_map', None) is not None:
+        conditional_print(config.silent_mode,
+                          f"Using per-facet albedo map: {albedo_arr.min():.3f} to "
+                          f"{albedo_arr.max():.3f}, mean {albedo_arr.mean():.3f}")
     conditional_print(config.silent_mode, f"Shape model data extracted. Processing {len(chunks)} chunks in parallel...")
     
     # Process chunks in parallel
@@ -92,7 +97,7 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
             rotation_matrices,
             rotated_sunlight_directions,
             simulation.solar_luminosity,
-            simulation.albedo,
+            albedo_arr[start_idx:end_idx],
             simulation.solar_distance_m,
             simulation.sunlight_direction.astype(np.float64),  # Ensure float64
             config.include_shadowing,
@@ -134,6 +139,17 @@ def calculate_insolation(thermal_data, shape_model, simulation, config):
         )
 
     return thermal_data
+
+def resolve_albedo_array(simulation, n_facets):
+    """Per-facet albedo array: simulation.albedo_map if set, else the scalar albedo."""
+    amap = getattr(simulation, 'albedo_map', None)
+    if amap is None:
+        return np.full(n_facets, float(simulation.albedo), dtype=np.float64)
+    amap = np.asarray(amap, dtype=np.float64)
+    if amap.shape != (n_facets,):
+        raise ValueError(f"albedo_map has {amap.shape} entries, expected ({n_facets},)")
+    return amap
+
 
 @jit(nopython=True)
 def process_insolation_chunk(normals, positions, visible_facets, rotation_matrices, 
@@ -197,7 +213,7 @@ def process_insolation_chunk(normals, positions, visible_facets, rotation_matric
             if cos_zeniths[t] > 0 and smoothed_illum[t] > 0:
                 insolation[i, t] = (
                     solar_luminosity * 
-                    (1 - albedo) * 
+                    (1 - albedo[i]) * 
                     smoothed_illum[t] * 
                     cos_zeniths[t] / 
                     (4 * np.pi * solar_distance_m**2)
@@ -342,7 +358,7 @@ def process_scattering_chunk(start_idx, end_idx, chunk_input_light, chunk_visibl
         area_i = chunk_areas[local_i]
         # absorbed flux at the destination: albedo * E_i(t) * F_ij * A_i / A_j
         # (F_ij is the diffuse view factor; A_i F_ij = A_j F_ji reciprocity)
-        coef = albedo * view_factors * area_i / all_areas[visible_facets]   # (n_vis,)
+        coef = albedo[local_i] * view_factors * area_i / all_areas[visible_facets]   # (n_vis,)
         dloc = np.array([dest_to_local[v] for v in visible_facets])
         src = chunk_input_light[local_i]                                    # (T,)
         if brdf_values is not None:
@@ -373,7 +389,8 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
     brdf_lut = None if is_lambertian else BRDFLookupTable(config.scattering_lut)
 
     n_facets = len(shape_model)
-    # OPTIMIZATION: Store the initial insolation reference (not a copy) for first iteration input
+    scatter_albedo = resolve_albedo_array(simulation, n_facets)
+    # Reference, not a copy
     initial_insolation = thermal_data.insolation
     
     # Pre-extract compact numpy arrays from shape_model.
@@ -423,7 +440,7 @@ def apply_scattering(thermal_data, shape_model, simulation, config,
                 all_areas[start_idx:end_idx],                # Source facet areas
                 all_areas,                                   # Destination facet areas
                 simulation.timesteps_per_day,
-                simulation.albedo,
+                scatter_albedo[start_idx:end_idx],
                 iteration,
                 brdf_lut,                                    # None for Lambertian
                 all_normals[start_idx:end_idx] if brdf_lut is not None else None,   # Source chunk normals

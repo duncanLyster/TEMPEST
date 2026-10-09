@@ -16,6 +16,15 @@ from pathlib import Path
 from src.utilities.utils import conditional_print
 
 
+def _albedo_map_digest(simulation):
+    """Short digest of a per-facet albedo map, or None when the albedo is scalar."""
+    amap = getattr(simulation, 'albedo_map', None)
+    if amap is None:
+        return None
+    arr = np.ascontiguousarray(np.asarray(amap, dtype=np.float64))
+    return hashlib.sha256(arr.tobytes()).hexdigest()[:32]
+
+
 class InsolationCache:
     """
     Manages caching of insolation results with validation.
@@ -71,6 +80,7 @@ class InsolationCache:
             'solar_distance_au': float(config.solar_distance_au),
             'sunlight_direction': [float(x) for x in simulation.sunlight_direction],
             'albedo': float(simulation.albedo),
+            'albedo_map': _albedo_map_digest(simulation),
             'rotation_period_hours': float(config.rotation_period_hours),
             'rotation_axis': [float(x) for x in simulation.rotation_axis],
             'n_scatters': int(config.n_scatters),

@@ -29,6 +29,7 @@ from datetime import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
+import numba
 from numba import jit
 from numba.typed import List
 from stl import mesh as stl_mesh_module
@@ -224,6 +225,9 @@ def main():
     # Check environment
     check_environment(config)
 
+    # n_jobs only limits joblib, so also limit numba's parallel loops
+    numba.set_num_threads(min(max(1, int(config.n_jobs)), numba.config.NUMBA_NUM_THREADS))
+
     # Load setup parameters from JSON file
     simulation = Simulation(config)
 
@@ -249,6 +253,20 @@ def main():
     except Exception as e:
         print(f"Failed to load shape model: {e}")
         sys.exit(1)
+    # Optional per-facet albedo map; simulation.albedo is set to its mean
+    simulation.albedo_map = None
+    if config.albedo_map_file:
+        albedo_map = np.load(config.albedo_map_file)
+        if albedo_map.shape != (len(shape_model),):
+            print(f"Albedo map {config.albedo_map_file} has {albedo_map.shape} entries "
+                  f"but the shape model has {len(shape_model)} facets.")
+            sys.exit(1)
+        simulation.albedo_map = albedo_map.astype(np.float64)
+        simulation.albedo = float(albedo_map.mean())
+        conditional_print(config.silent_mode,
+                          f"Loaded per-facet albedo map: {albedo_map.min():.3f}-{albedo_map.max():.3f}, "
+                          f"mean {albedo_map.mean():.3f}")
+
     thermal_data = ThermalData(len(shape_model), simulation.timesteps_per_day, simulation.n_layers, simulation.max_days, config.calculate_energy_terms)
 
     # Compute dimensionless thermal parameter (Theta) for comparison with LUT
@@ -272,8 +290,17 @@ def main():
     vertices = np.array([facet.vertices for facet in shape_model])
     
     # Time the visible facets loading/conversion
+    needs_visibility = (config.include_shadowing
+                        or config.n_scatters > 0
+                        or config.include_self_heating
+                        or config.animate_secondary_radiation_view_factors)
     t_vis_start = time.time()
-    visible_indices = calculate_and_cache_visible_facets(config.silent_mode, shape_model, positions, normals, vertices, config)
+    if needs_visibility:
+        visible_indices = calculate_and_cache_visible_facets(config.silent_mode, shape_model, positions, normals, vertices, config)
+    else:
+        conditional_print(config.silent_mode,
+                          "Skipping visible-facet search (shadowing, scattering and self-heating all disabled).")
+        visible_indices = [np.array([], dtype=np.int64) for _ in range(len(shape_model))]
     t_vis_end = time.time()
     conditional_print(config.silent_mode, f"Visible facets load time: {t_vis_end - t_vis_start:.2f} seconds")
 
@@ -815,8 +842,13 @@ def main():
     temp_csv_path = os.path.join(run_output_dir, "temperatures.csv")
     temp_npy_path = os.path.join(run_output_dir, "temperatures.npy")
     
-    np.savetxt(temp_csv_path, thermal_data.temperatures, delimiter=',')
     np.save(temp_npy_path, thermal_data.temperatures)
+    if config.save_temperature_csv:
+        np.savetxt(temp_csv_path, thermal_data.temperatures, delimiter=',')
+    else:
+        conditional_print(config.silent_mode,
+                          "Skipping temperatures.csv (save_temperature_csv: false); "
+                          "temperatures.npy holds the same data.")
     
     conditional_print(config.silent_mode, f"Saved temperatures to {run_output_dir}")
     # Also copy config there for easy reference by TEMPEST_RAD

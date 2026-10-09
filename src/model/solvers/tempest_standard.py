@@ -300,29 +300,30 @@ class TempestStandardSolver(TemperatureSolver):
                 config.include_self_heating, subsurface_const
             )
 
-            # Check for invalid temperatures
-            for i in range(len(thermal_data.temperatures)):
-                for time_step in range(simulation.timesteps_per_day):
-                    if np.isnan(current_day_temperature[i, time_step]) or np.isinf(current_day_temperature[i, time_step]) or current_day_temperature[i, time_step] < 0:
-                        conditional_print(config.silent_mode, f"Invalid temperature {current_day_temperature[i, time_step]} K detected for facet {i} at timestep {time_step}")
-                        # Root-cause diagnostics (always print for debugging)
-                        init_t = thermal_data.temperatures[i, 0]
-                        ins = thermal_data.insolation[i, :]
-                        conditional_print(False, f"  [Diagnostics] Facet {i}: initial T={init_t:.4f} K, "
-                            f"insolation: min={np.nanmin(ins):.2e} max={np.nanmax(ins):.2e} mean={np.nanmean(ins):.2e} "
-                            f"(nan={np.isnan(ins).sum()}, inf={np.isinf(ins).sum()})")
-                        conditional_print(False, f"  [Diagnostics] constants: const1={const1:.2e} const2={const2:.2e} const3={const3:.4f} "
-                            f"(CFL stable if const3<=0.5)")
-                        vf = thermal_data.thermal_view_factors[i]
-                        conditional_print(False, f"  [Diagnostics] thermal_view_factors[{i}]: len={len(vf)} (empty => no self-heating)")
-                        return {
-                            "final_day_temperatures": None,
-                            "final_day_temperatures_all_layers": None,
-                            "final_timestep_temperatures": None,
-                            "days_to_convergence": day,
-                            "mean_temperature_error": None,
-                            "max_temperature_error": None
-                        }
+            # Check for invalid temperatures and report the first one found
+            invalid_mask = ~np.isfinite(current_day_temperature) | (current_day_temperature < 0)
+            if invalid_mask.any():
+                i, time_step = (int(x) for x in
+                                np.unravel_index(int(np.argmax(invalid_mask)), invalid_mask.shape))
+                conditional_print(config.silent_mode, f"Invalid temperature {current_day_temperature[i, time_step]} K detected for facet {i} at timestep {time_step}")
+                # Root-cause diagnostics (always print for debugging)
+                init_t = thermal_data.temperatures[i, 0]
+                ins = thermal_data.insolation[i, :]
+                conditional_print(False, f"  [Diagnostics] Facet {i}: initial T={init_t:.4f} K, "
+                    f"insolation: min={np.nanmin(ins):.2e} max={np.nanmax(ins):.2e} mean={np.nanmean(ins):.2e} "
+                    f"(nan={np.isnan(ins).sum()}, inf={np.isinf(ins).sum()})")
+                conditional_print(False, f"  [Diagnostics] constants: const1={const1:.2e} const2={const2:.2e} const3={const3:.4f} "
+                    f"(CFL stable if const3<=0.5)")
+                vf = thermal_data.thermal_view_factors[i]
+                conditional_print(False, f"  [Diagnostics] thermal_view_factors[{i}]: len={len(vf)} (empty => no self-heating)")
+                return {
+                    "final_day_temperatures": None,
+                    "final_day_temperatures_all_layers": None,
+                    "final_timestep_temperatures": None,
+                    "days_to_convergence": day,
+                    "mean_temperature_error": None,
+                    "max_temperature_error": None
+                }
 
             if config.calculate_energy_terms:
                 energy_terms = self.calculate_energy_terms(

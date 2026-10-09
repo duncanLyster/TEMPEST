@@ -66,6 +66,12 @@ class Config:
         self.n_scatters = self.config_data.get('n_scatters', 2)
         self.include_self_heating = self.config_data.get('include_self_heating', False)
         self.vf_rays = self.config_data.get('vf_rays', 1000)
+        # Visible-facet search cutoff: null = global search, 0 = derive from relief and
+        # min_solar_elevation_degrees, > 0 = distance in metres. Use for terrain models.
+        self.max_interaction_distance_m = self.config_data.get('max_interaction_distance_m', None)
+        self.min_solar_elevation_degrees = self.config_data.get('min_solar_elevation_degrees', 5.0)
+        # Optional per-facet albedo: .npy file with one value per facet, in STL order
+        self.albedo_map_file = self.config_data.get('albedo_map_file', None)
         self.scattering_lut = self.config_data.get('scattering_lut', 'lambertian.npy')
         self.emission_lut = self.config_data.get('emission_lut', 'lambertian_epf.npy')
         
@@ -153,6 +159,9 @@ class Config:
         
         # Output flags
         self.save_insolation_data = self.config_data.get('save_insolation_data', False)
+        # temperatures.csv duplicates temperatures.npy (TEMPEST_RAD reads the CSV);
+        # turn off for large models
+        self.save_temperature_csv = self.config_data.get('save_temperature_csv', True)
 
     def validate_jobs(self):
         """
