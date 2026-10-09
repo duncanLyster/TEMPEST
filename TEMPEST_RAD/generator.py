@@ -105,15 +105,13 @@ SIM_TIMESTEPS = 720    # Internal simulation: 4x finer for stability
 # Resolution of the spherical crater mesh
 CRATER_SUBFACETS = 2000   # Facet count in crater
                           # Note: Actual count may differ slightly due to geodesic tessellation.
-                          # Geometry is computed ONCE in main() and cached/shared with all workers.
+                          # Geometry is computed once in main() and shared with all workers.
                           # Timing on 32 cores: ~20 hours total for all 15 thetas.
                           # (10000 facets would take ~250 hours due to O(N^2) visibility kernel)
 
 # View factor ray tracing resolution
 VIEW_FACTOR_RAYS = 20000  # Rays per facet for view factor calculation
-                          # Higher = better energy conservation (aim for <5% error).
-                          # Computed ONCE in main() and cached to disk.
-                          # (Scaled down proportionally with CRATER_SUBFACETS)
+                          # Computed once in main() and cached to disk.
 
 # --- PHYSICAL PARAMETERS (Standard Reference Conditions) ---
 # These define the "canonical" surface for the LUT
@@ -138,11 +136,8 @@ CONVERGENCE_TARGET = 0.2  # Convergence threshold (K for mean temperature change
 # ============================================================================
 
 # --- Environment overrides --------------------------------------------------
-# joblib's loky workers RE-IMPORT this module, so monkey-patched module globals
-# in a launcher script are silently lost in the workers (the parent still sees
-# the patched values, the workers see the defaults, and the returned grids no
-# longer match the allocated output arrays).  Env vars survive the fork/spawn,
-# so scripted runs must use these instead of (or in addition to) patching.
+# Scripted runs must set these as environment variables: joblib workers re-import
+# this module, so values patched into the module from a launcher script are lost.
 SIM_TIMESTEPS    = int(os.environ.get('LUT_SIM_TIMESTEPS', SIM_TIMESTEPS))
 LUT_TIMESTEPS    = int(os.environ.get('LUT_LUT_TIMESTEPS', LUT_TIMESTEPS))
 CRATER_SUBFACETS = int(os.environ.get('LUT_CRATER_SUBFACETS', CRATER_SUBFACETS))
@@ -155,28 +150,32 @@ if 'LUT_THETA_VALUES' in os.environ:
 # crater opening angle (90 = hemisphere; >90 = beyond-hemispherical / deeper cavity)
 if 'LUT_OPENING_ANGLES' in os.environ:
     OPENING_ANGLES = [float(x) for x in os.environ['LUT_OPENING_ANGLES'].split(',')]
-# restrict the latitude grid — for single-latitude convergence/benchmark runs
+# restrict the latitude grid (e.g. for single-latitude tests)
 if 'LUT_LATITUDE_VALUES' in os.environ:
     LATITUDE_VALUES = np.array([float(x) for x in os.environ['LUT_LATITUDE_VALUES'].split(',')])
-# inter-facet scattering iterations inside the crater (1 = single bounce; higher =
-# converges the multiple-scattering absorption/beaming enhancement)
+# scattering iterations inside the crater (1 = single bounce)
 N_SCATTERS_ENV = int(os.environ.get('LUT_N_SCATTERS', '1'))
-# Reference conditions. Overridable so the LUT's dependence on the absolute
-# temperature scale can be tested: R = I_rough/I_smooth is a ratio of Planck
-# functions, so it depends on the product lambda*T_ss rather than on lambda
-# alone, and T_ss is set by (1-A)S/eps. Changing these changes what the stored
-# ratios mean -- they are not free knobs for production runs.
+# Reference conditions. R depends on lambda * T_ss, so changing these changes what
+# the stored ratios mean; they are for testing, not for production LUTs.
 REFERENCE_ALBEDO     = float(os.environ.get('LUT_REFERENCE_ALBEDO', REFERENCE_ALBEDO))
 REFERENCE_EMISSIVITY = float(os.environ.get('LUT_REFERENCE_EMISSIVITY', REFERENCE_EMISSIVITY))
 SOLAR_DISTANCE_AU    = float(os.environ.get('LUT_SOLAR_DISTANCE_AU', SOLAR_DISTANCE_AU))
 ROTATION_PERIOD_HOURS = float(os.environ.get('LUT_ROTATION_PERIOD_HOURS', ROTATION_PERIOD_HOURS))
-# Wavelength axis. Because R depends on lambda*T_ss, applying a LUT to a colder
-# body reads it at lambda*(T_ss_body/T_ss_LUT) < lambda, so the axis needs to
-# extend BELOW the shortest wavelength any body will be modelled at. Dinkinesh
-# (T_ss 258 K vs the 1 AU reference 386 K) scales by 0.665, so a 4 um band needs
-# a 2.66 um node.
+# Wavelength axis. A LUT applied to a colder body is read at
+# lambda * T_ss_body / T_ss_LUT, so the axis must extend below the shortest
+# wavelength of interest (e.g. a body at 258 K needs a 2.66 um node for a 4 um band).
 if 'LUT_WAVELENGTHS' in os.environ:
     WAVELENGTHS_MICRONS = [float(x) for x in os.environ['LUT_WAVELENGTHS'].split(',')]
+# Experimental: include thermal IR reflected between crater walls in the outgoing
+# radiance, by solving L_i = B_i + rho * sum_j F_ij L_j (L in units of radiance / eps).
+# With this on, R depends on eps. The reflected energy is not removed from the
+# sub-facet energy balance, so these LUTs do not conserve energy; off by default.
+THERMAL_REFLECTION = int(os.environ.get('LUT_THERMAL_REFLECTION', '0'))
+# Neumann-series terms for the radiosity solve (converges as (rho * 0.5)^n)
+THERMAL_REFLECTION_ITERS = int(os.environ.get('LUT_THERMAL_REFLECTION_ITERS', '4'))
+# Reflectance for the radiosity solve; defaults to 1 - REFERENCE_EMISSIVITY
+THERMAL_REFLECTION_RHO = float(os.environ.get(
+    'LUT_THERMAL_REFLECTION_RHO', 1.0 - REFERENCE_EMISSIVITY))
 
 def planck_function(wavelength_um, temp_k):
     """
@@ -272,6 +271,56 @@ def compute_visibility_mask(d_local, normals, centers, triangles):
     return visible
 
 
+# --- Partial (area-weighted) visibility ---------------------------------------
+# The binary centroid test fails near the limb, where only a few sub-facets are
+# visible. For a spherical cap, a point is visible from direction d if the ray from it
+# leaves through the aperture disc, and that exit point is an affine function of the
+# point, so the visible fraction of each sub-facet is found by testing a lattice of
+# points inside it. LUT_PARTIAL_VIS=0 restores the binary test.
+PARTIAL_VIS = os.environ.get('LUT_PARTIAL_VIS', '1') not in ('0', 'false', 'False')
+
+
+def _bary_lattice(n=6):
+    """Uniform triangle supersampling: the 2-per-cell centroid lattice, K=n^2."""
+    pts = []
+    for i in range(n):
+        for j in range(n - i):
+            pts.append(((i + 1 / 3) / n, (j + 1 / 3) / n))
+            if i + j < n - 1:
+                pts.append(((i + 2 / 3) / n, (j + 2 / 3) / n))
+    uv = np.array(pts)
+    return np.column_stack([uv[:, 0], uv[:, 1], 1.0 - uv.sum(axis=1)])
+
+
+_BARY = _bary_lattice(6)
+
+
+def crater_rim_geometry(triangles):
+    """(rim_z, rim_radius) of the cap aperture, measured from the mesh."""
+    verts = triangles.reshape(-1, 3)
+    zmax = verts[:, 2].max()
+    rim = verts[np.abs(verts[:, 2] - zmax) < 1e-6]
+    return float(zmax), float(np.hypot(rim[:, 0], rim[:, 1]).mean())
+
+
+def compute_visibility_fraction(d_local, normals, triangles, rim_z, rim_r):
+    """Visible area fraction of each sub-facet from crater-local direction d_local."""
+    frac = np.zeros(len(normals))
+    dz = d_local[2]
+    if dz <= 1e-9:
+        return frac
+    face = normals @ d_local > 0.0
+    if not face.any():
+        return frac
+    pts = np.einsum('kv,nvj->nkj', _BARY, triangles[face])   # (Nf, K, 3)
+    s = (rim_z - pts[:, :, 2]) / dz
+    qx = pts[:, :, 0] + s * d_local[0]
+    qy = pts[:, :, 1] + s * d_local[1]
+    inside = (qx * qx + qy * qy) <= rim_r * rim_r
+    frac[face] = inside.mean(axis=1)
+    return frac
+
+
 class ReferenceConfig(Config):
     """
     A minimal Config subclass that does not require a file.
@@ -303,8 +352,7 @@ class ReferenceConfig(Config):
             'include_shadowing': True,
             'n_scatters': N_SCATTERS_ENV,
             'include_self_heating': True,
-            # thermal VFs are cheap (EPF multiply) and their cache was poisoned by
-            # the missing set_secondary_radiation_view_factors call above
+            # thermal view factors are cheap to recompute
             'force_recalculate_thermal_view_factors': True,
             'n_jobs': N_JOBS,  # Parallel workers for view factor calculation etc.
             'vf_rays': 10000,  # Not used (overridden in simulate_crater_diurnal_cycle)
@@ -529,12 +577,8 @@ def simulate_crater_diurnal_cycle(theta, opening_angle, latitude, config, n_time
         s_body = np.dot(rot.T, simulation.sunlight_direction)
         sun_vectors_body[t] = s_body / np.linalg.norm(s_body)
 
-    # Return temperatures and sun vectors (geometry comes from precomputed dict).
-    # return_thermal_data adds the solved ThermalData as a 4th element, so callers
-    # can reach the per-subfacet insolation (needed to reproduce scattered optical
-    # flux, e.g. the Magri et al. 2018 Table A1 bolometric row, which validates the
-    # crater geometry and scattering with no thermal physics involved).  Default
-    # False keeps the 3-tuple that process_single_case unpacks.
+    # return_thermal_data also returns the solved ThermalData (e.g. for the
+    # sub-facet insolation)
     if return_thermal_data:
         return rough_temps, smooth_temps, sun_vectors_body, thermal_data
     return rough_temps, smooth_temps, sun_vectors_body
@@ -589,17 +633,23 @@ def plot_wireframe(mesh, filename="TEMPEST_RAD/diagnostics/plots/crater_wirefram
 def process_single_case(theta, opening_angle, lat, config, precomputed):
     """
     Run simulation and compute viewing geometry grid.
-    Returns: 4D array (Time, Wave, Emi, Azi), 1D array (Normalization_Factor)
+    Returns: 4D array (Time, Wave, Emi, Azi), the mean closure factor alpha,
+             and the smooth reference temperature curve (LUT_TIMESTEPS,).
     """
     try:
         rough_temps_sim, smooth_temps_sim, sun_vectors_sim = simulate_crater_diurnal_cycle(theta, opening_angle, lat, config, SIM_TIMESTEPS, precomputed)
     except Exception as e:
         print(f"Error in simulation (Th={theta}, ang={opening_angle}, lat={lat}): {e}")
         traceback.print_exc()
-        return np.full((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32), np.nan
+        return (np.full((LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS), len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32),
+                np.nan, np.full(LUT_TIMESTEPS, np.nan, dtype=np.float32))
 
-    # Resample to LUT grid
-    indices = np.linspace(0, SIM_TIMESTEPS-1, LUT_TIMESTEPS, dtype=int)
+    # Resample to LUT grid: every n-th simulation step, so the stored phases are
+    # exactly 360 * i / LUT_TIMESTEPS, which is what lut.py assumes.
+    if SIM_TIMESTEPS % LUT_TIMESTEPS:
+        raise ValueError(f"SIM_TIMESTEPS ({SIM_TIMESTEPS}) must be a multiple of "
+                         f"LUT_TIMESTEPS ({LUT_TIMESTEPS})")
+    indices = np.arange(LUT_TIMESTEPS) * (SIM_TIMESTEPS // LUT_TIMESTEPS)
     rough_temps = rough_temps_sim[:, indices]
     smooth_temps = smooth_temps_sim[indices]
     sun_vectors = sun_vectors_sim[indices]
@@ -615,6 +665,9 @@ def process_single_case(theta, opening_angle, lat, config, precomputed):
     facet_normal = precomputed['aperture_normal']
     world_to_local = precomputed['world_to_local']
     aperture_area = precomputed['aperture_area']
+    vf_matrix = precomputed.get('vf_matrix')
+    rim_z, rim_r = crater_rim_geometry(triangles)
+    wave_arr_all = np.asarray(WAVELENGTHS_MICRONS, dtype=np.float64)
     
     # Pre-calculated Geometry terms
     em_rad = np.radians(EMISSION_ANGLES)
@@ -622,9 +675,7 @@ def process_single_case(theta, opening_angle, lat, config, precomputed):
     d_em = np.diff(em_rad); d_em = np.append(d_em, d_em[-1])
     d_az = np.diff(az_rad); d_az = np.append(d_az, d_az[-1])
 
-    # Pre-compute cos(e)*sin(e) solid-angle weight grid for normalization.
-    # Energy conservation requires: ∫ R(e,φ) cos(e) sin(e) de dφ = π
-    # i.e., the cos(e)*sin(e)-weighted mean of R must equal 1.0.
+    # cos(e) sin(e) solid-angle weights for the alpha diagnostic below
     cos_e_arr = np.cos(em_rad)
     sin_e_arr = np.sin(em_rad)
     cse_weights = np.zeros((len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)))
@@ -637,7 +688,17 @@ def process_single_case(theta, opening_angle, lat, config, precomputed):
     for t_idx in range(LUT_TIMESTEPS):
         t_sub = rough_temps[:, t_idx] # (N_sub,)
         t_smooth = smooth_temps[t_idx] # scalar
-        
+
+        # Outgoing radiance / eps of every sub-facet, (N_sub, N_wave)
+        rad_sub_all = planck_function(wave_arr_all[None, :], t_sub[:, None])
+        if THERMAL_REFLECTION and vf_matrix is not None:
+            # Cavity radiosity, one more bounce off the crater walls per term
+            rho = THERMAL_REFLECTION_RHO
+            bounce = rad_sub_all
+            for _ in range(THERMAL_REFLECTION_ITERS):
+                bounce = rho * (vf_matrix @ bounce)
+                rad_sub_all = rad_sub_all + bounce
+
         # Sun Basis for Azimuth
         sun_vec_norm = sun_vectors[t_idx] / np.linalg.norm(sun_vectors[t_idx])
         s_dot_n = np.dot(sun_vec_norm, facet_normal)
@@ -668,26 +729,27 @@ def process_single_case(theta, opening_angle, lat, config, precomputed):
                 
                 # Transform to crater-local frame for visibility test
                 d_local = world_to_local.dot(view_vec)
-                
-                # Check if view enters crater opening (d_local[2] > 0 = faces aperture)
-                if d_local[2] <= 0.0:
-                    visible_mask = np.zeros(len(normals), dtype=np.bool_)
-                else:
-                    # Fast numba visibility: Möller–Trumbore shadow test, zero allocations
-                    visible_mask = compute_visibility_mask(d_local, normals, centers, triangles)
-                
+
                 # cos(theta_i) for each subfacet vs view direction in local frame
                 cos_i_all = normals.dot(d_local)
-                
+
+                # Visible weight of each sub-facet: area * cos(theta_i) * visible fraction
+                if d_local[2] <= 0.0:
+                    w_vis = np.zeros(len(normals))
+                elif PARTIAL_VIS:
+                    vis_frac = compute_visibility_fraction(d_local, normals, triangles,
+                                                           rim_z, rim_r)
+                    w_vis = areas * np.maximum(cos_i_all, 0.0) * vis_frac
+                else:
+                    visible_mask = compute_visibility_mask(d_local, normals, centers, triangles)
+                    w_vis = areas * np.maximum(cos_i_all, 0.0) * visible_mask
+
                 # Loop Wavelengths
                 for i_w, wave in enumerate(WAVELENGTHS_MICRONS):
                     # 1. Compute spectral intensity (power per steradian per micron)
-                    # CORRECT formula for outgoing radiance from a rough crater:
-                    #   I_rough = Σ_visible B(λ, T_i) * A_i * cos(θ_i)
-                    # where cos(θ_i) is angle between subfacet normal and view direction.
-                    rad_sub = planck_function(wave, t_sub)
-                    cos_i_vis = np.maximum(cos_i_all[visible_mask], 0.0)
-                    rough_intensity = np.sum(rad_sub[visible_mask] * areas[visible_mask] * cos_i_vis)
+                    #   I_rough = sum_i L(lambda, T_i) * A_i * cos(theta_i) * vis_i
+                    rad_sub = rad_sub_all[:, i_w]
+                    rough_intensity = np.sum(rad_sub * w_vis)
                     
                     # Smooth intensity: I_smooth = B(λ, T_smooth) * A_aperture * cos(e)
                     if t_smooth < 5.0:
@@ -698,13 +760,8 @@ def process_single_case(theta, opening_angle, lat, config, precomputed):
 
                     # Store radiance ratio: R = I_rough / I_smooth = L_rough / L_smooth
                     if cos_e < 1e-12:
-                        # Grazing limb (e = 90°): the smooth reference projects to
-                        # zero area, so R = 0/0 is undefined (not 1).
-                        # Storing 1.0 here (the old way) put a spurious step in
-                        # the last row — R falls to ~0.45 by e = 87.5° and then jumped
-                        # back to exactly 1.  NaN makes the interpolator refuse the
-                        # cell instead; queries are held below EMI_CAP in lut.py so it
-                        # is never reached in practice.
+                        # Grazing limb: the smooth reference has zero projected area, so
+                        # R = 0/0 is undefined. lut.py drops this row.
                         result_grid[t_idx, i_w, i_e, i_a] = np.nan
                     elif smooth_intensity < 1e-15:
                         result_grid[t_idx, i_w, i_e, i_a] = 1.0  # cold-night fallback
@@ -714,19 +771,11 @@ def process_single_case(theta, opening_angle, lat, config, precomputed):
                         # at extreme viewing geometries (e~89°) or Wien-tail conditions
                         result_grid[t_idx, i_w, i_e, i_a] = np.clip(ratio, 0.0, 50.0)
 
-    # --- PER-TIMESTEP BOLOMETRIC CLOSURE DIAGNOSTIC alpha(t) ---
-    # alpha(t) is the scalar that would force the Planck-weighted bolometric
-    # angular mean of R to 1.0 at each timestep.  Historically it was applied to
-    # the LUT; that was masking a missing-self-heating bug (alpha ~ 2.1).  With
-    # self-heating, intra-crater scattering, and warm-start convergence fixed,
-    # energy closure is inherent in the simulation, and forcing instantaneous
-    # closure against the smooth reference would erase genuine diurnal beaming
-    # (the cavity is really warmer than the smooth facet at night and lags it in
-    # the morning).  alpha is therefore recorded as a diagnostic only; set
-    # LUT_APPLY_NORM=1 to restore the old behaviour for comparison runs.
-    #
-    # Closure metric: ∑_λ w_λ · ∫ R(λ,e,φ) cos(e) sin(e) de dφ vs π · ∑_λ w_λ
-    #             w_λ = B(λ, T_smooth) · Δλ   (Planck-weighted bandwidth)
+    # Diagnostic alpha(t): the factor that would make the Planck-weighted angular mean
+    # of R equal 1 at each timestep, i.e. the kernel's emission relative to the smooth
+    # reference. Recorded only, not applied: the kernel is not expected to match the
+    # smooth facet instant by instant.
+    #   alpha(t) = pi * sum_l w_l / sum_l w_l * Int R cos(e) dOmega,  w_l = B(l, T_ref) dl
     wave_arr = np.array(WAVELENGTHS_MICRONS)
     dwave = np.gradient(wave_arr)
 
@@ -743,32 +792,32 @@ def process_single_case(theta, opening_angle, lat, config, precomputed):
         planck_total = np.sum(planck_w)
 
         # Bolometric-weighted angular integral across all wavelengths
+        # nansum: the e = 90 row is NaN by design (and has zero weight)
         total_weighted = sum(
-            planck_w[i_w] * np.sum(result_grid[t_idx, i_w, :, :] * cse_weights)
+            planck_w[i_w] * np.nansum(result_grid[t_idx, i_w, :, :] * cse_weights)
             for i_w in range(len(WAVELENGTHS_MICRONS))
         )
 
         expected = planck_total * ref_integral  # π · ∑ w_λ
         alpha = expected / total_weighted if total_weighted > 1e-15 else 1.0
-        if os.environ.get('LUT_APPLY_NORM', '0') == '1':
-            result_grid[t_idx, :, :, :] *= alpha
         norm_factors_t[t_idx] = alpha
 
-    # Diagnostic: average normalization factor across all timesteps
+    # Mean alpha over the rotation (diagnostic only)
     norm_factor = float(np.mean(norm_factors_t))
-                
-    return result_grid, norm_factor
 
-def save_theta_hdf5(theta_val, opening_angle_idx, lut_slice, factors_slice, 
-                    lat_status, elapsed_per_lat, output_dir):
+    return result_grid, norm_factor, smooth_temps.astype(np.float32)
+
+def save_theta_hdf5(theta_val, opening_angle_idx, lut_slice, factors_slice,
+                    tsmooth_slice, lat_status, elapsed_per_lat, output_dir):
     """
     Save a single theta value's LUT data to its own HDF5 file.
-    
+
     Args:
         theta_val: The theta value
         opening_angle_idx: Index of the opening angle used
         lut_slice: Array of shape (n_lat, n_time, n_wave, n_emi, n_azi)
         factors_slice: Array of shape (n_lat,) - normalization factors
+        tsmooth_slice: Array of shape (n_lat, n_time) - smooth reference temperature (K)
         lat_status: dict mapping lat_index -> 'ok' or error string
         elapsed_per_lat: dict mapping lat_index -> time in seconds
         output_dir: Directory to save into
@@ -776,11 +825,14 @@ def save_theta_hdf5(theta_val, opening_angle_idx, lut_slice, factors_slice,
     os.makedirs(output_dir, exist_ok=True)
     fname = f"{OUTPUT_PREFIX}_theta_{theta_val:.6f}.h5"
     fpath = os.path.join(output_dir, fname)
-    
+
     with h5py.File(fpath, 'w') as f:
         # Main LUT data - shape: (n_lat, n_time, n_wave, n_emi, n_azi)
         f.create_dataset("lut", data=lut_slice, compression="gzip", compression_opts=1)
         f.create_dataset("normalization_factors", data=factors_slice)
+        # Smooth reference temperature per (lat, time), used by lut.py to rescale
+        # the wavelength axis per facet (R depends on lambda * T)
+        f.create_dataset("t_smooth", data=tsmooth_slice)
         
         # Axes
         f.create_dataset("theta", data=np.array([theta_val]))
@@ -807,7 +859,13 @@ def save_theta_hdf5(theta_val, opening_angle_idx, lut_slice, factors_slice,
         f.attrs['reference_tss'] = float(
             ((1 - REFERENCE_ALBEDO) * _S_ref / (REFERENCE_EMISSIVITY * 5.670374419e-8)) ** 0.25)
         f.attrs['reference_emissivity'] = REFERENCE_EMISSIVITY
+        # Whether R includes reflected thermal IR (R then depends on eps)
+        f.attrs['thermal_reflection'] = THERMAL_REFLECTION
+        f.attrs['thermal_reflection_iters'] = THERMAL_REFLECTION_ITERS if THERMAL_REFLECTION else 0
+        f.attrs['thermal_reflection_rho'] = THERMAL_REFLECTION_RHO if THERMAL_REFLECTION else 0.0
         f.attrs['rotation_period_hours'] = ROTATION_PERIOD_HOURS
+        # Read by lut.py to tell these files from older ones with uneven time sampling
+        f.attrs['lut_time_sampling'] = 'every_nth'
         f.attrs['solar_distance_au'] = SOLAR_DISTANCE_AU
         f.attrs['n_successful_lats'] = sum(1 for s in lat_status.values() if s == 'ok')
         f.attrs['n_failed_lats'] = sum(1 for s in lat_status.values() if s != 'ok')
@@ -847,6 +905,9 @@ def generate_diagnostics(output_dir, all_theta_results):
         log.write(f"N_JOBS: {N_JOBS}\n")
         log.write(f"CRATER_SUBFACETS: {CRATER_SUBFACETS}\n")
         log.write(f"SIM_TIMESTEPS: {SIM_TIMESTEPS} -> LUT_TIMESTEPS: {LUT_TIMESTEPS}\n")
+        log.write(f"N_SCATTERS (solar, intra-crater): {N_SCATTERS_ENV}\n")
+        log.write(f"THERMAL_REFLECTION (reflected IR in radiance): {THERMAL_REFLECTION}"
+                  f"{f' (rho={THERMAL_REFLECTION_RHO}, {THERMAL_REFLECTION_ITERS} bounces)' if THERMAL_REFLECTION else ''}\n")
         log.write(f"Grid: {len(LATITUDE_VALUES)} lat x {LUT_TIMESTEPS} time x {len(WAVELENGTHS_MICRONS)} wave x {len(EMISSION_ANGLES)} emi x {len(AZIMUTH_ANGLES)} azi\n")
         n_cells = len(LATITUDE_VALUES) * LUT_TIMESTEPS * len(WAVELENGTHS_MICRONS) * len(EMISSION_ANGLES) * len(AZIMUTH_ANGLES)
         log.write(f"Cells per theta: {n_cells:,} ({n_cells*4/1024**2:.1f} MB uncompressed)\n")
@@ -1049,10 +1110,7 @@ def main():
     vf_mid = time.time()
     print(f"  [1/3] Done ({vf_mid - vf_start:.1f}s)")
 
-    # calculate_thermal_view_factors reads thermal_data.secondary_radiation_view_factors;
-    # without this the thermal VFs are all empty and the crater solve runs with NO
-    # self-heating (a hemispherical cavity then loses exactly half its emitted power
-    # out of the energy budget -> the alpha~2 normalisation factors).
+    # Needed by calculate_thermal_view_factors (otherwise the crater has no self-heating)
     thermal_data.set_secondary_radiation_view_factors(cached_all_view_factors)
 
     print(f"  [2/3] Computing thermal view factors...")
@@ -1089,6 +1147,23 @@ def main():
         else:
             cached_tvf_arrays.append(arr.flatten() if arr.ndim > 1 else arr)
 
+    # Dense sub-facet view-factor matrix for the cavity radiosity solve. Uses the
+    # geometric view factors, since reflection is assumed Lambertian.
+    vf_matrix = None
+    if THERMAL_REFLECTION:
+        vf_matrix = np.zeros((n_facets, n_facets), dtype=np.float32)
+        for i in range(n_facets):
+            vis_i = thermal_data.visible_facets[i]
+            if len(vis_i) != len(cached_vf_arrays[i]):
+                raise ValueError(
+                    f"visible_facets/view_factors length mismatch at subfacet {i}: "
+                    f"{len(vis_i)} vs {len(cached_vf_arrays[i])}")
+            vf_matrix[i, vis_i] = cached_vf_arrays[i]
+        rowsum = vf_matrix.sum(axis=1)
+        print(f"  Cavity view-factor matrix: sum_j F_ij = {rowsum.mean():.3f} mean, "
+              f"{rowsum.min():.3f} min, {rowsum.max():.3f} max "
+              f"(1 - this = fraction of sky seen)")
+
     precomputed = {
         'canonical_normals': canonical_normals,
         'canonical_vertices': canonical_vertices,
@@ -1104,6 +1179,8 @@ def main():
         # Pre-loaded view factors — workers use these directly, zero disk I/O
         'all_view_factors': cached_vf_arrays,
         'thermal_view_factors': cached_tvf_arrays,
+        # Dense (N,N) geometric VF matrix; None unless LUT_THERMAL_REFLECTION=1
+        'vf_matrix': vf_matrix,
     }
     
     # Warm up numba JIT for compute_visibility_mask (one-time compilation cost)
@@ -1174,20 +1251,22 @@ def main():
         lut_slice = np.full((len(LATITUDE_VALUES), LUT_TIMESTEPS, len(WAVELENGTHS_MICRONS),
                              len(EMISSION_ANGLES), len(AZIMUTH_ANGLES)), np.nan, dtype=np.float32)
         factors_slice = np.full(len(LATITUDE_VALUES), np.nan, dtype=np.float32)
+        tsmooth_slice = np.full((len(LATITUDE_VALUES), LUT_TIMESTEPS), np.nan, dtype=np.float32)
         lat_status = {}
         elapsed_per_lat = {}
-        
+
         for i_lat, (lat, result) in enumerate(zip(LATITUDE_VALUES, results)):
             if result is None:
                 lat_status[i_lat] = 'returned_none'
                 continue
-            grid, factor = result
+            grid, factor, t_sm = result
             if np.isnan(factor):
                 lat_status[i_lat] = 'nan_factor'
                 print(f"  FAILED: lat={lat:.1f}° (returned NaN)")
             else:
                 lut_slice[i_lat] = grid
                 factors_slice[i_lat] = factor
+                tsmooth_slice[i_lat] = t_sm
                 lat_status[i_lat] = 'ok'
         
         n_ok = sum(1 for s in lat_status.values() if s == 'ok')
@@ -1196,7 +1275,8 @@ def main():
         
         # Save immediately
         fpath, size_mb = save_theta_hdf5(
-            theta, 0, lut_slice, factors_slice, lat_status, elapsed_per_lat, OUTPUT_DIR
+            theta, 0, lut_slice, factors_slice, tsmooth_slice, lat_status,
+            elapsed_per_lat, OUTPUT_DIR
         )
         
         mean_nf = float(np.nanmean(factors_slice[~np.isnan(factors_slice)])) if n_ok > 0 else np.nan

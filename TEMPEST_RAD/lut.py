@@ -37,9 +37,8 @@ class RoughnessLUT:
             lambda_LUT = lambda_body * (T_ss_body / T_ss_LUT)
 
         so that both sit the same distance into the Wien tail. Omitting this
-        under-applies beaming for a colder body -- ~8% at 10 um and up to 44% at
-        short wavelengths for Dinkinesh (T_ss 258 K) against the 1 AU reference
-        (386 K). See docs/HANDOFF_solver_delta_t_bug.md, Prompt 6.
+        under-applies beaming for a colder body: for T_ss = 258 K against the 1 AU
+        reference (386 K), by ~8% at 10 um and up to 44% at short wavelengths.
 
         Pass None to disable the rescale and reproduce the historical behaviour.
         """
@@ -50,6 +49,9 @@ class RoughnessLUT:
         self.target_tss = target_tss
         self.reference_tss = None
         self.wavelength_scale = 1.0
+        # Interpolator for the smooth reference temperature T_ref(lat, sun_phase), if the
+        # file has one. Used for the per-facet wavelength rescale in get_correction_factors.
+        self.tsmooth_interp = None
 
         # Load only the subset if targets are provided
         if os.path.exists(lut_path):
@@ -102,6 +104,21 @@ class RoughnessLUT:
 
                     n_time     = int(f['sun_phase_steps'][()])
                     sun_phases = np.linspace(0, 360, n_time, endpoint=False)
+                    # Older files were not sampled at even phases; use the phases they were
+                    # actually sampled at.
+                    sim_steps = int(f.attrs.get('sim_timesteps', 0))
+                    if f.attrs.get('lut_time_sampling', '') != 'every_nth' and sim_steps > 0:
+                        sampled = np.linspace(0, sim_steps - 1, n_time, dtype=int)
+                        sun_phases = sampled * 360.0 / sim_steps
+
+                    # Wrap the phase axis to 360 deg so the last bin interpolates.
+                    if 't_smooth' in f:
+                        t_sm = np.asarray(f['t_smooth'][:], dtype=float)
+                        ph_ext = np.append(sun_phases, 360.0)
+                        t_ext = np.concatenate([t_sm, t_sm[:, :1]], axis=1)
+                        self.tsmooth_interp = RegularGridInterpolator(
+                            (lat_axis, ph_ext), t_ext,
+                            bounds_error=False, fill_value=None)
 
                     if target_wavelength is not None:
                         idx_wave = np.abs(wave_axis - target_wavelength).argmin()
@@ -162,40 +179,68 @@ class RoughnessLUT:
             if np.isnan(lut_subset).any():
                 lut_subset = np.nan_to_num(lut_subset, nan=1.0)
 
-            # ...but the e = 90 deg row is UNDEFINED by construction, not missing:
-            # the smooth reference projects to zero area there, so R = 0/0.  The
-            # generator used to store 1.0 in that row, which put a step at the limb
-            # (R falls to ~0.45 by e = 87.5 deg and then jumped back to exactly 1).
-            # Blank it to NaN so the interpolator refuses the cell rather than
-            # silently returning a fabricated value.  Applied at load time so it
-            # also corrects the existing LUT sets without regenerating them; EMI_CAP
-            # in get_correction_factors() keeps every query well clear of it.
-            # Axis order is (..., emission, azimuth) in both spectral and
-            # single-wavelength modes, so emission is always second from last.
+            # Drop the e = 90 deg row, where R = 0/0. Kept as NaN it would make every
+            # query at the last finite node (where EMI_CAP clamps) return NaN.
+            # Emission is the second-last axis in both modes.
             i_emi = len(points) - 2
-            limb = np.isclose(np.asarray(points[i_emi], dtype=float), 90.0)
-            if limb.any():
-                sl = [slice(None)] * lut_subset.ndim
-                sl[i_emi] = np.where(limb)[0]
-                lut_subset = np.array(lut_subset, dtype=float, copy=True)
-                lut_subset[tuple(sl)] = np.nan
+            emi_vals = np.asarray(points[i_emi], dtype=float)
+            keep = ~np.isclose(emi_vals, 90.0)
+            if not keep.all():
+                points = list(points)
+                points[i_emi] = emi_vals[keep]
+                points = tuple(points)
+                lut_subset = np.take(np.asarray(lut_subset, dtype=float),
+                                     np.where(keep)[0], axis=i_emi)
 
-            self.interpolator = RegularGridInterpolator(
-                points, lut_subset, bounds_error=False, fill_value=None
-            )
+            # Interpolate ln R against 1/lambda. R is a ratio of Planck functions, so this
+            # is close to linear, whereas linear interpolation in lambda overshoots between
+            # nodes by a few per cent at short wavelengths. LUT_INTERP=linear gives the old
+            # scheme.
+            self.interp_kind = os.environ.get('LUT_INTERP', 'wien')
+            if self.interp_kind == 'wien' and self.spectral_mode:
+                i_wav = len(points) - 3
+                inv_w = 1.0 / np.asarray(points[i_wav], dtype=float)
+                order = np.argsort(inv_w)
+                pts = list(points)
+                pts[i_wav] = inv_w[order]
+                lut_subset = np.take(lut_subset, order, axis=i_wav)
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    log_lut = np.log(np.maximum(np.asarray(lut_subset, dtype=float), 1e-12))
+                self.interpolator = RegularGridInterpolator(
+                    tuple(pts), log_lut, bounds_error=False, fill_value=None)
+                self._wien_axis = True
+            else:
+                self.interpolator = RegularGridInterpolator(
+                    points, lut_subset, bounds_error=False, fill_value=None)
+                self._wien_axis = False
             self.is_loaded = True
             
         except Exception as e:
             print(f"Error loading Roughness LUT subset: {e}")
             self.is_loaded = False
 
-    def get_correction_factors(self, latitudes, sun_phases, emissions, azimuths, wavelength=None):
+    def get_smooth_temperature(self, latitudes, sun_phases):
+        """Smooth reference temperature (K) at (lat, sun_phase), or None if the
+        LUT file predates the t_smooth dataset."""
+        if self.tsmooth_interp is None:
+            return None
+        lats = np.abs(np.asarray(latitudes, dtype=float))
+        phases = np.mod(np.asarray(sun_phases, dtype=float), 360.0)
+        return self.tsmooth_interp(np.column_stack((lats, phases)))
+
+    def get_correction_factors(self, latitudes, sun_phases, emissions, azimuths, wavelength=None,
+                               facet_temps=None):
         """
         Query the LUT.
+
+        facet_temps : optional per-facet temperatures (K). If given and the file has
+            t_smooth, the query wavelength is rescaled per facet,
+            lambda_i = wavelength * T_facet_i / T_ref(lat_i, phase_i), because R depends
+            on lambda * T. Otherwise the global target_tss rescale is used.
         """
         if not self.is_loaded:
             return np.ones_like(emissions)
-            
+
         # Wrap phases
         sun_phases = np.mod(sun_phases, 360.0)
         
@@ -206,31 +251,12 @@ class RoughnessLUT:
         # Clip Latitudes (just in case)
         latitudes = np.abs(latitudes)
         
-        # Cap emission angle to avoid limb divergence. Due to discretisation error. 
-        # The ratio R = I_rough / I_smooth is ill-conditioned as emission -> 90°
-        # because the Lambertian denominator cos(e) -> 0 while the rough radiance
-        # stays finite, and the e = 90° row is undefined outright (blanked to NaN
-        # above).  Capping at 80° keeps queries in the well-behaved regime; limb
-        # facets beyond 80° contribute negligibly to disk-integrated flux
-        # (cos 80° = 0.17). (Is this actually true? TODO: Check this more carefully.) 
-        #
-        # 80° is somewhat justified rather than merely convenient.  An exact test —
-        # for an ISOTHERMAL crater the ratio must be 1 at every angle, since a ray
-        # entering a convex cavity's aperture strikes the interior exactly once,
-        # so sum_visible A_i cos(theta_i) == A_aperture cos(e) — gives a pure
-        # discretisation error of (200 / 500 / 1000 / 2000 subfacets):
-        #     e <= 50°:  <=0.5% / <=0.2% / <=0.1% / <=0.1%
-        #     e  = 70°:   -3.1% /   1.2% /   0.3% /   0.3%
-        #     e  = 80°:    3.0% /  -0.7% /   0.4% /   0.1%
-        #     e  = 85°:   14.2% / -11.1% /   4.7% /  -1.7%
-        #     e  = 87.5°: -3.5% / -16.5% /  10.2% / -11.8%
-        # i.e. subdividing converges cleanly up to ~80° but NOT beyond it: the
-        # binary centroid visibility test cannot converge where only a handful of
-        # subfacets are visible and cos(theta) -> 0.  Magri et al. (2018, §4.3)
-        # diagnose the same "on/off" limitation in SHERMAN.  Fixing e > 80° needs
-        # area-weighted partial visibility, not more facets.
-        # See private/dinkinesh_flyby/analysis/.../run_lut_geometry_convergence.py
-        EMI_CAP = 80.0
+        # Cap the emission angle. R = I_rough / I_smooth is ill-conditioned near the limb
+        # (cos e -> 0). For an isothermal crater R should be 1 at every angle; with binary
+        # (centroid) visibility that test converges with sub-facet count only up to about
+        # 80 deg, hence the default. LUTs made with partial visibility pass it to within
+        # 2% out to 87.5 deg and can be queried with LUT_EMI_CAP=87.5.
+        EMI_CAP = float(os.environ.get('LUT_EMI_CAP', '80'))
         emissions = np.minimum(emissions, EMI_CAP)
         
         if self.spectral_mode:
@@ -238,25 +264,31 @@ class RoughnessLUT:
                 # Default to first wavelength if none provided
                 wavelength = self.axes['wavelength'][0]
 
-            # R depends on lambda*T_ss, so read the LUT at the wavelength that puts
-            # it the same distance into the Wien tail as the body is (see __init__).
-            wavelength = wavelength * self.wavelength_scale
             wl_axis = self.axes['wavelength']
-            if wavelength < wl_axis[0] - 1e-9:
-                if not getattr(self, '_warned_wl_floor', False):
-                    print(f"  WARNING: rescaled wavelength {wavelength:.3f} um is below the "
-                          f"LUT axis floor {wl_axis[0]:.3f} um; clamping. Regenerate the LUT "
-                          f"with a shorter-wavelength node to remove this.")
-                    self._warned_wl_floor = True
-                wavelength = float(wl_axis[0])
-
-            # Broadcast wavelength to match other arrays
             n = len(latitudes)
-            waves = np.full(n, wavelength)
+
+            if facet_temps is not None and self.tsmooth_interp is not None:
+                # Per-facet rescale against the T_ref of the cell being read. The 1 K floor
+                # only guards the division: cells that cold store R = 1.
+                t_ref = self.tsmooth_interp(np.column_stack((latitudes, sun_phases)))
+                scale = np.asarray(facet_temps, dtype=float) / np.maximum(t_ref, 1.0)
+                waves = np.clip(wavelength * scale, wl_axis[0], wl_axis[-1])
+            else:
+                # Global rescale (see __init__)
+                wavelength = wavelength * self.wavelength_scale
+                if wavelength < wl_axis[0] - 1e-9:
+                    if not getattr(self, '_warned_wl_floor', False):
+                        print(f"  WARNING: rescaled wavelength {wavelength:.3f} um is below the "
+                              f"LUT axis floor {wl_axis[0]:.3f} um; clamping. Regenerate the LUT "
+                              f"with a shorter-wavelength node to remove this.")
+                        self._warned_wl_floor = True
+                    wavelength = float(wl_axis[0])
+                waves = np.full(n, wavelength)
             
-            # Query: (Lat, Time, Wave, Emi, Azi)
+            # Query: (Lat, Time, Wave, Emi, Azi); the wien axis stores 1/lambda
+            wcol = 1.0 / waves if self._wien_axis else waves
             query_points = np.column_stack((
-                latitudes, sun_phases, waves, emissions, azimuths
+                latitudes, sun_phases, wcol, emissions, azimuths
             ))
         else:
             # Fixed wavelength mode
@@ -264,5 +296,8 @@ class RoughnessLUT:
             query_points = np.column_stack((
                 latitudes, sun_phases, emissions, azimuths
             ))
-            
-        return self.interpolator(query_points)
+
+        vals = self.interpolator(query_points)
+        if self.spectral_mode and self._wien_axis:
+            vals = np.exp(vals)
+        return vals
