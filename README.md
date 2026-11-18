@@ -50,9 +50,9 @@ With contributions from: Joe Penn, Maisie Rashman, and Bea Chikani
 
 If you use TEMPEST in any academic publication, presentation, or public derivative work, please cite:
 
-> Lyster, D., Howett, C., & Penn, J. (2025).  
-> *TEMPEST: A Modular Thermophysical Model for Airless Bodies with Support for Surface Roughness and Non-Periodic Heating.*  
-> Submitted to EPSC-DPS Joint Meeting 2025.
+> Lyster, D.G. and Howett, C.J., (2026).
+> *TEMPEST-A modular Python-based thermophysical model for rough, irregularly-shaped airless bodies.*
+> RAS Techniques and Instruments, p.rzag093.
 
 Please also include the TEMPEST version number used, as well as the copyright notice and license file in any redistributed form.
 
@@ -60,3 +60,16 @@ Please also include the TEMPEST version number used, as well as the copyright no
 
 This project is open-source under a modified MIT License that requires attribution in academic and public use.  
 See the [LICENSE](LICENSE) file for full terms.
+
+## Papers Using Tempest 
+(Please get in touch if you have a paper that uses TEMPEST that isn't already on this list!) 
+
+- Lyster, D.G. and Howett, C.J.A. (2026). TEMPEST - A modular Python-based thermophysical model for rough, irregularly-shaped airless bodies. *RAS Techniques and Instruments*, rzag093. [doi:10.1093/rasti/rzag093](https://doi.org/10.1093/rasti/rzag093)
+
+- Howes, S.E., Howett, C.J.A., Lyster, D.G., Lange, L. and Piqueux, S. (2026). Thermal inertia and bolometric Bond albedo measurements of Europa's surface using Galileo PPR. *Monthly Notices of the Royal Astronomical Society*, 551(2), stag1507. [doi:10.1093/mnras/stag1507](https://doi.org/10.1093/mnras/stag1507)
+
+- Jasmonts, G., Šķirmante, K., Blumbergs, K., Palos, M.F., Arshad, A. and Slavinskis, A. (2026). A physics-informed framework for synthetic flyby imaging of activity in dynamically new comets. *Monthly Notices of the Royal Astronomical Society*, 551(4), stag1556. [doi:10.1093/mnras/stag1556](https://doi.org/10.1093/mnras/stag1556)
+
+- Braga, L., Amarante, A., Ferreira, A., Monteiro, F. and Martins, M. (2026). Surface properties, orbital dynamics, and thermophysical modeling of the primitive asteroid (269) Justitia. *The Planetary Science Journal*, 7(2), 46. [doi:10.3847/PSJ/ae3d93](https://doi.org/10.3847/PSJ/ae3d93)
+
+- Gomes, C., Amarante, A., Monteiro, F., Ferreira, A., Braga, L., de Almeida Jr., A.K., Lyster, D., Rocha, N., Damilano, G. and Barbosa, L. (2026). Dynamical behavior and surface features of large super-fast rotator near-Earth asteroid (436724) 2011 UW158. *Icarus*, 462, 117340. [doi:10.1016/j.icarus.2026.117340](https://doi.org/10.1016/j.icarus.2026.117340)
